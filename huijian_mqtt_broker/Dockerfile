@@ -1,18 +1,24 @@
 ARG BUILD_ARCH
 FROM ghcr.io/home-assistant/${BUILD_ARCH}-base:latest
 
-# 安装 mosquitto + curl + jq（用于自动配置 HA MQTT 集成）
+# 安装 mosquitto + curl + jq + avahi（mDNS 广播 huijian.local）
 RUN apk add --no-cache \
     mosquitto \
     mosquitto-clients \
     curl \
-    jq
+    jq \
+    avahi-daemon \
+    avahi-tools \
+    dbus
 
 # 复制配置文件
 COPY mosquitto.conf /etc/mosquitto/mosquitto.conf
 COPY acl /etc/mosquitto/acl
 COPY run.sh /run.sh
 COPY auto_setup_mqtt.sh /auto_setup_mqtt.sh
+
+# 复制慧尖网关集成代码（启动时自动安装到 HA custom_components）
+COPY custom_components /data/custom_components
 
 # 创建持久化目录，设置权限
 RUN mkdir -p /data/mosquitto && \

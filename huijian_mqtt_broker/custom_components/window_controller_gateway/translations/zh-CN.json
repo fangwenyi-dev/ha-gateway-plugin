@@ -1,0 +1,98 @@
+{
+  "title": "慧尖开窗器网关",
+  "config": {
+    "step": {
+      "user": {
+        "title": "配置开窗器网关",
+        "description": "请输入网关序列号和名称",
+        "data": {
+          "gateway_sn": "网关序列号",
+          "gateway_name": "网关名称（可选）"
+        }
+      },
+      "replace": {
+        "title": "替换网关",
+        "description": "选择要替换的旧网关，设备将迁移到新网关 {gateway_name}（SN: {new_gateway_sn}）",
+        "data": {
+          "old_gateway_sn": "旧网关",
+          "new_gateway_sn": "新网关序列号"
+        }
+      },
+      "confirm_migration": {
+        "title": "确认设备迁移",
+        "description": "即将将设备从旧网关 {old_gateway} 迁移到新网关 {new_gateway}（共 {device_count} 个设备）",
+        "data": {
+          "confirm": "确认迁移",
+          "remove_old": "迁移后移除旧网关"
+        }
+      },
+      "confirm_add": {
+        "title": "网关未响应",
+        "description": "在测试时间内未收到网关上报（SN: {gateway_sn}）。\n网关可能未上电、未连接 MQTT 或上报间隔较长。\n确认仍要添加吗？添加后网关上线并上报时会自动发现设备。",
+        "data": {
+          "confirm": "仍然添加"
+        }
+      }
+    },
+    "error": {
+      "invalid_sn_format": "序列号格式无效，必须至少10位字母数字",
+      "mqtt_not_available": "MQTT 集成未启用，请先在 Home Assistant 中启用 MQTT",
+      "cannot_connect": "连接网关失败"
+    },
+    "abort": {
+      "already_configured": "该网关已配置",
+      "updated_existing_gateway": "已更新现有网关配置，开始迁移设备",
+      "ignored": "已忽略该网关",
+      "invalid_sn_format": "网关SN格式无效（至少10位字母数字）"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "配置选项",
+        "description": "配置网关的高级选项",
+        "data": {
+          "discovery_interval": "设备发现间隔（秒）",
+          "auto_discovery": "自动发现设备",
+          "debug_logging": "调试日志"
+        }
+      }
+    }
+  },
+  "services": {
+    "start_pairing": {
+      "name": "开始配对",
+      "description": "启动网关配对模式"
+    },
+    "refresh_devices": {
+      "name": "刷新设备",
+      "description": "触发设备重新发现"
+    },
+    "set_position": {
+      "name": "设置位置",
+      "description": "设置窗帘位置"
+    },
+    "check_gateway_status": {
+      "name": "检查网关状态",
+      "description": "检查网关的在线状态和连接情况"
+    },
+    "rename_device": {
+      "name": "重命名设备",
+      "description": "重命名子设备名称，支持自定义房间/位置名称"
+    },
+    "migrate_devices": {
+      "name": "迁移设备",
+      "description": "将子设备从旧网关迁移到新网关（该服务当前暂不可用）"
+    },
+    "transfer_device": {
+      "name": "转移设备",
+      "description": "将单个设备从一个网关转移到另一个网关"
+    }
+  },
+  "device_automation": {
+    "trigger_type": {
+      "opened": "窗户打开",
+      "closed": "窗户关闭"
+    }
+  }
+}

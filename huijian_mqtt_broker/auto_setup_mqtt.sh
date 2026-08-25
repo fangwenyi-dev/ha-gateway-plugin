@@ -1,6 +1,6 @@
 #!/usr/bin/with-contenv bashio
 # =============================================================================
-# 慧尖 MQTT Broker — 自动配置 HA MQTT 集成
+# 慧尖 LoRa 网关一体化插件 — 自动配置 HA MQTT 集成
 #
 # 通过 HA Supervisor API 自动创建/更新 MQTT 集成配置条目，
 # 连接到本插件内置的 Mosquitto broker（127.0.0.1:1883），
@@ -72,11 +72,24 @@ CREATE_RESULT=$(curl -sf -X POST \
 
 echo "[自动配置] 创建结果: ${CREATE_RESULT}"
 
-if echo "${CREATE_RESULT}" | jq -e '.entry_id // .require_restart // true' > /dev/null 2>&1; then
+# 检查创建是否成功：HA API 成功时返回 JSON 含 entry_id 或 require_restart 字段，
+# 失败时返回空对象 {} 或含 message 字段的错误对象。
+# 修复原逻辑：`.entry_id // .require_restart // true` 恒为 true（因为 // 的兜底是 true），
+# 改为显式检查成功字段是否存在。
+if echo "${CREATE_RESULT}" | jq -e 'has("entry_id") or has("require_restart")' > /dev/null 2>&1; then
     echo "[自动配置] MQTT 集成已自动创建"
     echo "[自动配置] 用户无需手动配置 MQTT 集成"
+elif echo "${CREATE_RESULT}" | jq -e 'has("message")' > /dev/null 2>&1; then
+    # HA 返回了错误信息
+    ERROR_MSG=$(echo "${CREATE_RESULT}" | jq -r '.message // "未知错误"')
+    echo "[自动配置] 自动创建失败: ${ERROR_MSG}"
+    echo "[自动配置] 如需手动配置："
+    echo "[自动配置]   设置 → 设备与服务 → 添加集成 → MQTT"
+    echo "[自动配置]   Broker: 127.0.0.1, 端口: 1883"
+    echo "[自动配置]   用户名: ${USERNAME}, 密码: ${PASSWORD}"
 else
-    echo "[自动配置] 自动创建可能失败，请检查 HA 日志"
+    # 返回空或无法解析，可能是网络问题
+    echo "[自动配置] 自动创建可能失败（未收到有效响应），请检查 HA 日志"
     echo "[自动配置] 如需手动配置："
     echo "[自动配置]   设置 → 设备与服务 → 添加集成 → MQTT"
     echo "[自动配置]   Broker: 127.0.0.1, 端口: 1883"
