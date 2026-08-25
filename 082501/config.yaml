@@ -1,0 +1,26 @@
+name: 慧尖 MQTT Broker
+version: "1.0.0"
+slug: huijian_mqtt_broker
+description: 慧尖开窗器网关专用 MQTT Broker，预设凭据并自动配置 HA MQTT 集成，开箱即用
+arch:
+  - amd64
+  - aarch64
+  - armv7
+  - armhf
+init: false
+host_network: true
+ports:
+  1883/tcp: 1883
+ports_description:
+  1883/tcp: MQTT TCP 端口（LoRa 网关和 HA MQTT 集成连接）
+map:
+  - ssl
+  - homeassistant_config:rw
+options:
+  username: huijian
+  password: huijian2022
+  auto_setup_ha_mqtt: true
+schema:
+  username: str
+  password: str
+  auto_setup_ha_mqtt: bool

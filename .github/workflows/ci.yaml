@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [amd64, aarch64, armv7, armhf]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build addon
+        uses: home-assistant/builder@master
+        with:
+          args: |
+            --${{ matrix.arch }} \
+            --target 082501 \
+            --image huijian-mqtt-broker \
+            --docker-hub ghcr.io/fangwenyi-dev
