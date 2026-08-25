@@ -1,0 +1,6 @@
+# 慧尖 HA 插件仓库索引
+# HA 加载此仓库后会在加载项商店中展示以下插件
+---
+huijian_mqtt_broker:
+  target: huijian_mqtt_broker
+  image: ghcr.io/fangwenyi-dev/huijian-mqtt-broker

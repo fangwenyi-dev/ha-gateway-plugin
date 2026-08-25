@@ -110,7 +110,7 @@ https://github.com/fangwenyi-dev/ha-gateway-plugin
 ## 文件说明
 
 ```
-082501/
+huijian_mqtt_broker/
 ├── config.yaml          # HA 插件元信息和配置 schema
 ├── mosquitto.conf       # Mosquitto broker 配置
 ├── acl                  # ACL 访问控制（匹配集成协议主题）
