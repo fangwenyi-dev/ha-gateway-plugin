@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 
 env:
-  ARCHITECTURES: '["amd64", "aarch64", "armv7", "armhf"]'
+  ARCHITECTURES: '["amd64", "aarch64"]'
   IMAGE_NAME: huijian-mqtt-broker
 
 permissions:

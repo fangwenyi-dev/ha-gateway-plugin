@@ -5,8 +5,6 @@ description: 慧尖开窗器网关专用 MQTT Broker，预设凭据并自动配�
 arch:
   - amd64
   - aarch64
-  - armv7
-  - armhf
 init: false
 host_network: true
 ports:
