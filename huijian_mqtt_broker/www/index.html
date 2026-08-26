@@ -100,6 +100,15 @@
         .device-status { font-size: 11px; margin-top: 3px; color: var(--text-muted); }
         .device-controls { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; }
         .position-slider { width: 90px; height: 22px; }
+        /* ===== Device online dot ===== */
+        .dev-name { display: flex; align-items: center; gap: 6px; }
+        .dev-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+        .dot-online { background: var(--green); box-shadow: 0 0 0 3px var(--green-bg); }
+        .dot-offline { background: var(--red); box-shadow: 0 0 0 3px var(--red-bg); }
+        /* ===== Device sliders ===== */
+        .slider-label { font-size: 10px; color: var(--text-muted); }
+        .slider-value { font-size: 11px; min-width: 30px; text-align: right; }
+        .speed-slider, .strength-slider { width: 90px; height: 22px; }
         /* ===== Badge ===== */
         .badge {
             display: inline-flex; align-items: center; padding: 3px 10px; border-radius: 20px;
@@ -431,6 +440,24 @@
             const coverEntity = snSuffix ? states.find(s =>
                 s.entity_id.startsWith('cover.') && s.entity_id.toLowerCase().includes(snSuffix)
             ) : null;
+            // 在线状态: binary_sensor.*{sn_suffix}*online*
+            const onlineEntity = snSuffix ? states.find(s =>
+                s.entity_id.startsWith('binary_sensor.') &&
+                s.entity_id.toLowerCase().includes(snSuffix) &&
+                s.entity_id.includes('online')
+            ) : null;
+            // 电池电压: sensor.*{sn_suffix}*voltage* 或 sensor.*{sn_suffix}*battery*
+            const batteryEntity = snSuffix ? states.find(s =>
+                s.entity_id.startsWith('sensor.') && s.entity_id.toLowerCase().includes(snSuffix) &&
+                (s.entity_id.includes('voltage') || s.entity_id.includes('battery'))
+            ) : null;
+            // 开窗速度/力度: number.*{sn_suffix}*speed* / number.*{sn_suffix}*strength*
+            const speedEntity = snSuffix ? states.find(s =>
+                s.entity_id.startsWith('number.') && s.entity_id.toLowerCase().includes(snSuffix) && s.entity_id.includes('speed')
+            ) : null;
+            const strengthEntity = snSuffix ? states.find(s =>
+                s.entity_id.startsWith('number.') && s.entity_id.toLowerCase().includes(snSuffix) && s.entity_id.includes('strength')
+            ) : null;
             // 集成未提供 current_position，实际位置属性为 attributes.position（缺失时显示 --）
             const rawPos = coverEntity ? coverEntity.attributes.position : undefined;
             const currentPos = (rawPos === undefined || rawPos === null) ? '--' : rawPos;
@@ -438,6 +465,25 @@
             const safeSn = escapeHtml(sn);
             const safeDevId = escapeHtml(devId);
             const safeEntryId = escapeHtml(entryId);
+            // 在线圆点（无实体时默认离线红点，loadDeviceState 会再校正）
+            const isOnline = onlineEntity ? (onlineEntity.state === 'on') : false;
+            // 电池电压（sensor 优先，缺失时回退 cover attributes.voltage）
+            let batteryText = '';
+            if (batteryEntity && batteryEntity.state && batteryEntity.state !== 'unknown' && batteryEntity.state !== 'unavailable') {
+                const bUnit = batteryEntity.attributes.unit_of_measurement || 'V';
+                batteryText = batteryEntity.state + bUnit;
+            } else if (coverEntity && coverEntity.attributes.voltage) {
+                batteryText = coverEntity.attributes.voltage + 'V';
+            }
+            // 速度/力度滑块取值与范围（缺失实体时禁用）
+            const speedMin = speedEntity && speedEntity.attributes.min !== undefined ? speedEntity.attributes.min : 0;
+            const speedMax = speedEntity && speedEntity.attributes.max !== undefined ? speedEntity.attributes.max : 100;
+            const speedValid = speedEntity && speedEntity.state && speedEntity.state !== 'unknown' && speedEntity.state !== 'unavailable';
+            const speedUnit = (speedEntity && speedEntity.attributes.unit_of_measurement) || '';
+            const strengthMin = strengthEntity && strengthEntity.attributes.min !== undefined ? strengthEntity.attributes.min : 0;
+            const strengthMax = strengthEntity && strengthEntity.attributes.max !== undefined ? strengthEntity.attributes.max : 100;
+            const strengthValid = strengthEntity && strengthEntity.state && strengthEntity.state !== 'unknown' && strengthEntity.state !== 'unavailable';
+            const strengthUnit = (strengthEntity && strengthEntity.attributes.unit_of_measurement) || '';
             let controls = '<div class="device-controls">' +
                 '<button class="btn btn-success btn-sm" onclick="controlDevice(\'' + jsQuote(safeDevId) + '\',\'open\',\'' + jsQuote(safeEntryId) + '\')">开</button>' +
                 '<button class="btn btn-danger btn-sm" onclick="controlDevice(\'' + jsQuote(safeDevId) + '\',\'close\',\'' + jsQuote(safeEntryId) + '\')">关</button>' +
@@ -445,7 +491,22 @@
                 '<input type="range" class="position-slider" min="0" max="100" value="' + (currentPos === '--' ? 0 : currentPos) + '"' +
                 ' oninput="this.nextElementSibling.textContent=this.value+\'%\'"' +
                 ' onchange="controlDevicePosition(\'' + jsQuote(safeDevId) + '\', this.value, \'' + jsQuote(safeEntryId) + '\')">' +
-                '<span style="font-size:11px;min-width:30px;">' + currentPos + (currentPos === '--' ? '' : '%') + '</span></div>';
+                '<span style="font-size:11px;min-width:30px;">' + currentPos + (currentPos === '--' ? '' : '%') + '</span>' +
+                '<button class="btn btn-danger btn-sm" style="margin-left:4px;" title="移除设备" onclick="controlDevice(\'' + jsQuote(safeDevId) + '\',\'remove\',\'' + jsQuote(safeEntryId) + '\')">移除</button></div>';
+            // 速度 / 力度滑块
+            controls += '<div class="device-controls" style="margin-top:4px;">' +
+                '<span class="slider-label">速度</span>' +
+                '<input type="range" class="speed-slider" min="' + speedMin + '" max="' + speedMax + '" value="' + (speedValid ? speedEntity.state : speedMin) + '"' +
+                (speedEntity ? '' : ' disabled') +
+                ' oninput="this.nextElementSibling.textContent=this.value' + (speedUnit ? '+\'' + speedUnit + '\'' : '') + '"' +
+                ' onchange="controlDevice(\'' + jsQuote(safeDevId) + '\',\'set_speed\',\'' + jsQuote(safeEntryId) + '\', this.value)">' +
+                '<span class="slider-value speed-value">' + (speedValid ? speedEntity.state + speedUnit : '--') + '</span>' +
+                '<span class="slider-label" style="margin-left:8px;">力度</span>' +
+                '<input type="range" class="strength-slider" min="' + strengthMin + '" max="' + strengthMax + '" value="' + (strengthValid ? strengthEntity.state : strengthMin) + '"' +
+                (strengthEntity ? '' : ' disabled') +
+                ' oninput="this.nextElementSibling.textContent=this.value' + (strengthUnit ? '+\'' + strengthUnit + '\'' : '') + '"' +
+                ' onchange="controlDevice(\'' + jsQuote(safeDevId) + '\',\'set_strength\',\'' + jsQuote(safeEntryId) + '\', this.value)">' +
+                '<span class="slider-value strength-value">' + (strengthValid ? strengthEntity.state + strengthUnit : '--') + '</span></div>';
             if (supportsWindLock) {
                 controls += '<div class="device-controls" style="margin-top:4px;">' +
                     '<button class="btn btn-sm" style="background:#607d8b;color:white;" onclick="controlDevice(\'' + jsQuote(safeDevId) + '\',\'wind_lock_tilt\',\'' + jsQuote(safeEntryId) + '\')">内倒</button>' +
@@ -453,9 +514,11 @@
                     '</div>';
             }
             return '<div class="device-item" id="dev-' + safeDevId + '">' +
-                '<div class="device-info"><div class="device-name">' + safeName + '</div>' +
+                '<div class="device-info"><div class="device-name dev-name">' +
+                '<span class="dev-dot ' + (isOnline ? 'dot-online' : 'dot-offline') + '" id="dev-dot-' + safeDevId + '"></span>' +
+                safeName + '</div>' +
                 '<div class="device-sn">SN: ' + safeSn + '</div>' +
-                '<div class="device-status" id="dev-state-' + safeDevId + '">状态: 加载中</div></div>' +
+                '<div class="device-status" id="dev-state-' + safeDevId + '">状态: 加载中' + (batteryText ? ' | 电压: ' + batteryText : '') + '</div></div>' +
                 controls + '</div>';
         }
 
@@ -472,27 +535,84 @@
                 const coverEntity = snSuffix ? states.find(s =>
                     s.entity_id.startsWith('cover.') && s.entity_id.toLowerCase().includes(snSuffix)
                 ) : null;
+                // 在线状态点: binary_sensor.*{sn_suffix}*online*
+                const onlineEntity = snSuffix ? states.find(s =>
+                    s.entity_id.startsWith('binary_sensor.') &&
+                    s.entity_id.toLowerCase().includes(snSuffix) &&
+                    s.entity_id.includes('online')
+                ) : null;
+                const dot = document.querySelector('#dev-' + dev.id + ' .dev-dot');
+                if (dot) {
+                    if (onlineEntity) {
+                        dot.className = 'dev-dot ' + (onlineEntity.state === 'on' ? 'dot-online' : 'dot-offline');
+                    } else if (coverEntity) {
+                        dot.className = 'dev-dot ' + (coverEntity.state === 'unavailable' ? 'dot-offline' : 'dot-online');
+                    }
+                }
+                // 电池电压: sensor.*{sn_suffix}*voltage* 或 *battery*
+                const batteryEntity = snSuffix ? states.find(s =>
+                    s.entity_id.startsWith('sensor.') && s.entity_id.toLowerCase().includes(snSuffix) &&
+                    (s.entity_id.includes('voltage') || s.entity_id.includes('battery'))
+                ) : null;
+                // 速度/力度: number.*{sn_suffix}*speed* / *strength*
+                const speedEntity = snSuffix ? states.find(s =>
+                    s.entity_id.startsWith('number.') && s.entity_id.toLowerCase().includes(snSuffix) && s.entity_id.includes('speed')
+                ) : null;
+                const strengthEntity = snSuffix ? states.find(s =>
+                    s.entity_id.startsWith('number.') && s.entity_id.toLowerCase().includes(snSuffix) && s.entity_id.includes('strength')
+                ) : null;
+                // 更新速度/力度滑块
+                const speedSlider = document.querySelector('#dev-' + dev.id + ' .speed-slider');
+                if (speedSlider) {
+                    if (speedEntity && speedEntity.state !== 'unknown' && speedEntity.state !== 'unavailable') {
+                        const unit = speedEntity.attributes.unit_of_measurement || '';
+                        speedSlider.value = speedEntity.state;
+                        speedSlider.disabled = false;
+                        const valEl = document.querySelector('#dev-' + dev.id + ' .speed-value');
+                        if (valEl) valEl.textContent = speedEntity.state + unit;
+                    } else {
+                        speedSlider.disabled = true;
+                    }
+                }
+                const strengthSlider = document.querySelector('#dev-' + dev.id + ' .strength-slider');
+                if (strengthSlider) {
+                    if (strengthEntity && strengthEntity.state !== 'unknown' && strengthEntity.state !== 'unavailable') {
+                        const unit = strengthEntity.attributes.unit_of_measurement || '';
+                        strengthSlider.value = strengthEntity.state;
+                        strengthSlider.disabled = false;
+                        const valEl = document.querySelector('#dev-' + dev.id + ' .strength-value');
+                        if (valEl) valEl.textContent = strengthEntity.state + unit;
+                    } else {
+                        strengthSlider.disabled = true;
+                    }
+                }
+                // 状态文本
+                let statusText;
                 if (coverEntity) {
                     const pos = coverEntity.attributes.position;
                     const state = coverEntity.state;
-                    let statusText;
-                    if (state === 'open') statusText = '打开';
-                    else if (state === 'closed' || state === 'close') statusText = '关闭';
-                    else if (state === 'opening') statusText = '正在打开';
-                    else if (state === 'closing') statusText = '正在关闭';
-                    else statusText = state;
-                    let attrs = '';
-                    if (pos !== undefined) attrs += ' | 位置: ' + pos + '%';
-                    if (coverEntity.attributes.voltage) attrs += ' | 电压: ' + coverEntity.attributes.voltage + 'V';
-                    stateEl.textContent = '状态: ' + statusText + attrs;
+                    if (state === 'open') statusText = '状态: 打开';
+                    else if (state === 'closed' || state === 'close') statusText = '状态: 关闭';
+                    else if (state === 'opening') statusText = '状态: 正在打开';
+                    else if (state === 'closing') statusText = '状态: 正在关闭';
+                    else statusText = '状态: ' + state;
+                    if (pos !== undefined) statusText += ' | 位置: ' + pos + '%';
                     const slider = document.querySelector('#dev-' + dev.id + ' .position-slider');
                     if (slider && pos !== undefined) {
                         slider.value = pos;
                         slider.nextElementSibling.textContent = pos + '%';
                     }
-                    return;
+                } else {
+                    statusText = '状态: 无数据';
                 }
-                stateEl.textContent = '状态: 无数据';
+                if (onlineEntity) statusText += ' | ' + (onlineEntity.state === 'on' ? '在线' : '离线');
+                if (batteryEntity && batteryEntity.state && batteryEntity.state !== 'unknown' && batteryEntity.state !== 'unavailable') {
+                    const bUnit = batteryEntity.attributes.unit_of_measurement || 'V';
+                    statusText += ' | 电压: ' + batteryEntity.state + bUnit;
+                } else if (coverEntity && coverEntity.attributes.voltage) {
+                    statusText += ' | 电压: ' + coverEntity.attributes.voltage + 'V';
+                }
+                stateEl.textContent = statusText;
             } catch (e) {
                 stateEl.textContent = '状态: 加载失败';
             }
@@ -521,7 +641,8 @@
             }
         }
 
-        async function controlDevice(deviceId, command, entryId) {
+        async function controlDevice(deviceId, command, entryId, value) {
+            if (command === 'remove' && !confirm('确定要删除该子设备吗？\n将移除该设备在 HA 中的全部实体。')) return;
             showToast('正在发送命令: ' + command + '...', 'warn');
             try {
                 const resp = await haApi('/states');
@@ -540,32 +661,59 @@
                 const coverEntity = snSuffix ? states.find(s =>
                     s.entity_id.startsWith('cover.') && s.entity_id.toLowerCase().includes(snSuffix)
                 ) : null;
-                if (coverEntity) {
-                    let service = '';
-                    if (command === 'open') service = 'open_cover';
-                    else if (command === 'close') service = 'close_cover';
-                    else if (command === 'stop') service = 'stop_cover';
-                    if (service) {
+                if (command === 'open' || command === 'close' || command === 'stop') {
+                    if (!coverEntity) {
+                        showToast('未找到设备 cover 实体', 'warn');
+                    } else {
+                        let service = '';
+                        if (command === 'open') service = 'open_cover';
+                        else if (command === 'close') service = 'close_cover';
+                        else if (command === 'stop') service = 'stop_cover';
                         const r = await haApi('/services/cover/' + service, 'POST', { entity_id: coverEntity.entity_id });
                         if (!r.ok) throw new Error('HA API ' + r.status);
                         showToast('命令已发送: ' + command, 'ok');
-                    } else if (command === 'wind_lock_tilt' || command === 'wind_lock_flat') {
-                        const btnSuffix = command === 'wind_lock_tilt' ? 'wind_lock_tilt' : 'wind_lock_flat';
-                        const btnEntity = snSuffix ? states.find(s =>
-                            s.entity_id.startsWith('button.') &&
-                            s.entity_id.toLowerCase().includes(snSuffix) &&
-                            s.entity_id.includes(btnSuffix)
-                        ) : null;
-                        if (btnEntity) {
-                            const r = await haApi('/services/button/press', 'POST', { entity_id: btnEntity.entity_id });
-                            if (!r.ok) throw new Error('HA API ' + r.status);
-                            showToast('模式切换: ' + (command === 'wind_lock_tilt' ? '内倒' : '平开'), 'ok');
-                        } else {
-                            showToast('未找到模式按钮实体', 'warn');
-                        }
+                    }
+                } else if (command === 'wind_lock_tilt' || command === 'wind_lock_flat') {
+                    const btnSuffix = command === 'wind_lock_tilt' ? 'wind_lock_tilt' : 'wind_lock_flat';
+                    const btnEntity = snSuffix ? states.find(s =>
+                        s.entity_id.startsWith('button.') &&
+                        s.entity_id.toLowerCase().includes(snSuffix) &&
+                        s.entity_id.includes(btnSuffix)
+                    ) : null;
+                    if (btnEntity) {
+                        const r = await haApi('/services/button/press', 'POST', { entity_id: btnEntity.entity_id });
+                        if (!r.ok) throw new Error('HA API ' + r.status);
+                        showToast('模式切换: ' + (command === 'wind_lock_tilt' ? '内倒' : '平开'), 'ok');
+                    } else {
+                        showToast('未找到模式按钮实体', 'warn');
+                    }
+                } else if (command === 'set_speed' || command === 'set_strength') {
+                    const numSuffix = command === 'set_speed' ? 'speed' : 'strength';
+                    const numEntity = snSuffix ? states.find(s =>
+                        s.entity_id.startsWith('number.') && s.entity_id.toLowerCase().includes(snSuffix) && s.entity_id.includes(numSuffix)
+                    ) : null;
+                    if (numEntity) {
+                        const numVal = parseFloat(value);
+                        if (isNaN(numVal)) throw new Error('无效数值: ' + value);
+                        const r = await haApi('/services/number/set_value', 'POST', { entity_id: numEntity.entity_id, value: numVal });
+                        if (!r.ok) throw new Error('HA API ' + r.status);
+                        showToast((command === 'set_speed' ? '速度' : '力度') + '设置: ' + value, 'ok');
+                    } else {
+                        showToast('未找到' + (command === 'set_speed' ? '速度' : '力度') + '实体', 'warn');
+                    }
+                } else if (command === 'remove') {
+                    const btnEntity = snSuffix ? states.find(s =>
+                        s.entity_id.startsWith('button.') && s.entity_id.toLowerCase().includes(snSuffix) && s.entity_id.includes('remove')
+                    ) : null;
+                    if (btnEntity) {
+                        const r = await haApi('/services/button/press', 'POST', { entity_id: btnEntity.entity_id });
+                        if (!r.ok) throw new Error('HA API ' + r.status);
+                        showToast('删除命令已发送', 'ok');
+                    } else {
+                        showToast('未找到删除按钮实体', 'warn');
                     }
                 } else {
-                    showToast('未找到设备 cover 实体', 'warn');
+                    showToast('未知命令: ' + command, 'warn');
                 }
                 setTimeout(() => loadGatewayDevices(entryId, GATEWAY_SN_BY_ENTRY[entryId] || ''), 2000);
             } catch (e) {
