@@ -156,7 +156,7 @@
     <div class="header">
         <div>
             <h1>慧尖 LoRa 网关</h1>
-            <div class="ver" id="addonVersion">v1.1.9</div>
+            <div class="ver" id="addonVersion">v1.2.0</div>
         </div>
         <div class="actions">
             <button class="btn btn-primary" onclick="checkForUpdates()">检查更新</button>
@@ -200,15 +200,15 @@
                 <strong style="font-size:13px;">huijian.local:2022</strong>
             </div>
             <div>
-                <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">用户名 / 密码</div>
-                <strong style="font-size:13px;">huijian / huijian2022</strong>
+                <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">MQTT 凭据</div>
+                <strong style="font-size:13px;">请在 插件 → 配置 标签页中查看/修改</strong>
             </div>
         </div>
         <div class="info-box">
             <h3>LoRa 网关配置说明</h3>
             <p>
                 Broker: <code>huijian.local</code>（mDNS）或 HA 的 IP 地址<br>
-                端口: <code>2022</code> | 用户名: <code>huijian</code> | 密码: <code>huijian2022</code><br>
+                端口: <code>2022</code> — MQTT 凭据请在插件「配置」标签页中查看/修改<br>
                 网关上电后自动发现，无需手动填写 SN
             </p>
         </div>
@@ -220,17 +220,22 @@
     </div>
 
     <div class="footer">
-        <p>慧尖 LoRa 网关一体化插件 <span id="footerVersion">v1.1.9</span></p>
+        <p>慧尖 LoRa 网关一体化插件 <span id="footerVersion">v1.2.0</span></p>
     </div>
 
     <script>
-        let CURRENT_VERSION = '1.1.9';
+        let CURRENT_VERSION = '1.2.0';
         const DOMAIN = 'window_controller_gateway';
+
+        // Ingress 下页面路径形如 /hassio/ingress/<token>/，直连插件端口时为 /
+        const INGRESS_BASE = window.location.pathname.replace(/\/[^/]*$/, '/');
+        // 各配置条目的网关 SN（控制操作后刷新设备用，避免空 SN 误匹配首个实体）
+        const GATEWAY_SN_BY_ENTRY = {};
 
         // ========== 初始化 ==========
         async function init() {
             try {
-                const verResp = await fetch('/api/version');
+                const verResp = await fetch(INGRESS_BASE + 'api/version');
                 if (verResp.ok) {
                     const verData = await verResp.json();
                     CURRENT_VERSION = verData.addon_version || CURRENT_VERSION;
@@ -251,7 +256,7 @@
         async function checkServiceStatus() {
             // 1. MQTT Broker 状态 — nginx 直接返回，不依赖 HA API
             try {
-                const resp = await fetch('/api/status');
+                const resp = await fetch(INGRESS_BASE + 'api/status');
                 if (resp.ok) {
                     const data = await resp.json();
                     if (data.status === 'running') {
@@ -303,7 +308,7 @@
         async function haApi(path, method = 'GET', body = null) {
             const opts = { method, headers: { 'Content-Type': 'application/json' } };
             if (body) opts.body = JSON.stringify(body);
-            return await fetch('/api/ha/' + path, opts);
+            return await fetch(INGRESS_BASE + 'api/ha/' + path, opts);
         }
 
         // ========== 加载网关列表 ==========
@@ -319,13 +324,14 @@
                 }
                 let html = '';
                 for (const entry of entries) {
-                    const gwSn = entry.data.gateway_sn || '未知';
+                    const gwSn = (entry.data && entry.data.gateway_sn) || '未知';
                     const gwName = entry.title || '慧尖网关';
                     html += renderGateway(gwName, gwSn, entry.entry_id);
                 }
                 container.innerHTML = html;
                 for (const entry of entries) {
-                    await loadGatewayDevices(entry.entry_id, entry.data.gateway_sn);
+                    GATEWAY_SN_BY_ENTRY[entry.entry_id] = (entry.data && entry.data.gateway_sn) || '';
+                    await loadGatewayDevices(entry.entry_id, GATEWAY_SN_BY_ENTRY[entry.entry_id]);
                 }
             } catch (e) {
                 container.innerHTML = '<div class="empty-state"><div class="icon">📡</div><p>无法连接 HA API</p><p class="hint">请确保通过 HA 侧边栏访问</p></div><div class="info-box"><h3>使用说明</h3><p>1. LoRa 网关上电后会自动发现<br>2. 在网关设备上点击「配对」按钮添加子设备<br>3. 在 HA 设备页面控制子设备</p></div>';
@@ -342,7 +348,7 @@
                 '<span class="gateway-sn">SN: ' + safeSn + '</span>' +
                 '</div><div>' +
                 '<span class="badge badge-info" id="gw-status-' + safeEntryId + '">检测中</span>' +
-                '<button class="btn btn-success btn-sm" onclick="startPairing(\'' + safeEntryId + '\',\'' + safeSn + '\')" style="margin-left:8px;">配对</button>' +
+                '<button class="btn btn-success btn-sm" onclick="startPairing(\'' + jsQuote(safeEntryId) + '\',\'' + jsQuote(safeSn) + '\')" style="margin-left:8px;">配对</button>' +
                 '</div></div>' +
                 '<div class="device-list" id="devices-' + safeEntryId + '"><div class="loading"><div class="spinner" style="width:16px;height:16px;"></div></div></div>' +
                 '</div>';
@@ -369,12 +375,12 @@
                     const stateResp = await haApi('/states');
                     if (!stateResp.ok) throw new Error('HA API ' + stateResp.status);
                     const states = await stateResp.json();
-                    const snSuffix = gatewaySn.slice(-6).toLowerCase();
-                    const gwSensor = states.find(s =>
+                    const snSuffix = (gatewaySn && gatewaySn.length >= 4) ? gatewaySn.slice(-6).toLowerCase() : '';
+                    const gwSensor = snSuffix ? states.find(s =>
                         s.entity_id.includes('binary_sensor') &&
                         s.entity_id.toLowerCase().includes(snSuffix) &&
                         s.entity_id.includes('online')
-                    );
+                    ) : null;
                     updateGatewayStatus(statusEl, gwSensor ? (gwSensor.state === 'on' ? 'online' : 'offline') : 'unknown');
                     if (subDevices.length === 0) {
                         deviceListEl.innerHTML = '<p style="font-size:12px;color:var(--text-muted);padding:8px;">暂无子设备，点击「配对」按钮添加</p>';
@@ -415,27 +421,29 @@
                 if (Array.isArray(ident) && ident.length > 1) sn = ident[1];
             }
             const supportsWindLock = sn.startsWith('5005');
-            const snSuffix = sn !== '未知' ? sn.slice(-6).toLowerCase() : '';
-            const coverEntity = states.find(s =>
+            const snSuffix = (sn !== '未知' && sn.length >= 4) ? sn.slice(-6).toLowerCase() : '';
+            const coverEntity = snSuffix ? states.find(s =>
                 s.entity_id.startsWith('cover.') && s.entity_id.toLowerCase().includes(snSuffix)
-            );
-            const currentPos = coverEntity ? (coverEntity.attributes.current_position || 0) : 0;
+            ) : null;
+            // 集成未提供 current_position，实际位置属性为 attributes.position（缺失时显示 --）
+            const rawPos = coverEntity ? coverEntity.attributes.position : undefined;
+            const currentPos = (rawPos === undefined || rawPos === null) ? '--' : rawPos;
             const safeName = escapeHtml(devName);
             const safeSn = escapeHtml(sn);
             const safeDevId = escapeHtml(devId);
             const safeEntryId = escapeHtml(entryId);
             let controls = '<div class="device-controls">' +
-                '<button class="btn btn-success btn-sm" onclick="controlDevice(\'' + safeDevId + '\',\'open\',\'' + safeEntryId + '\')">开</button>' +
-                '<button class="btn btn-danger btn-sm" onclick="controlDevice(\'' + safeDevId + '\',\'close\',\'' + safeEntryId + '\')">关</button>' +
-                '<button class="btn btn-warn btn-sm" onclick="controlDevice(\'' + safeDevId + '\',\'stop\',\'' + safeEntryId + '\')">停</button>' +
-                '<input type="range" class="position-slider" min="0" max="100" value="' + currentPos + '"' +
+                '<button class="btn btn-success btn-sm" onclick="controlDevice(\'' + jsQuote(safeDevId) + '\',\'open\',\'' + jsQuote(safeEntryId) + '\')">开</button>' +
+                '<button class="btn btn-danger btn-sm" onclick="controlDevice(\'' + jsQuote(safeDevId) + '\',\'close\',\'' + jsQuote(safeEntryId) + '\')">关</button>' +
+                '<button class="btn btn-warn btn-sm" onclick="controlDevice(\'' + jsQuote(safeDevId) + '\',\'stop\',\'' + jsQuote(safeEntryId) + '\')">停</button>' +
+                '<input type="range" class="position-slider" min="0" max="100" value="' + (currentPos === '--' ? 0 : currentPos) + '"' +
                 ' oninput="this.nextElementSibling.textContent=this.value+\'%\'"' +
-                ' onchange="controlDevicePosition(\'' + safeDevId + '\', this.value, \'' + safeEntryId + '\')">' +
-                '<span style="font-size:11px;min-width:30px;">' + currentPos + '%</span></div>';
+                ' onchange="controlDevicePosition(\'' + jsQuote(safeDevId) + '\', this.value, \'' + jsQuote(safeEntryId) + '\')">' +
+                '<span style="font-size:11px;min-width:30px;">' + currentPos + (currentPos === '--' ? '' : '%') + '</span></div>';
             if (supportsWindLock) {
                 controls += '<div class="device-controls" style="margin-top:4px;">' +
-                    '<button class="btn btn-sm" style="background:#607d8b;color:white;" onclick="controlDevice(\'' + safeDevId + '\',\'wind_lock_tilt\',\'' + safeEntryId + '\')">内倒</button>' +
-                    '<button class="btn btn-sm" style="background:#78909c;color:white;" onclick="controlDevice(\'' + safeDevId + '\',\'wind_lock_flat\',\'' + safeEntryId + '\')">平开</button>' +
+                    '<button class="btn btn-sm" style="background:#607d8b;color:white;" onclick="controlDevice(\'' + jsQuote(safeDevId) + '\',\'wind_lock_tilt\',\'' + jsQuote(safeEntryId) + '\')">内倒</button>' +
+                    '<button class="btn btn-sm" style="background:#78909c;color:white;" onclick="controlDevice(\'' + jsQuote(safeDevId) + '\',\'wind_lock_flat\',\'' + jsQuote(safeEntryId) + '\')">平开</button>' +
                     '</div>';
             }
             return '<div class="device-item" id="dev-' + safeDevId + '">' +
@@ -454,12 +462,12 @@
                     const ident = dev.identifiers[0];
                     if (Array.isArray(ident) && ident.length > 1) sn = ident[1];
                 }
-                const snSuffix = sn.slice(-6).toLowerCase();
-                const coverEntity = states.find(s =>
+                const snSuffix = (sn && sn.length >= 4) ? sn.slice(-6).toLowerCase() : '';
+                const coverEntity = snSuffix ? states.find(s =>
                     s.entity_id.startsWith('cover.') && s.entity_id.toLowerCase().includes(snSuffix)
-                );
+                ) : null;
                 if (coverEntity) {
-                    const pos = coverEntity.attributes.current_position;
+                    const pos = coverEntity.attributes.position;
                     const state = coverEntity.state;
                     let statusText;
                     if (state === 'open') statusText = '打开';
@@ -522,10 +530,10 @@
                     const ident = dev.identifiers[0];
                     if (Array.isArray(ident) && ident.length > 1) sn = ident[1];
                 }
-                const snSuffix = sn.slice(-6).toLowerCase();
-                const coverEntity = states.find(s =>
+                const snSuffix = (sn && sn.length >= 4) ? sn.slice(-6).toLowerCase() : '';
+                const coverEntity = snSuffix ? states.find(s =>
                     s.entity_id.startsWith('cover.') && s.entity_id.toLowerCase().includes(snSuffix)
-                );
+                ) : null;
                 if (coverEntity) {
                     let service = '';
                     if (command === 'open') service = 'open_cover';
@@ -537,11 +545,11 @@
                         showToast('命令已发送: ' + command, 'ok');
                     } else if (command === 'wind_lock_tilt' || command === 'wind_lock_flat') {
                         const btnSuffix = command === 'wind_lock_tilt' ? 'wind_lock_tilt' : 'wind_lock_flat';
-                        const btnEntity = states.find(s =>
+                        const btnEntity = snSuffix ? states.find(s =>
                             s.entity_id.startsWith('button.') &&
                             s.entity_id.toLowerCase().includes(snSuffix) &&
                             s.entity_id.includes(btnSuffix)
-                        );
+                        ) : null;
                         if (btnEntity) {
                             const r = await haApi('/services/button/press', 'POST', { entity_id: btnEntity.entity_id });
                             if (!r.ok) throw new Error('HA API ' + r.status);
@@ -553,7 +561,7 @@
                 } else {
                     showToast('未找到设备 cover 实体', 'warn');
                 }
-                setTimeout(() => loadGatewayDevices(entryId, ''), 2000);
+                setTimeout(() => loadGatewayDevices(entryId, GATEWAY_SN_BY_ENTRY[entryId] || ''), 2000);
             } catch (e) {
                 showToast('控制失败: ' + e.message, 'err');
             }
@@ -573,13 +581,15 @@
                     const ident = dev.identifiers[0];
                     if (Array.isArray(ident) && ident.length > 1) sn = ident[1];
                 }
-                const snSuffix = sn.slice(-6).toLowerCase();
-                const coverEntity = states.find(s =>
+                const snSuffix = (sn && sn.length >= 4) ? sn.slice(-6).toLowerCase() : '';
+                const coverEntity = snSuffix ? states.find(s =>
                     s.entity_id.startsWith('cover.') && s.entity_id.toLowerCase().includes(snSuffix)
-                );
+                ) : null;
                 if (coverEntity) {
-                    const r = await haApi('/services/cover/set_cover_position', 'POST', {
-                        entity_id: coverEntity.entity_id, position: parseInt(position)
+                    // 集成未注册 cover.set_cover_position（cover.py 无 SET_POSITION 特性标志），
+                    // 实际服务为 window_controller_gateway.set_position：字段 device_id（设备注册表ID）+ position
+                    const r = await haApi('/services/window_controller_gateway/set_position', 'POST', {
+                        device_id: deviceId, position: parseInt(position)
                     });
                     if (!r.ok) throw new Error('HA API ' + r.status);
                     showToast('位置设置: ' + position + '%', 'ok');
@@ -599,7 +609,7 @@
             content.innerHTML = '<div class="loading"><div class="spinner"></div><p>正在检查更新...</p></div>';
             try {
                 // 使用 nginx 代理访问 GitHub API，避免 Ingress iframe CSP 拦截外部请求
-                const resp = await fetch('/api/github/repos/fangwenyi-dev/ha-gateway-plugin/releases/latest');
+                const resp = await fetch(INGRESS_BASE + 'api/github/repos/fangwenyi-dev/ha-gateway-plugin/releases/latest');
                 if (!resp.ok) throw new Error('GitHub API 不可用 (HTTP ' + resp.status + ')');
                 const release = await resp.json();
                 const latestVersion = release.tag_name.replace(/^v/, '');
@@ -630,21 +640,41 @@
             if (!confirm('确定要一键升级插件吗？\n\n升级过程：\n1. 调用 HA Supervisor 更新插件\n2. 更新完成后需重启插件\n3. 重启后自动安装最新集成代码\n\n升级期间插件会短暂不可用。')) return;
             showToast('正在执行一键升级...', 'warn');
             try {
-                // 调用 Supervisor API 更新插件
-                // POST /supervisor/addons/{slug}/update — 拉取最新镜像并更新
+                // Step 1: 获取插件列表动态定位目标（git 仓库安装的 slug 带仓库前缀，不能硬编码）
+                const listResp = await fetch(INGRESS_BASE + 'api/supervisor/addons');
+                if (!listResp.ok) throw new Error('Supervisor API ' + listResp.status);
+                const listJson = await listResp.json().catch(() => ({}));
+                const addons = (listJson && Array.isArray(listJson.data)) ? listJson.data : (Array.isArray(listJson) ? listJson : []);
+                const addon = addons.find(a =>
+                    (a.slug || '') === 'huijian_mqtt_broker' ||
+                    (a.name || '').indexOf('慧尖') !== -1 ||
+                    ((a.repository || '').indexOf('ha-gateway-plugin') !== -1)
+                );
+                if (!addon) {
+                    showToast('未找到慧尖插件（已检索 ' + addons.length + ' 个插件）', 'err');
+                    return;
+                }
+                // Step 2: 调用 Supervisor API 更新指定 slug
                 // 通过 nginx /api/supervisor/ 代理，token 已在 Nginx 层注入
-                const resp = await fetch('/api/supervisor/addons/huijian_mqtt_broker/update', {
+                const resp = await fetch(INGRESS_BASE + 'api/supervisor/addons/' + encodeURIComponent(addon.slug) + '/update', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' }
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ backup: false })
                 });
                 const data = await resp.json().catch(() => ({}));
+                // Step 3: 按消息模式分类结果，避免 "already" 同时命中"已是最新"与"任务进行中"
+                const msg = data.message || '';
                 if (resp.ok && data.result === 'ok') {
-                    showToast('升级命令已发送，插件正在更新中...', 'ok');
-                    setTimeout(() => { window.location.reload(); }, 8000);
-                } else if (resp.status === 400 && data.message && data.message.includes('already')) {
-                    showToast('插件已是最新版本，无需升级', 'warn');
+                    showToast('升级完成，正在刷新…', 'ok');
+                    setTimeout(() => { window.location.reload(); }, 1500);
+                } else if (/already.*(latest|up.to.date)|nothing to do/i.test(msg)) {
+                    showToast('已是最新版本', 'warn');
+                } else if (/job.*running|in progress|another (update|job)/i.test(msg)) {
+                    showToast('已有任务进行中，请稍后再试', 'warn');
+                } else if (/abort/i.test(msg)) {
+                    showToast('升级已中止', 'warn');
                 } else {
-                    showToast('升级失败: ' + (data.message || 'HTTP ' + resp.status), 'err');
+                    showToast('升级失败: ' + (msg || 'HTTP ' + resp.status), 'err');
                 }
             } catch (e) {
                 showToast('升级请求失败: ' + e.message, 'err');
@@ -665,9 +695,12 @@
 
         function escapeHtml(text) {
             if (text === null || text === undefined) return '';
-            const div = document.createElement('div');
-            div.textContent = String(text);
-            return div.innerHTML;
+            return String(text).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+        }
+
+        // HTML 解析器会在 JS 编译前解码 &#39;，实体转义保护不了单引号包裹的 onclick/onchange 参数，需额外转义
+        function jsQuote(v) {
+            return String(v == null ? '' : v).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
         }
 
         function showToast(message, type) {

@@ -1,6 +1,6 @@
 {
-    "addon_version": "1.1.9",
-    "integration_version": "1.4.4",
+    "addon_version": "1.2.0",
+    "integration_version": "1.4.5",
     "github_repo": "fangwenyi-dev/ha-gateway-plugin",
     "latest_release_url": "https://api.github.com/repos/fangwenyi-dev/ha-gateway-plugin/releases/latest"
 }
