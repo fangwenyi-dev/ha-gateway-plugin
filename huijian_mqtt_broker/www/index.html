@@ -7,85 +7,146 @@
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            background: #f0f2f5;
-            color: #333;
-            padding: 20px;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+            background: #f5f7fa;
+            color: #2c3e50;
+            padding: 16px;
         }
         .header {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
-            padding: 30px;
-            border-radius: 12px;
+            padding: 24px 20px;
+            border-radius: 16px;
             margin-bottom: 20px;
             text-align: center;
         }
-        .header h1 { font-size: 24px; margin-bottom: 8px; }
-        .header p { font-size: 14px; opacity: 0.9; }
-        .grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-            gap: 20px;
-            max-width: 1200px;
-            margin: 0 auto;
-        }
-        .card {
+        .header h1 { font-size: 22px; margin-bottom: 6px; }
+        .header p { font-size: 13px; opacity: 0.85; }
+
+        .steps {
+            max-width: 800px;
+            margin: 0 auto 20px;
             background: white;
-            border-radius: 12px;
-            padding: 24px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+            border-radius: 16px;
+            padding: 24px 20px;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.06);
         }
-        .card h2 {
+        .steps h2 {
             font-size: 16px;
-            color: #667eea;
+            color: #333;
             margin-bottom: 16px;
             display: flex;
             align-items: center;
             gap: 8px;
         }
-        .status-row {
+        .step {
+            display: flex;
+            gap: 14px;
+            padding: 12px 0;
+            border-bottom: 1px solid #f0f0f0;
+        }
+        .step:last-child { border-bottom: none; }
+        .step-num {
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            background: #667eea;
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            font-weight: 700;
+            flex-shrink: 0;
+            margin-top: 2px;
+        }
+        .step-content { flex: 1; }
+        .step-content h3 { font-size: 14px; color: #333; margin-bottom: 4px; }
+        .step-content p { font-size: 13px; color: #888; line-height: 1.5; }
+        .step-content code {
+            background: #f0f4ff;
+            color: #5566ee;
+            padding: 1px 6px;
+            border-radius: 4px;
+            font-family: "SF Mono", Consolas, monospace;
+            font-size: 12px;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 16px;
+            max-width: 800px;
+            margin: 0 auto 20px;
+        }
+        .card {
+            background: white;
+            border-radius: 16px;
+            padding: 20px;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+        }
+        .card h2 {
+            font-size: 15px;
+            color: #667eea;
+            margin-bottom: 14px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .row {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            padding: 10px 0;
-            border-bottom: 1px solid #f0f0f0;
+            padding: 8px 0;
+            border-bottom: 1px solid #f8f8f8;
         }
-        .status-row:last-child { border-bottom: none; }
-        .status-label { color: #666; font-size: 14px; }
-        .status-value { font-weight: 600; font-size: 14px; }
-        .status-ok { color: #4caf50; }
-        .status-warn { color: #ff9800; }
-        .status-err { color: #f44336; }
+        .row:last-child { border-bottom: none; }
+        .label { color: #888; font-size: 13px; }
+        .value { font-weight: 600; font-size: 13px; color: #333; }
+
         .badge {
             display: inline-block;
-            padding: 4px 12px;
+            padding: 2px 10px;
             border-radius: 20px;
-            font-size: 12px;
+            font-size: 11px;
             font-weight: 600;
         }
         .badge-ok { background: #e8f5e9; color: #2e7d32; }
         .badge-warn { background: #fff3e0; color: #e65100; }
+        .badge-err { background: #ffebee; color: #c62828; }
+
         .info-box {
             background: #e3f2fd;
             border-left: 4px solid #2196f3;
-            padding: 16px;
+            padding: 14px;
             border-radius: 8px;
-            margin-top: 16px;
+            margin-top: 14px;
         }
-        .info-box h3 { font-size: 14px; color: #1565c0; margin-bottom: 8px; }
-        .info-box p { font-size: 13px; color: #555; line-height: 1.6; }
+        .info-box h3 { font-size: 13px; color: #1565c0; margin-bottom: 6px; }
+        .info-box p { font-size: 12px; color: #555; line-height: 1.6; }
         .info-box code {
             background: #fff;
-            padding: 2px 8px;
+            padding: 1px 6px;
             border-radius: 4px;
-            font-family: monospace;
-            font-size: 13px;
+            font-family: "SF Mono", Consolas, monospace;
+            font-size: 12px;
             border: 1px solid #e0e0e0;
         }
+
+        .warn-box {
+            background: #fff8e1;
+            border-left: 4px solid #ff9800;
+            padding: 14px;
+            border-radius: 8px;
+            margin-top: 12px;
+        }
+        .warn-box h3 { font-size: 13px; color: #e65100; margin-bottom: 6px; }
+        .warn-box p { font-size: 12px; color: #555; line-height: 1.6; }
+
         .footer {
             text-align: center;
-            margin-top: 30px;
-            color: #999;
+            padding: 20px;
+            color: #aaa;
             font-size: 12px;
         }
     </style>
@@ -93,83 +154,122 @@
 <body>
     <div class="header">
         <h1>慧尖 LoRa 网关</h1>
-        <p>一体化 MQTT Broker + mDNS + 网关集成</p>
+        <p>一体化 MQTT Broker + mDNS 广播 + 网关集成</p>
+    </div>
+
+    <div class="steps">
+        <h2>📋 使用流程</h2>
+        <div class="step">
+            <div class="step-num">1</div>
+            <div class="step-content">
+                <h3>安装并启动插件</h3>
+                <p>安装后点击「启动」，插件自动完成：mDNS 广播、Mosquitto Broker、网关集成安装、HA MQTT 集成配置</p>
+            </div>
+        </div>
+        <div class="step">
+            <div class="step-num">2</div>
+            <div class="step-content">
+                <h3>配置 LoRa 网关连接</h3>
+                <p>在 LoRa 网关配置界面填写：Broker <code>huijian.local</code>，端口 <code>1883</code>，用户名 <code>huijian</code>，密码 <code>huijian2022</code></p>
+            </div>
+        </div>
+        <div class="step">
+            <div class="step-num">3</div>
+            <div class="step-content">
+                <h3>重启 HA 并等待网关上报</h3>
+                <p>重启 Home Assistant 让集成生效。LoRa 网关上电后会自动向 MQTT 上报，HA 会弹出「发现新设备」通知，点击添加即可</p>
+            </div>
+        </div>
+        <div class="step">
+            <div class="step-num">4</div>
+            <div class="step-content">
+                <h3>添加子设备（配对）</h3>
+                <p>网关添加成功后，在设备页面找到「配对」按钮，按下后网关进入配对模式，子设备上报后自动添加到 HA</p>
+            </div>
+        </div>
     </div>
 
     <div class="grid">
         <div class="card">
-            <h2>📊 服务状态</h2>
-            <div class="status-row">
-                <span class="status-label">Mosquitto Broker</span>
-                <span class="badge badge-ok" id="mqtt-status">运行中</span>
+            <h2>🔌 服务状态</h2>
+            <div class="row">
+                <span class="label">Mosquitto Broker</span>
+                <span class="badge badge-ok">运行中</span>
             </div>
-            <div class="status-row">
-                <span class="status-label">mDNS 广播</span>
-                <span class="badge badge-ok" id="mdns-status">运行中</span>
+            <div class="row">
+                <span class="label">mDNS 广播</span>
+                <span class="badge badge-ok">运行中</span>
             </div>
-            <div class="status-row">
-                <span class="status-label">网关集成</span>
+            <div class="row">
+                <span class="label">网关集成</span>
                 <span class="badge badge-ok">已安装</span>
             </div>
-            <div class="status-row">
-                <span class="status-label">HA MQTT 集成</span>
+            <div class="row">
+                <span class="label">HA MQTT 集成</span>
                 <span class="badge badge-ok">已配置</span>
+            </div>
+            <div class="row">
+                <span class="label">Ingress Web UI</span>
+                <span class="badge badge-ok">运行中</span>
             </div>
         </div>
 
         <div class="card">
-            <h2>🔌 连接信息</h2>
-            <div class="status-row">
-                <span class="status-label">MQTT 端口</span>
-                <span class="status-value">1883</span>
+            <h2>📡 连接信息</h2>
+            <div class="row">
+                <span class="label">MQTT 端口</span>
+                <span class="value">1883</span>
             </div>
-            <div class="status-row">
-                <span class="status-label">Broker 地址</span>
-                <span class="status-value">huijian.local</span>
+            <div class="row">
+                <span class="label">Broker 地址</span>
+                <span class="value">huijian.local</span>
             </div>
-            <div class="status-row">
-                <span class="status-label">用户名</span>
-                <span class="status-value">huijian</span>
+            <div class="row">
+                <span class="label">用户名</span>
+                <span class="value">huijian</span>
             </div>
-            <div class="status-row">
-                <span class="status-label">密码</span>
-                <span class="status-value">huijian2022</span>
+            <div class="row">
+                <span class="label">密码</span>
+                <span class="value">huijian2022</span>
+            </div>
+            <div class="row">
+                <span class="label">mDNS 主机名</span>
+                <span class="value">huijian.local</span>
             </div>
         </div>
 
         <div class="card" style="grid-column: 1 / -1;">
             <div class="info-box">
-                <h3>💡 LoRa 网关配置</h3>
+                <h3>💡 LoRa 网关 MQTT 配置</h3>
                 <p>在 LoRa 网关的配置界面中填写以下信息：</p>
-                <p style="margin-top:8px;">
-                    Broker 地址: <code>huijian.local</code> 或 HA 的 IP 地址<br>
+                <p style="margin-top:6px;">
+                    Broker 地址: <code>huijian.local</code>（或 HA 的 IP 地址）<br>
                     端口: <code>1883</code><br>
                     用户名: <code>huijian</code>（可在插件配置中修改）<br>
                     密码: <code>huijian2022</code>（可在插件配置中修改）
                 </p>
             </div>
-            <div class="info-box" style="background:#fff8e1; border-left-color:#ff9800; margin-top:12px;">
-                <h3 style="color:#e65100;">⚠️ 注意</h3>
-                <p>修改用户名/密码后，需要重启插件并更新 LoRa 网关的 MQTT 配置。</p>
-                <p>安装或更新集成后，需要重启 Home Assistant 让集成生效。</p>
-                <p>重启后在 <strong>设置 → 设备与服务 → 添加集成 → 搜索「慧尖」</strong> 添加网关。</p>
+            <div class="info-box" style="background:#f3e5f5; border-left-color:#9c27b0; margin-top:12px;">
+                <h3 style="color:#7b1fa2;">🔧 MQTT 主题协议</h3>
+                <p>
+                    HA → 网关: <code>gateway/{网关SN}/req</code>（命令下发）<br>
+                    网关 → HA: <code>gateway/rpt_rsp</code>（状态上报）
+                </p>
+            </div>
+            <div class="warn-box">
+                <h3>⚠️ 注意事项</h3>
+                <p>
+                    • 修改用户名/密码后需重启插件并更新 LoRa 网关配置<br>
+                    • 安装或更新集成后需重启 Home Assistant<br>
+                    • 网关添加后，在设备页面找到「配对」按钮添加子设备<br>
+                    • 如 mDNS 不可用，LoRa 网关可使用 HA 的 IP 地址
+                </p>
             </div>
         </div>
     </div>
 
     <div class="footer">
-        <p>慧尖 LoRa 网关一体化插件 v1.0.4</p>
+        <p>慧尖 LoRa 网关一体化插件 v1.0.5</p>
     </div>
-
-    <script>
-        async function checkStatus() {
-            try {
-                const resp = await fetch('/api/status');
-                const data = await resp.json();
-            } catch(e) {}
-        }
-        checkStatus();
-        setInterval(checkStatus, 30000);
-    </script>
 </body>
 </html>

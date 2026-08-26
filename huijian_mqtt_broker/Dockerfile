@@ -29,6 +29,21 @@ COPY custom_components /data/custom_components
 COPY ingress.conf /etc/nginx/http.d/ingress.conf
 COPY www/ /usr/share/nginx/html/
 
+# 覆盖默认 nginx.conf，移除默认 server 块避免端口冲突
+RUN echo 'user nginx;' > /etc/nginx/nginx.conf && \
+    echo 'worker_processes auto;' >> /etc/nginx/nginx.conf && \
+    echo 'error_log /dev/stderr warn;' >> /etc/nginx/nginx.conf && \
+    echo 'pid /run/nginx.pid;' >> /etc/nginx/nginx.conf && \
+    echo 'events { worker_connections 768; }' >> /etc/nginx/nginx.conf && \
+    echo 'http {' >> /etc/nginx/nginx.conf && \
+    echo '    include /etc/nginx/mime.types;' >> /etc/nginx/nginx.conf && \
+    echo '    default_type application/octet-stream;' >> /etc/nginx/nginx.conf && \
+    echo '    access_log /dev/stdout;' >> /etc/nginx/nginx.conf && \
+    echo '    sendfile on;' >> /etc/nginx/nginx.conf && \
+    echo '    keepalive_timeout 65;' >> /etc/nginx/nginx.conf && \
+    echo '    include /etc/nginx/http.d/*.conf;' >> /etc/nginx/nginx.conf && \
+    echo '}' >> /etc/nginx/nginx.conf
+
 # 创建持久化目录，设置权限
 RUN mkdir -p /data/mosquitto && \
     chmod 755 /data/mosquitto && \
