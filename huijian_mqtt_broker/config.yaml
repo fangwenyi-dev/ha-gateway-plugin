@@ -3,7 +3,7 @@ version: "1.2.0"
 slug: huijian_mqtt_broker
 description: 慧尖开窗器 LoRa 网关一体化插件，内置 Mosquitto Broker + 网关集成，安装即用
 url: 'https://github.com/fangwenyi-dev/ha-gateway-plugin'
-image: ghcr.io/fangwenyi-dev/ha-gateway-plugin/huijian-mqtt-broker
+image: ghcr.io/fangwenyi-dev/huijian-mqtt-broker
 arch:
   - amd64
   - aarch64
