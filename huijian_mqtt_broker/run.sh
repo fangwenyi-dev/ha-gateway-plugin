@@ -1,6 +1,6 @@
 #!/usr/bin/with-contenv bashio
 # =============================================================================
-# 慧尖 LoRa 网关一体化插件 — 启动脚本 v1.1.1
+# 慧尖 LoRa 网关一体化插件 — 启动脚本 v1.2.0
 #
 # 架构：
 #   - 容器内 mosquitto 固定监听 1883
@@ -78,10 +78,8 @@ HA_SUPERVISOR_TOKEN="${SUPERVISOR_TOKEN:-}"
 cat > /etc/nginx/http.d/ingress.conf <<NGINXEOF
 server {
     listen 8099;
-    allow 172.30.32.2;
-    allow 127.0.0.1;
-    deny all;
 
+    # Ingress 模式下请求来源 IP 不固定，不限制来源
     location / {
         root /usr/share/nginx/html;
         index index.html;
@@ -105,6 +103,15 @@ server {
         add_header Content-Type application/json;
         root /usr/share/nginx/html;
         try_files /version.json =404;
+    }
+
+    # 代理 GitHub API（检查更新用），避免 Ingress iframe 中 CSP 拦截外部请求
+    location /api/github/ {
+        proxy_pass https://api.github.com/;
+        proxy_set_header Host api.github.com;
+        proxy_ssl_server_name on;
+        proxy_read_timeout 15s;
+        proxy_connect_timeout 10s;
     }
 }
 NGINXEOF
@@ -211,16 +218,18 @@ echo "  密码: ${PASSWORD}"
 echo ""
 
 # ---------- 7. 自动配置 HA MQTT 集成（后台执行） ----------
-export MQTT_PORT
-export USERNAME
-export PASSWORD
-export INTERNAL_PORT
+export MQTT_PORT="${MQTT_PORT}"
+export USERNAME="${USERNAME}"
+export PASSWORD="${PASSWORD}"
+export INTERNAL_PORT="${INTERNAL_PORT}"
 
 if [ "${AUTO_SETUP}" = "true" ]; then
     echo "============================================"
     echo "  自动配置 HA MQTT 集成..."
     echo "============================================"
-    (/auto_setup_mqtt.sh || true) &
+    # 显式传递变量，避免 bashio set -u 导致子 shell 中 unbound variable
+    USERNAME="${USERNAME}" PASSWORD="${PASSWORD}" MQTT_PORT="${MQTT_PORT}" INTERNAL_PORT="${INTERNAL_PORT}" \
+        /auto_setup_mqtt.sh &
     echo ""
 fi
 

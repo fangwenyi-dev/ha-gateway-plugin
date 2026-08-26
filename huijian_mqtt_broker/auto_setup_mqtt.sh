@@ -12,8 +12,9 @@
 set -e
 
 # 从环境变量读取（run.sh 中 export 的）
-USERNAME="${USERNAME}"
-PASSWORD="${PASSWORD}"
+# bashio 默认启用 set -u（未定义变量报错），所以必须提供默认值
+USERNAME="${USERNAME:-huijian}"
+PASSWORD="${PASSWORD:-huijian2022}"
 MQTT_PORT="${MQTT_PORT:-1885}"
 INTERNAL_PORT="${INTERNAL_PORT:-1883}"
 

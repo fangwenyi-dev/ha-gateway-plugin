@@ -3,6 +3,20 @@
 所有版本变更记录在此文件中。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.2.0] - 2026-08-26
+
+### 修复（关键）
+- **Web UI「MQTT Broker无法连接」**：nginx ingress 配置了 `allow/deny` IP 限制，Ingress 模式下来源 IP 不固定导致 403，移除 IP 限制
+- **Web UI「网关集成检测失败」「HA MQTT检测失败」**：默认 `ingress.conf` 缺少 `/api/ha/` 代理配置，添加 HA API 代理
+- **Web UI「检查更新」无反应**：直接请求 `https://api.github.com` 被 Ingress iframe CSP 拦截，改为通过 nginx `/api/github/` 代理
+- **auto_setup_mqtt.sh 崩溃**：`USERNAME: unbound variable` — bashio 的 `set -u` 导致子 shell 中未定义变量报错，为所有变量添加默认值
+
+### 变更
+- `run.sh` 中显式传递环境变量给 `auto_setup_mqtt.sh` 子进程
+- `ingress.conf` 默认配置同步添加 `/api/ha/` 和 `/api/github/` 代理
+- Web UI 新增 `updateConnectionInfo()` 从 `/api/status` 动态读取端口显示
+- 版本号 1.1.1 → 1.2.0
+
 ## [1.1.1] - 2026-08-26
 
 ### 修复（关键）
