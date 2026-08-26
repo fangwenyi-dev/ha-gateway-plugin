@@ -3,6 +3,17 @@
 所有版本变更记录在此文件中。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.1.4] - 2026-08-26
+
+### 修复（关键）
+- **端口 1883 冲突**：移除 `mqtt_port` 可配置项，Docker 端口映射固定为 `1885:1883`（主机 1885 → 容器 1883），避免用户误配 `mqtt_port` 为 1883 与 HA 官方 Mosquitto 冲突
+- **`mqtt_port` 与 `ports` 脱节**：之前 `mqtt_port` 配置项只影响显示和 auto_setup，不改变 Docker 实际端口映射，容易造成混淆
+
+### 变更
+- `config.yaml` 移除 `mqtt_port` 配置项和 schema
+- `run.sh` 中 `MQTT_PORT` 固定为 1885，不再从 bashio::config 读取
+- 版本号 1.1.3 → 1.1.4
+
 ## [1.1.3] - 2026-08-26
 
 ### 修复（关键）

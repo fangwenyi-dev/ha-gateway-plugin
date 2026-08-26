@@ -1,6 +1,6 @@
 # 慧尖 LoRa 网关一体化插件
 
-[![版本](https://img.shields.io/badge/version-1.1.3-blue)]()
+[![版本](https://img.shields.io/badge/version-1.1.4-blue)]()
 [![HA Add-on](https://img.shields.io/badge/HA-Add--on-green)]()
 
 慧尖开窗器 LoRa 网关的 Home Assistant 一体化插件。**内置 Mosquitto Broker + 网关集成，安装一个插件即可获得全部能力**。
@@ -98,9 +98,10 @@ https://github.com/fangwenyi-dev/ha-gateway-plugin
 |--------|--------|------|
 | `username` | `huijian` | MQTT 用户名 |
 | `password` | `huijian2022` | MQTT 密码 |
-| `mqtt_port` | `1885` | 主机端口（映射到容器内 1883，避免与 HA 官方 MQTT 1883 冲突） |
 | `auto_setup_ha_mqtt` | `true` | 启动时自动配置 HA MQTT 集成 |
 | `install_integration` | `true` | 启动时自动安装慧尖网关集成到 HA custom_components |
+
+> **注意**：MQTT 端口固定为 `1885`（主机）→ `1883`（容器内），在 `config.yaml` 的 `ports` 中定义，不可在插件配置中修改。这样避免与 HA 官方 Mosquitto broker 的 1883 端口冲突，两个 broker 可以共存。
 
 ## 常见问题
 

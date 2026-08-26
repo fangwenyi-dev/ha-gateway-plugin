@@ -1,6 +1,6 @@
 #!/usr/bin/with-contenv bashio
 # =============================================================================
-# 慧尖 LoRa 网关一体化插件 — 启动脚本 v1.1.3
+# 慧尖 LoRa 网关一体化插件 — 启动脚本 v1.1.4
 #
 # 架构：
 #   - 容器内 mosquitto 固定监听 1883
@@ -15,9 +15,10 @@ USERNAME=$(bashio::config 'username')
 PASSWORD=$(bashio::config 'password')
 AUTO_SETUP=$(bashio::config 'auto_setup_ha_mqtt')
 INSTALL_INTEGRATION=$(bashio::config 'install_integration')
-MQTT_PORT=$(bashio::config 'mqtt_port')
 
-# 容器内 mosquitto 固定监听端口
+# Docker 端口映射在 config.yaml 中固定为 1885:1883
+# 容器内 mosquitto 固定监听 1883，主机映射固定 1885
+MQTT_PORT=1885
 INTERNAL_PORT=1883
 
 echo "============================================"
