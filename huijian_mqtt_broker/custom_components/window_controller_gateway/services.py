@@ -39,7 +39,7 @@ def _reject_bool_position(value):
     return value
 
 
-async def handle_start_pairing(call: ServiceCall) -> None:
+async def handle_start_pairing(hass: HomeAssistant, call: ServiceCall) -> None:
     """处理开始配对服务调用"""
     device_id = call.data.get("device_id")
     duration = call.data.get("duration", GATEWAY_PAIRING_TIMEOUT)
@@ -104,7 +104,7 @@ async def handle_start_pairing(call: ServiceCall) -> None:
     except Exception as e:
         _LOGGER.error("网关 %s 执行配对命令失败: %s", gateway_sn, e)
 
-async def handle_rename_device(call: ServiceCall) -> None:
+async def handle_rename_device(hass: HomeAssistant, call: ServiceCall) -> None:
     """处理重命名设备服务调用"""
     device_id = call.data.get("device_id")
     new_name = call.data.get(ATTR_NEW_NAME)
@@ -133,7 +133,7 @@ async def handle_rename_device(call: ServiceCall) -> None:
     except Exception as e:
         _LOGGER.error("设备 %s 重命名失败: %s", device_id, e)
 
-async def handle_refresh_devices(call: ServiceCall) -> None:
+async def handle_refresh_devices(hass: HomeAssistant, call: ServiceCall) -> None:
     """处理刷新设备服务调用
 
     协议说明：002 是网关主动发起的上报，HA 无法主动触发设备发现。
@@ -158,7 +158,7 @@ async def handle_refresh_devices(call: ServiceCall) -> None:
         gateway_sn
     )
 
-async def handle_set_position(call: ServiceCall) -> None:
+async def handle_set_position(hass: HomeAssistant, call: ServiceCall) -> None:
     """处理设置位置服务调用 - 优化版，减少阻塞"""
     device_id = call.data.get("device_id")
     position = call.data.get("position")
@@ -209,7 +209,7 @@ async def handle_set_position(call: ServiceCall) -> None:
     hass.async_create_task(set_position_async())
     _LOGGER.info("设置位置服务调用已提交，设备ID: %s，位置: %d", device_id, position)
 
-async def handle_check_gateway_status(call: ServiceCall) -> None:
+async def handle_check_gateway_status(hass: HomeAssistant, call: ServiceCall) -> None:
     """处理检查网关状态服务调用"""
     device_id = call.data.get("device_id")
 
@@ -236,7 +236,7 @@ async def handle_check_gateway_status(call: ServiceCall) -> None:
     except Exception as e:
         _LOGGER.error("检查网关状态失败: %s", e)
 
-async def handle_migrate_devices(call: ServiceCall) -> None:
+async def handle_migrate_devices(hass: HomeAssistant, call: ServiceCall) -> None:
     """完善的设备迁移服务"""
     old_gateway_sn = call.data.get("old_gateway_sn")  # 旧网关SN
     new_gateway_sn = call.data.get("new_gateway_sn")  # 新网关SN
@@ -445,7 +445,7 @@ async def handle_migrate_devices(call: ServiceCall) -> None:
             }
         )
 
-async def handle_transfer_device(call: ServiceCall) -> None:
+async def handle_transfer_device(hass: HomeAssistant, call: ServiceCall) -> None:
     """处理转移设备服务调用"""
     device_id = call.data.get("device_id")
     new_gateway_sn = call.data.get("new_gateway_sn")
@@ -530,7 +530,7 @@ def register_services(hass: HomeAssistant) -> bool:
         hass.services.async_register(
             DOMAIN,
             SERVICE_START_PAIRING,
-            handle_start_pairing,
+            lambda call: handle_start_pairing(hass, call),
             schema=vol.Schema({
                 vol.Required("device_id"): cv.string,
                 vol.Optional("duration", default=GATEWAY_PAIRING_TIMEOUT): cv.positive_int,
@@ -540,7 +540,7 @@ def register_services(hass: HomeAssistant) -> bool:
         hass.services.async_register(
             DOMAIN,
             SERVICE_REFRESH_DEVICES,
-            handle_refresh_devices,
+            lambda call: handle_refresh_devices(hass, call),
             schema=vol.Schema({
                 vol.Required("device_id"): cv.string,
             })
@@ -549,7 +549,7 @@ def register_services(hass: HomeAssistant) -> bool:
         hass.services.async_register(
             DOMAIN,
             COMMAND_SET_POSITION,
-            handle_set_position,
+            lambda call: handle_set_position(hass, call),
             schema=vol.Schema({
                 vol.Required("device_id"): cv.string,
                 vol.Required("position"): vol.All(
@@ -563,7 +563,7 @@ def register_services(hass: HomeAssistant) -> bool:
         hass.services.async_register(
             DOMAIN,
             "check_gateway_status",
-            handle_check_gateway_status,
+            lambda call: handle_check_gateway_status(hass, call),
             schema=vol.Schema({
                 vol.Required("device_id"): cv.string,
             })
@@ -575,7 +575,7 @@ def register_services(hass: HomeAssistant) -> bool:
         # hass.services.async_register(
         #     DOMAIN,
         #     SERVICE_MIGRATE_DEVICES,
-        #     handle_migrate_devices,
+        #     lambda call: handle_migrate_devices(hass, call),
         #     schema=vol.Schema({
         #         vol.Required("old_gateway_sn"): cv.string,
         #         vol.Required("new_gateway_sn"): cv.string,
@@ -586,7 +586,7 @@ def register_services(hass: HomeAssistant) -> bool:
         hass.services.async_register(
             DOMAIN,
             SERVICE_RENAME_DEVICE,
-            handle_rename_device,
+            lambda call: handle_rename_device(hass, call),
             schema=vol.Schema({
                 vol.Required("device_id"): cv.string,
                 vol.Required(ATTR_NEW_NAME): cv.string,
@@ -596,7 +596,7 @@ def register_services(hass: HomeAssistant) -> bool:
         hass.services.async_register(
             DOMAIN,
             SERVICE_TRANSFER_DEVICE,
-            handle_transfer_device,
+            lambda call: handle_transfer_device(hass, call),
             schema=vol.Schema({
                 vol.Required("device_id"): cv.string,
                 vol.Required("new_gateway_sn"): cv.string,
