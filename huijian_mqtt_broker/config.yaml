@@ -1,5 +1,5 @@
 name: 慧尖 LoRa 网关
-version: "1.2.8"
+version: "1.2.9"
 slug: huijian_mqtt_broker
 description: 慧尖开窗器 LoRa 网关一体化插件，内置 Mosquitto Broker + 网关集成，安装即用
 url: 'https://github.com/fangwenyi-dev/ha-gateway-plugin'
@@ -32,6 +32,9 @@ panel_title: 慧尖网关
 #         细粒度选项最小化。TODO: 若 HAOS 未来移除宿主 avahi 或 supervisor
 #         schema 增加 host_name 选项，可重新评估 host_network 方案。
 full_access: true
+# 允许通过 Supervisor /core/api/ 代理访问 HA Core REST API（设备、状态、服务等）
+# Web UI 的 haApi() 调用依赖此权限，否则返回 401
+homeassistant_api: true
 ports:
   2022/tcp: 2022
 ports_description:

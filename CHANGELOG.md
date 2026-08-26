@@ -3,6 +3,11 @@
 所有版本变更记录在此文件中。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.2.9] - 2026-08-26
+
+### 修复
+- **Web UI "HA MQTT 未连接" 根因修复**：addon 的 `config.yaml` 缺少 `homeassistant_api: true` 权限声明，导致 Supervisor 的 `/core/api/` 代理返回 401。所有 haApi() 调用（网关列表、设备、状态、服务）全部失败，前端显示"未连接"。添加该权限后，SUPERVISOR_TOKEN 可通过代理访问 HA Core REST API
+
 ## [1.2.8] - 2026-08-26
 
 ### 修复
