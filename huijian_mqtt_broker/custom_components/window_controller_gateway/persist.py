@@ -18,7 +18,10 @@ _LOGGER = logging.getLogger(__name__)
 PERSISTENT_DATA_FILE = "window_controller_gateway_data.json"
 SCHEMA_VERSION = 1
 
-# 串行化写入锁 + 防抖标志
+# 串行化写入锁 + 防抖标志。
+# 注意：这里必须保持"模块级全局锁"——所有 entry 的持久化数据写入的是同一个
+# JSON 文件（PERSISTENT_DATA_FILE），全局锁保证跨 entry 的写入串行化。
+# 不要按 entry 拆分锁：那会允许两个 entry 并发写同一文件，造成数据竞争/文件损坏。
 _save_lock = asyncio.Lock()
 _save_pending = False
 

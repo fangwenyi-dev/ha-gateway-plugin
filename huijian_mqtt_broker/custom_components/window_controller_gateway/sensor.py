@@ -6,7 +6,7 @@ from typing import Optional
 
 from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.components.sensor import SensorEntity, SensorDeviceClass
+from homeassistant.components.sensor import SensorEntity, SensorDeviceClass, SensorStateClass
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.entity import DeviceInfo, EntityCategory
 
@@ -54,9 +54,9 @@ class WindowControllerBatterySensor(WindowControllerBaseEntity, SensorEntity):
         # unique_id 基于设备SN，与v1.1.8保持一致
         self._attr_unique_id = f"{gateway_sn}_{device_sn}_battery"
         self._attr_device_class = SensorDeviceClass.VOLTAGE
-        self._attr_state_class = "measurement"
+        self._attr_state_class = SensorStateClass.MEASUREMENT
         self.last_update_time = None  # 最后更新时间
-        self.entry_id = entry_id
+        self._entry_id = entry_id
         # 添加图标
         self._attr_icon = "mdi:battery"
         self._attr_entity_category = EntityCategory.DIAGNOSTIC
@@ -127,7 +127,7 @@ class WindowControllerStatusSensor(WindowControllerBaseEntity, SensorEntity):
             device_sn=device_sn,
             device_name=device_name
         )
-        self.entry_id = entry_id
+        self._entry_id = entry_id
         self._attr_name = "状态"
         # unique_id 基于设备SN，与v1.1.8保持一致
         self._attr_unique_id = f"{gateway_sn}_{device_sn}_status"

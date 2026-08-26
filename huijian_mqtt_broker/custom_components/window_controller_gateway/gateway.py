@@ -52,7 +52,7 @@ class GatewayOnlineSensor(BinarySensorEntity):
         self.mqtt_handler = mqtt_handler
         self.gateway_sn = gateway_sn
         self.gateway_name = gateway_name
-        self.entry_id = entry_id
+        self._entry_id = entry_id
         self._attr_name = "在线"
         # unique_id基于网关SN，确保同一网关只有一个在线状态传感器
         self._attr_unique_id = f"{gateway_sn}_online"
@@ -143,7 +143,7 @@ class GatewayPairingButton(ButtonEntity):
         self.mqtt_handler = mqtt_handler
         self.gateway_sn = gateway_sn
         self.gateway_name = gateway_name
-        self.entry_id = entry_id
+        self._entry_id = entry_id
         self._attr_name = "配对"
         # unique_id基于网关SN，确保同一网关只有一个配对按钮
         self._attr_unique_id = f"{gateway_sn}_pairing"
@@ -228,7 +228,7 @@ class GatewayDeviceRemoveButton(ButtonEntity):
         self.gateway_name = gateway_name
         self.device_sn = device_sn
         self.device_name = device_name
-        self.entry_id = entry_id
+        self._entry_id = entry_id
         self._attr_name = f"移除 {device_sn[-4:]}"
         # unique_id基于网关SN和设备SN，确保同一网关的同一设备只有一个删除按钮
         self._attr_unique_id = f"{gateway_sn}_remove_{device_sn}"

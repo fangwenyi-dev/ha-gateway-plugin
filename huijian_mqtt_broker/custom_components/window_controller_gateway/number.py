@@ -83,7 +83,7 @@ class WindowControllerRangeNumber(WindowControllerBaseEntity, NumberEntity):
         self._attr_entity_category = EntityCategory.CONFIG
         # 始终可用，防止变灰（与按钮/Cover 行为一致）
         self._attr_available = True
-        self.entry_id = entry_id
+        self._entry_id = entry_id
         # 防抖：拖动过程中只更新显示，停止 SLIDER_DEBOUNCE_SECONDS 秒后才发送命令
         self._debounce_handle = None
         self._pending_value = None

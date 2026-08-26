@@ -116,7 +116,7 @@ class BaseWindowControllerButton(WindowControllerBaseEntity, ButtonEntity):
         self._attr_unique_id = f"{gateway_sn}_{device_sn}_{button_type}"
         self._attr_icon = icon
         self.command = command
-        self.entry_id = entry_id
+        self._entry_id = entry_id
         # 确保按钮始终可用，不会变成灰色
         self._attr_available = True
         # 设为配置类，控制区只保留 Cover
@@ -177,7 +177,7 @@ class WindLockModeButton(WindowControllerBaseEntity, ButtonEntity):
         self._attr_unique_id = f"{gateway_sn}_{device_sn}_{button_type}"
         self._attr_icon = icon
         self.command = command
-        self.entry_id = entry_id
+        self._entry_id = entry_id
         self._attr_available = True
         # 设为配置类，使按钮出现在配置区域
         self._attr_entity_category = EntityCategory.CONFIG

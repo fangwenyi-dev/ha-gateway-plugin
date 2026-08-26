@@ -58,7 +58,7 @@ class WindowControllerCover(WindowControllerBaseEntity, CoverEntity):
         self._attr_unique_id = f"{gateway_sn}_{device_sn}_cover"
         self._attr_device_class = CoverDeviceClass.WINDOW
         self._attr_name = "开窗器"
-        self.entry_id = entry_id
+        self._entry_id = entry_id
         self._attr_supported_features = (
             CoverEntityFeature.OPEN |
             CoverEntityFeature.CLOSE |
