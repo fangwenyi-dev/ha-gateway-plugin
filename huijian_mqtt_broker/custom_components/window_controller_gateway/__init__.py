@@ -111,6 +111,55 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await hass.config_entries.async_forward_entry_setups(entry, [
             Platform.SENSOR, Platform.COVER, Platform.BUTTON, Platform.NUMBER
         ])
+
+        # 轻量级心跳监听器：订阅 gateway/rpt_rsp，发现新网关时自动触发发现流程
+        # 这让"先装集成、后上电网关"的自动发现流程成为可能
+        try:
+            from .const import TOPIC_GATEWAY_RSP
+            from .discovery import async_discover_gateway
+
+            _unsub_heartbeat = None
+
+            async def _heartbeat_listener(msg):
+                """监听网关心跳，触发自动发现"""
+                try:
+                    import json
+                    payload = json.loads(msg.payload)
+                    if "head" not in payload or "ctype" not in payload:
+                        return
+                    response_sn = payload.get("sn")
+                    if not response_sn or not isinstance(response_sn, (str, int, float)):
+                        return
+                    if isinstance(response_sn, bool):
+                        return
+                    response_sn = str(response_sn)
+                    import re
+                    if not re.match(r"^[a-zA-Z0-9]{10,}$", response_sn):
+                        return
+
+                    # 检查是否已配置
+                    for e in hass.config_entries.async_entries(DOMAIN):
+                        if e.data.get(CONF_GATEWAY_SN, "").lower() == response_sn.lower():
+                            return
+
+                    gateway_name = f"慧尖网关 {response_sn[-4:]}"
+                    _LOGGER.info("心跳监听器发现新网关: %s (SN: %s)", gateway_name, response_sn)
+                    await async_discover_gateway(hass, response_sn, gateway_name)
+                except Exception as e:
+                    _LOGGER.debug("心跳监听器处理消息出错: %s", e)
+
+            if hass.data.get("mqtt"):
+                from homeassistant.components import mqtt as mqtt_comp
+                _unsub_heartbeat = await mqtt_comp.async_subscribe(
+                    hass, TOPIC_GATEWAY_RSP, _heartbeat_listener, 1
+                )
+                hass.data[DOMAIN][entry.entry_id]["_unsub_heartbeat"] = _unsub_heartbeat
+                _LOGGER.info("已启动网关心跳监听器，等待网关上电...")
+            else:
+                _LOGGER.warning("MQTT 集成未就绪，心跳监听器未启动（网关需先手动添加 SN）")
+        except Exception as e:
+            _LOGGER.warning("启动心跳监听器失败: %s（不影响手动添加）", e)
+
         return True
 
     # ---- 有网关 SN：完整设置 ----
@@ -329,6 +378,15 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             stop_unsub()
         except Exception as e:
             _LOGGER.debug("取消停止监听器时出错: %s", e)
+
+    # 1.1 取消心跳监听器（无 SN 模式下的自动发现）
+    heartbeat_unsub = data.get("_unsub_heartbeat")
+    if heartbeat_unsub:
+        try:
+            heartbeat_unsub()
+            _LOGGER.debug("心跳监听器已取消")
+        except Exception as e:
+            _LOGGER.debug("取消心跳监听器时出错: %s", e)
 
     # 1.5 取消后台任务（_bg_tasks），避免任务在卸载后继续执行
     for bg_task in data.get("_bg_tasks", []):
