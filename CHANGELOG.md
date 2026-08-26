@@ -3,6 +3,17 @@
 所有版本变更记录在此文件中。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.0.8] - 2026-08-26
+
+### 修复（关键）
+- **端口 1883 冲突**：启动前自动检测端口 1883 是否被占用（如 HA 官方 Mosquitto 插件），如被占用则停止占用进程或给出明确提示
+- **avahi-daemon 启动失败**：Dockerfile 中创建 `/etc/machine-id` 和 `/var/lib/dbus/machine-id`，添加 `avahi-compat-libdns_sd` 和 `dbus-libs` 包
+- **avahi 启动策略**：`avahi-daemon -D` 失败时回退到前台启动后转后台
+
+### 变更
+- 插件版本号 1.0.7 → 1.0.8
+- 集成版本保持 1.4.4
+
 ## [1.0.7] - 2026-08-26
 
 ### 修复（关键）

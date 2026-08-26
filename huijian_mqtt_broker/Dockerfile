@@ -4,7 +4,7 @@ FROM ghcr.io/home-assistant/${BUILD_ARCH}-base:latest
 # 安装依赖包
 # - mosquitto/mosquitto-clients: MQTT broker + 客户端工具
 # - curl/jq: HA API 调用
-# - avahi/avahi-tools/dbus: mDNS 广播
+# - avahi/avahi-tools/dbus: mDNS 广播（需要 dbus 和 machine-id）
 # - nginx: Ingress Web UI
 # - net-tools/procps: 调试工具（netstat/ps）
 RUN apk add --no-cache \
@@ -14,10 +14,18 @@ RUN apk add --no-cache \
     jq \
     avahi \
     avahi-tools \
+    avahi-compat-libdns_sd \
     dbus \
+    dbus-libs \
     nginx \
     net-tools \
-    procps
+    procps \
+    util-linux
+
+# 创建 avahi/dbus 所需的目录和 machine-id
+RUN mkdir -p /run/dbus /var/lib/dbus /etc/avahi && \
+    echo "huijian" > /etc/machine-id && \
+    cp /etc/machine-id /var/lib/dbus/machine-id 2>/dev/null || true
 
 # 复制配置文件
 COPY mosquitto.conf /etc/mosquitto/mosquitto.conf

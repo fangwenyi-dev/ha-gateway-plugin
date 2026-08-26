@@ -1,11 +1,12 @@
 #!/usr/bin/with-contenv bashio
 # =============================================================================
-# 慧尖 LoRa 网关一体化插件 — 启动脚本 v1.0.7
+# 慧尖 LoRa 网关一体化插件 — 启动脚本 v1.0.8
 #
 # 核心修复：
-#   1. Mosquitto 直接前台 exec 运行（不再 -d 后台启动再 kill 再 exec）
-#   2. auto_setup_mqtt.sh 后台执行，循环等待 broker 就绪后配置 MQTT 集成
-#   3. Nginx 用 heredoc 动态生成配置，直接写入 SUPERVISOR_TOKEN
+#   1. 启动前检查端口 1883 是否被占用，如果被占用则停止占用进程
+#   2. Mosquitto 直接前台 exec 运行
+#   3. avahi-daemon 修复：创建 machine-id，前台启动后转后台
+#   4. Nginx 用 heredoc 动态生成配置，直接写入 SUPERVISOR_TOKEN
 # =============================================================================
 
 set -e
@@ -25,16 +26,64 @@ echo "[配置] 自动配置 HA MQTT 集成: ${AUTO_SETUP}"
 echo "[配置] 自动安装网关集成: ${INSTALL_INTEGRATION}"
 echo ""
 
+# ---------- 0. 检查端口 1883 是否被占用 ----------
+echo "[检查] 端口 1883 状态..."
+if netstat -tlnp 2>/dev/null | grep -q ":1883.*LISTEN"; then
+    echo "[检查] 端口 1883 已被占用！"
+    # 查找占用 1883 端口的进程
+    OCCUPY_PID=$(netstat -tlnp 2>/dev/null | grep ":1883.*LISTEN" | awk '{print $NF}' | awk -F'/' '{print $1}' | head -1)
+    if [ -n "${OCCUPY_PID}" ] && [ "${OCCUPY_PID}" != "-" ]; then
+        OCCUPY_NAME=$(ps -p ${OCCUPY_PID} -o comm= 2>/dev/null || echo "unknown")
+        echo "[检查] 占用进程: ${OCCUPY_NAME} (PID: ${OCCUPY_PID})"
+        echo "[检查] 停止占用进程..."
+        kill ${OCCUPY_PID} 2>/dev/null || true
+        sleep 2
+        # 如果进程仍然存活，强制杀掉
+        if kill -0 ${OCCUPY_PID} 2>/dev/null; then
+            echo "[检查] 进程未停止，强制终止..."
+            kill -9 ${OCCUPY_PID} 2>/dev/null || true
+            sleep 1
+        fi
+    else
+        echo "[检查] 端口被占用但无法识别进程（可能是 HA 官方 Mosquitto 插件）"
+        echo "[检查] 请停止 HA 官方 Mosquitto broker 插件后重试"
+        echo "[检查] 或在 HA 设置 → 加载项 → Mosquitto broker → 停止"
+    fi
+    # 再次检查端口
+    if netstat -tlnp 2>/dev/null | grep -q ":1883.*LISTEN"; then
+        echo "[检查] 端口 1883 仍被占用，无法启动 broker"
+        echo "[错误] 请确保没有其他 MQTT broker 在运行"
+        exit 1
+    else
+        echo "[检查] 端口 1883 已释放"
+    fi
+else
+    echo "[检查] 端口 1883 空闲"
+fi
+echo ""
+
 # ---------- 1. 配置并启动 mDNS (avahi) ----------
 echo "[mDNS] 配置 avahi-daemon..."
 
+# avahi 需要 dbus 和 machine-id
 mkdir -p /run/dbus
-if ! pgrep dbus-daemon >/dev/null 2>&1; then
-    dbus-daemon --system --fork 2>/dev/null || {
-        echo "[mDNS] dbus-daemon 启动失败"
-    }
+if [ ! -f /etc/machine-id ]; then
+    echo "${MDNS_HOSTNAME}" > /etc/machine-id 2>/dev/null || true
+fi
+if [ ! -f /var/lib/dbus/machine-id ]; then
+    mkdir -p /var/lib/dbus 2>/dev/null || true
+    cp /etc/machine-id /var/lib/dbus/machine-id 2>/dev/null || true
 fi
 
+# 启动 dbus
+if ! pgrep dbus-daemon >/dev/null 2>&1; then
+    dbus-daemon --system --fork 2>/dev/null || {
+        echo "[mDNS] dbus-daemon 启动失败，尝试无 dbus 模式"
+    }
+    sleep 1
+fi
+
+# 生成 avahi 配置
 mkdir -p /etc/avahi
 cat > /etc/avahi/avahi-daemon.conf <<EOF
 [server]
@@ -60,11 +109,23 @@ rlimit-stack=4194304
 rlimit-nproc=3
 EOF
 
+# 启动 avahi-daemon（重试机制）
 AVAHIPID=""
 for i in 1 2 3; do
+    # 前台启动一次看错误信息
     if avahi-daemon -D 2>/dev/null; then
         AVAHIPID="ok"
         break
+    fi
+    # 如果 -D 失败，尝试直接前台启动后转后台
+    if [ ${i} -eq 1 ]; then
+        avahi-daemon 2>/dev/null &
+        AVAHIPID=$!
+        sleep 2
+        if kill -0 ${AVAHIPID} 2>/dev/null; then
+            AVAHIPID="ok"
+            break
+        fi
     fi
     echo "[mDNS] avahi-daemon 启动重试 ${i}/3..."
     sleep 1
@@ -78,8 +139,8 @@ if [ -n "${AVAHIPID}" ]; then
         echo "[mDNS] avahi-daemon 已启动，广播 ${MDNS_HOSTNAME}.local"
     fi
 else
-    echo "[mDNS] avahi-daemon 启动失败，LoRa 网关请使用 HA 的 IP 地址"
-    echo "[mDNS] 而非 ${MDNS_HOSTNAME}.local"
+    echo "[mDNS] avahi-daemon 启动失败"
+    echo "[mDNS] LoRa 网关请使用 HA 的 IP 地址，而非 ${MDNS_HOSTNAME}.local"
 fi
 echo ""
 
@@ -103,7 +164,7 @@ user ${USERNAME}
 # HA MQTT 集成 discovery 主题
 topic readwrite homeassistant/#
 
-# 慧尖网关协议主题（与集成 const.py 完全一致）
+# 慧尖网关协议主题
 topic readwrite gateway/+
 topic readwrite gateway/+/req
 topic readwrite gateway/rpt_rsp
@@ -111,7 +172,7 @@ topic readwrite gateway/rpt_rsp
 # 健康检查主题
 topic readwrite test/#
 
-# \$SYS 主题（broker 状态监控）
+# \$SYS 主题
 topic read \$SYS/#
 EOF
 chmod 644 "${ACL_FILE}"
@@ -128,7 +189,6 @@ echo "[OK] 持久化目录已创建: /data/mosquitto"
 echo "[Ingress] 配置 nginx Web UI..."
 mkdir -p /run/nginx
 
-# 动态生成 Nginx 配置（将 SUPERVISOR_TOKEN 直接写入配置文件）
 HA_SUPERVISOR_TOKEN="${SUPERVISOR_TOKEN:-}"
 cat > /etc/nginx/http.d/ingress.conf <<NGINXEOF
 server {
@@ -137,14 +197,12 @@ server {
     allow 127.0.0.1;
     deny all;
 
-    # 静态 Web UI
     location / {
         root /usr/share/nginx/html;
         index index.html;
         try_files \$uri \$uri/ /index.html;
     }
 
-    # HA API 代理 — 将请求转发到 Supervisor
     location /api/ha/ {
         proxy_pass http://supervisor/core/api/;
         proxy_set_header Authorization "Bearer ${HA_SUPERVISOR_TOKEN}";
@@ -153,13 +211,11 @@ server {
         proxy_connect_timeout 5s;
     }
 
-    # 简单状态接口
     location /api/status {
         add_header Content-Type application/json;
         return 200 '{"status":"running","broker":"mosquitto","port":1883}';
     }
 
-    # 版本信息接口
     location /api/version {
         add_header Content-Type application/json;
         root /usr/share/nginx/html;
@@ -248,10 +304,14 @@ echo "[启动] 正在配置 mosquitto broker..."
 chown -R mosquitto:mosquitto /etc/mosquitto/ 2>/dev/null || true
 chown -R mosquitto:mosquitto /data/mosquitto/ 2>/dev/null || true
 
+# 最终端口检查
+if netstat -tlnp 2>/dev/null | grep -q ":1883.*LISTEN"; then
+    echo "[错误] 端口 1883 仍被占用，无法启动 mosquitto"
+    echo "[错误] 请停止 HA 官方 Mosquitto broker 插件后重试"
+    exit 1
+fi
+
 # ---------- 6. 前台启动 mosquitto ----------
-# 直接 exec mosquitto 前台运行（Docker CMD 要求前台）
-# 如果启动失败，容器退出，HA watchdog 会自动重启
-# 不再使用 -d 后台启动 + pkill + exec 的模式（有端口竞态）
 echo "[启动] 启动 mosquitto broker（前台模式）..."
 echo "[启动] 监听: 0.0.0.0:1883 (MQTT TCP)"
 echo "[启动] ACL: gateway/+/req, gateway/rpt_rsp"
@@ -273,13 +333,11 @@ echo "  用户名: ${USERNAME}"
 echo "  密码: ${PASSWORD}"
 echo ""
 
-# ---------- 7. 自动配置 HA MQTT 集成（在后台执行） ----------
-# 在 exec mosquitto 之前启动自动配置（非阻塞）
+# ---------- 7. 自动配置 HA MQTT 集成（后台执行） ----------
 if [ "${AUTO_SETUP}" = "true" ]; then
     echo "============================================"
     echo "  自动配置 HA MQTT 集成..."
     echo "============================================"
-    # 后台执行，不阻塞 mosquitto 启动
     (/auto_setup_mqtt.sh || true) &
     echo ""
 fi
