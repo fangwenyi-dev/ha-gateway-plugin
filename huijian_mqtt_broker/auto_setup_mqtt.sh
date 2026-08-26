@@ -2,11 +2,11 @@
 # =============================================================================
 # 慧尖 LoRa 网关一体化插件 — 自动配置 HA MQTT 集成
 #
-# 通过 HA Supervisor API 自动创建/更新 MQTT 集成配置条目，
-# 连接到本插件内置的 Mosquitto broker。
-#
-# broker 地址使用 Docker 网桥网关 172.30.32.1
-# 端口从环境变量 MQTT_PORT 读取（由 run.sh 传递）
+# 架构：
+#   - 容器内 mosquitto 监听 1883
+#   - Docker 端口映射: 主机 mqtt_port(默认1885) → 容器 1883
+#   - 本脚本用 127.0.0.1:1883 检测 broker 可达性（容器内部）
+#   - 告诉 HA MQTT 集成连接 172.30.32.1:{mqtt_port}（Docker 网桥网关 + 主机端口）
 # =============================================================================
 
 set -e
@@ -15,18 +15,20 @@ set -e
 USERNAME="${USERNAME}"
 PASSWORD="${PASSWORD}"
 MQTT_PORT="${MQTT_PORT:-1885}"
+INTERNAL_PORT="${INTERNAL_PORT:-1883}"
 
 # HA Supervisor API
 HA_API="http://supervisor/core/api"
 HA_TOKEN="${SUPERVISOR_TOKEN}"
 
-# Broker 地址：Docker 网桥网关地址
+# HA Core 连接 broker 的地址（Docker 网桥网关 + 主机映射端口）
 BROKER_ADDR="172.30.32.1"
+BROKER_PORT="${MQTT_PORT}"
 
 if [ -z "${HA_TOKEN}" ]; then
     echo "[自动配置] 未找到 SUPERVISOR_TOKEN，跳过自动配置"
     echo "[自动配置] 请手动在 HA 中添加 MQTT 集成："
-    echo "[自动配置]   Broker: ${BROKER_ADDR}, 端口: ${MQTT_PORT}"
+    echo "[自动配置]   Broker: ${BROKER_ADDR}, 端口: ${BROKER_PORT}"
     echo "[自动配置]   用户名: ${USERNAME}, 密码: ${PASSWORD}"
     exit 0
 fi
@@ -36,12 +38,12 @@ echo "[自动配置] 正在检查 HA MQTT 集成状态..."
 # 等待 broker 完全启动
 sleep 3
 
-# 循环等待 broker 可连接
+# 循环等待 broker 可连接（容器内 127.0.0.1:1883）
 RETRY=0
 while [ ${RETRY} -lt 30 ]; do
-    if mosquitto_pub -h 127.0.0.1 -p ${MQTT_PORT} -u "${USERNAME}" -P "${PASSWORD}" \
+    if mosquitto_pub -h 127.0.0.1 -p ${INTERNAL_PORT} -u "${USERNAME}" -P "${PASSWORD}" \
         -t "test/ping" -m "ok" -q 0 2>/dev/null; then
-        echo "[自动配置] broker 已就绪 (端口 ${MQTT_PORT})"
+        echo "[自动配置] broker 已就绪 (容器内 127.0.0.1:${INTERNAL_PORT})"
         break
     fi
     echo "[自动配置] 等待 broker 启动... (${RETRY}/30)"
@@ -66,33 +68,35 @@ if [ "${ENTRY_COUNT}" -gt 0 ]; then
     CURRENT_BROKER=$(echo "${MQTT_ENTRIES}" | jq -r '.[0].data.broker // ""')
     CURRENT_PORT=$(echo "${MQTT_ENTRIES}" | jq -r '.[0].data.port // 0')
 
-    if [ "${CURRENT_BROKER}" = "${BROKER_ADDR}" ] && [ "${CURRENT_PORT}" = "${MQTT_PORT}" ]; then
-        echo "[自动配置] MQTT 集成已配置为 ${BROKER_ADDR}:${MQTT_PORT}，无需更新"
+    if [ "${CURRENT_BROKER}" = "${BROKER_ADDR}" ] && [ "${CURRENT_PORT}" = "${BROKER_PORT}" ]; then
+        echo "[自动配置] MQTT 集成已配置为 ${BROKER_ADDR}:${BROKER_PORT}，无需更新"
         exit 0
     fi
 
-    echo "[自动配置] 当前 broker=${CURRENT_BROKER}:${CURRENT_PORT}，更新为 ${BROKER_ADDR}:${MQTT_PORT}..."
+    echo "[自动配置] 当前 broker=${CURRENT_BROKER}:${CURRENT_PORT}，更新为 ${BROKER_ADDR}:${BROKER_PORT}..."
 
-    UPDATE_RESULT=$(curl -s -X POST \
+    UPDATE_RESULT=$(curl -s -w "\n%{http_code}" -X POST \
         -H "Authorization: Bearer ${HA_TOKEN}" \
         -H "Content-Type: application/json" \
-        -d "{\"broker\":\"${BROKER_ADDR}\",\"port\":${MQTT_PORT},\"username\":\"${USERNAME}\",\"password\":\"${PASSWORD}\"}" \
-        "${HA_API}/config/config_entries/entry/${ENTRY_ID}" 2>/dev/null || echo "{}")
+        -d "{\"broker\":\"${BROKER_ADDR}\",\"port\":${BROKER_PORT},\"username\":\"${USERNAME}\",\"password\":\"${PASSWORD}\"}" \
+        "${HA_API}/config/config_entries/entry/${ENTRY_ID}" 2>/dev/null || echo "{}\n0")
 
-    echo "[自动配置] 更新结果: ${UPDATE_RESULT}"
+    UPDATE_HTTP=$(echo "${UPDATE_RESULT}" | tail -1)
+    UPDATE_BODY=$(echo "${UPDATE_RESULT}" | sed '$d')
+    echo "[自动配置] 更新 HTTP ${UPDATE_HTTP}: ${UPDATE_BODY}"
     exit 0
 fi
 
 # ---------- 2. 创建新的 MQTT 配置条目 ----------
 echo "[自动配置] 未找到 MQTT 集成，正在自动创建..."
-echo "[自动配置] Broker: ${BROKER_ADDR}:${MQTT_PORT}, 用户: ${USERNAME}"
+echo "[自动配置] Broker: ${BROKER_ADDR}:${BROKER_PORT}, 用户: ${USERNAME}"
 
-# 注意: 不用 -sf，因为 HA API 创建失败时会返回 HTTP 错误码和 JSON 错误信息
-# -s 静默模式，-f 会在 HTTP 错误时返回空字符串，我们想看到错误信息
+# 不用 -f，因为 HA API 创建失败时会返回 HTTP 错误码和 JSON 错误信息
+# -s 静默模式，-w 输出 HTTP 状态码
 CREATE_RESULT=$(curl -s -w "\n%{http_code}" -X POST \
     -H "Authorization: Bearer ${HA_TOKEN}" \
     -H "Content-Type: application/json" \
-    -d "{\"name\":\"慧尖 MQTT Broker\",\"title\":\"慧尖 MQTT Broker\",\"data\":{\"broker\":\"${BROKER_ADDR}\",\"port\":${MQTT_PORT},\"username\":\"${USERNAME}\",\"password\":\"${PASSWORD}\",\"discovery\":true,\"protocol\":\"3.1.1\"}}" \
+    -d "{\"name\":\"慧尖 MQTT Broker\",\"title\":\"慧尖 MQTT Broker\",\"data\":{\"broker\":\"${BROKER_ADDR}\",\"port\":${BROKER_PORT},\"username\":\"${USERNAME}\",\"password\":\"${PASSWORD}\",\"discovery\":true,\"protocol\":\"3.1.1\"}}" \
     "${HA_API}/config/config_entries/entry/mqtt" 2>/dev/null || echo "{}\n0")
 
 # 分离响应体和 HTTP 状态码
@@ -110,13 +114,13 @@ elif echo "${RESPONSE_BODY}" | jq -e 'has("message")' > /dev/null 2>&1; then
     echo "[自动配置] ❌ 自动创建失败: ${ERROR_MSG}"
     echo "[自动配置] 如需手动配置："
     echo "[自动配置]   设置 → 设备与服务 → 添加集成 → MQTT"
-    echo "[自动配置]   Broker: ${BROKER_ADDR}, 端口: ${MQTT_PORT}"
+    echo "[自动配置]   Broker: ${BROKER_ADDR}, 端口: ${BROKER_PORT}"
     echo "[自动配置]   用户名: ${USERNAME}, 密码: ${PASSWORD}"
 else
     echo "[自动配置] ❌ 自动创建可能失败（HTTP ${HTTP_CODE}）"
     echo "[自动配置] 响应内容: ${RESPONSE_BODY}"
     echo "[自动配置] 如需手动配置："
     echo "[自动配置]   设置 → 设备与服务 → 添加集成 → MQTT"
-    echo "[自动配置]   Broker: ${BROKER_ADDR}, 端口: ${MQTT_PORT}"
+    echo "[自动配置]   Broker: ${BROKER_ADDR}, 端口: ${BROKER_PORT}"
     echo "[自动配置]   用户名: ${USERNAME}, 密码: ${PASSWORD}"
 fi

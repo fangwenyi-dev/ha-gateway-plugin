@@ -1,12 +1,12 @@
 #!/usr/bin/with-contenv bashio
 # =============================================================================
-# 慧尖 LoRa 网关一体化插件 — 启动脚本 v1.1.0
+# 慧尖 LoRa 网关一体化插件 — 启动脚本 v1.1.1
 #
-# 核心改进：
-#   1. MQTT 端口可配置（默认 1885，避免与 HA 官方 MQTT 集成 1883 冲突）
-#   2. mosquitto.conf 中端口由 run.sh 动态替换
-#   3. auto_setup_mqtt.sh 使用配置的端口
-#   4. mosquitto 文件权限 0700（符合 2.x 要求）
+# 架构：
+#   - 容器内 mosquitto 固定监听 1883
+#   - Docker 端口映射: 主机 mqtt_port(默认1885) → 容器 1883
+#   - 容器内 auto_setup 用 127.0.0.1:1883 检测 broker
+#   - HA Core 用 172.30.32.1:{mqtt_port} 连接 broker
 # =============================================================================
 
 set -e
@@ -17,11 +17,14 @@ AUTO_SETUP=$(bashio::config 'auto_setup_ha_mqtt')
 INSTALL_INTEGRATION=$(bashio::config 'install_integration')
 MQTT_PORT=$(bashio::config 'mqtt_port')
 
+# 容器内 mosquitto 固定监听端口
+INTERNAL_PORT=1883
+
 echo "============================================"
 echo "  慧尖 LoRa 网关一体化插件启动中..."
 echo "============================================"
 echo "[配置] MQTT 用户名: ${USERNAME}"
-echo "[配置] MQTT 端口: ${MQTT_PORT}"
+echo "[配置] MQTT 主机端口: ${MQTT_PORT} (映射到容器内 ${INTERNAL_PORT})"
 echo "[配置] 自动配置 HA MQTT 集成: ${AUTO_SETUP}"
 echo "[配置] 自动安装网关集成: ${INSTALL_INTEGRATION}"
 echo ""
@@ -67,11 +70,6 @@ chmod 755 /data/mosquitto
 chown mosquitto:mosquitto /data/mosquitto 2>/dev/null || true
 echo "[OK] 持久化目录已创建"
 
-# ---------- 2b. 动态替换 mosquitto.conf 中的端口 ----------
-CONF_FILE="/etc/mosquitto/mosquitto.conf"
-sed -i "s/__MQTT_PORT__/${MQTT_PORT}/g" "${CONF_FILE}"
-echo "[OK] mosquitto.conf 端口设为 ${MQTT_PORT}"
-
 # ---------- 3. 配置并启动 nginx（Ingress Web UI） ----------
 echo "[Ingress] 配置 nginx Web UI..."
 mkdir -p /run/nginx
@@ -100,7 +98,7 @@ server {
 
     location /api/status {
         add_header Content-Type application/json;
-        return 200 '{"status":"running","broker":"mosquitto","port":${MQTT_PORT}}';
+        return 200 '{"status":"running","broker":"mosquitto","port":${MQTT_PORT},"internal_port":${INTERNAL_PORT}}';
     }
 
     location /api/version {
@@ -193,14 +191,15 @@ chmod 700 /etc/mosquitto/acl 2>/dev/null || true
 
 # ---------- 6. 启动信息 ----------
 echo "[启动] 启动 mosquitto broker（前台模式）..."
-echo "[启动] 监听: 0.0.0.0:${MQTT_PORT} (MQTT TCP)"
+echo "[启动] 容器内监听: 0.0.0.0:${INTERNAL_PORT} → 主机映射: ${MQTT_PORT}"
 
 echo ""
 echo "============================================"
 echo "  慧尖 LoRa 网关一体化插件已就绪"
 echo "============================================"
 echo ""
-echo "MQTT Broker: 0.0.0.0:${MQTT_PORT}"
+echo "MQTT Broker: 0.0.0.0:${INTERNAL_PORT} (容器内)"
+echo "外部访问: HA_IP:${MQTT_PORT} (Docker 映射)"
 echo "Ingress Web UI: 8099 (侧边栏)"
 echo "MQTT 用户名: ${USERNAME}"
 echo ""
@@ -212,10 +211,10 @@ echo "  密码: ${PASSWORD}"
 echo ""
 
 # ---------- 7. 自动配置 HA MQTT 集成（后台执行） ----------
-# 将端口传递给 auto_setup_mqtt.sh
 export MQTT_PORT
 export USERNAME
 export PASSWORD
+export INTERNAL_PORT
 
 if [ "${AUTO_SETUP}" = "true" ]; then
     echo "============================================"
