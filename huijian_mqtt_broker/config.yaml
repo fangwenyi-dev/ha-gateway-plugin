@@ -1,5 +1,5 @@
 name: 慧尖 LoRa 网关
-version: "1.0.1"
+version: "1.0.2"
 slug: huijian_mqtt_broker
 description: 慧尖开窗器 LoRa 网关一体化插件，内置 Mosquitto Broker + mDNS 广播 + 网关集成，安装即用
 arch:
@@ -7,6 +7,10 @@ arch:
   - aarch64
 init: false
 host_network: true
+startup: system
+watchdog: tcp://[HOST]:1883
+services:
+  - mqtt:provide
 ports:
   1883/tcp: 1883
 ports_description:

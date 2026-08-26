@@ -2,12 +2,14 @@ ARG BUILD_ARCH
 FROM ghcr.io/home-assistant/${BUILD_ARCH}-base:latest
 
 # 安装 mosquitto + curl + jq + avahi（mDNS 广播 huijian.local）
+# 注意: Alpine 中 avahi 包名是 "avahi"（不是 Debian 的 "avahi-daemon"）
+#       avahi-tools 在 Alpine community 仓库中，需要一并安装
 RUN apk add --no-cache \
     mosquitto \
     mosquitto-clients \
     curl \
     jq \
-    avahi-daemon \
+    avahi \
     avahi-tools \
     dbus
 

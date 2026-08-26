@@ -92,6 +92,29 @@ fi
 chmod 600 "${PASSWD_FILE}"
 echo "[OK] 密码文件已生成: ${PASSWD_FILE}"
 
+# ---------- 2b. 动态生成 ACL 文件（根据配置的用户名） ----------
+ACL_FILE="/etc/mosquitto/acl"
+cat > "${ACL_FILE}" <<EOF
+# 动态生成 — 用户: ${USERNAME}
+user ${USERNAME}
+
+# HA MQTT 集成 discovery 主题（自动发现设备）
+topic readwrite homeassistant/#
+
+# 慧尖网关协议主题（与集成 const.py 完全一致）
+topic readwrite gateway/+
+topic readwrite gateway/+/req
+topic readwrite gateway/rpt_rsp
+
+# 健康检查主题（run.sh 启动时用 mosquitto_pub 发送测试消息）
+topic readwrite test/#
+
+# \$SYS 主题（broker 状态监控）
+topic read \$SYS/#
+EOF
+chmod 644 "${ACL_FILE}"
+echo "[OK] ACL 文件已生成: ${ACL_FILE} (用户: ${USERNAME})"
+
 # ---------- 3. 创建持久化目录 ----------
 mkdir -p /data/mosquitto
 chmod 755 /data/mosquitto

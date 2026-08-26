@@ -1,23 +1,31 @@
 # =============================================================================
-# 慧尖 MQTT Broker — ACL 访问控制列表
+# 慧尖 MQTT Broker — ACL 访问控制列表（静态模板）
+#
+# 注意：run.sh 启动时会根据插件配置的 username 动态生成 /etc/mosquitto/acl
+#       此文件仅作为参考模板，实际运行时使用动态生成的 ACL
 #
 # 主题协议（与集成 const.py 完全一致）：
 #   TOPIC_GATEWAY_REQ_FORMAT = "gateway/{gateway_sn}/req"  (HA 发布 → 网关订阅)
 #   TOPIC_GATEWAY_RSP        = "gateway/rpt_rsp"           (网关 发布 → HA 订阅)
 #
 # 客户端：
-#   - HA MQTT 集成（用户名 huijian）：发布命令、订阅上报、发送 ACK 确认
-#   - LoRa 网关（相同用户名）：发布上报、订阅命令
+#   - HA MQTT 集成：发布命令、订阅上报、发送 ACK 确认
+#   - LoRa 网关：发布上报、订阅命令
 # =============================================================================
 
-# ---------- 认证用户 ----------
-# HA 集成和 LoRa 网关使用同一套凭据，授予 gateway/* 主题双向权限
-topic readwrite gateway/+
-topic readwrite gateway/+/req
-topic readwrite gateway/rpt_rsp
-
-# 健康检查主题（run.sh 启动时用 mosquitto_pub 发送测试消息）
-topic readwrite test/#
-
+# 以下为动态生成的内容示例（实际由 run.sh 生成）：
+# user <username>
+#
+# HA MQTT 集成 discovery 主题（自动发现设备）
+# topic readwrite homeassistant/#
+#
+# 慧尖网关协议主题
+# topic readwrite gateway/+
+# topic readwrite gateway/+/req
+# topic readwrite gateway/rpt_rsp
+#
+# 健康检查主题
+# topic readwrite test/#
+#
 # $SYS 主题（broker 状态监控）
-topic read $SYS/#
+# topic read $SYS/#
