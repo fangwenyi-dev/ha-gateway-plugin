@@ -1,6 +1,6 @@
 #!/usr/bin/with-contenv bashio
 # =============================================================================
-# 慧尖 LoRa 网关一体化插件 — 启动脚本 v1.2.7
+# 慧尖 LoRa 网关一体化插件 — 启动脚本 v1.2.8
 #
 # 架构：
 #   - 容器内 mosquitto 固定监听 2022（不使用 1883，避免与 HA 官方 Mosquitto 冲突）
@@ -128,8 +128,10 @@ server {
     }
 
     # /api/supervisor/ → Supervisor API（插件更新、重启等）
+    # 注意：Supervisor 路由是 /addons/{slug}/...，不是 /supervisor/addons/...
+    # proxy_pass 末尾的 / 会替换 location 匹配的前缀
     location /api/supervisor/ {
-        proxy_pass http://${SUPERVISOR_HOST}/supervisor/;
+        proxy_pass http://${SUPERVISOR_HOST}/;
         proxy_set_header Authorization "Bearer ${HA_SUPERVISOR_TOKEN}";
         proxy_set_header Content-Type "application/json";
         proxy_set_header Accept "application/json";

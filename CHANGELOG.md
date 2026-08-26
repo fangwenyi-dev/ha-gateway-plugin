@@ -3,6 +3,11 @@
 所有版本变更记录在此文件中。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.2.8] - 2026-08-26
+
+### 修复
+- **一键升级 403 根因修复**：nginx 将 `/api/supervisor/` 代理到 `http://supervisor/supervisor/`，但 Supervisor API 路由是 `/addons/{slug}/...`（无 `/supervisor/` 前缀），导致路径不匹配返回 403。修正为 `proxy_pass http://supervisor/`
+
 ## [1.2.7] - 2026-08-26
 
 ### 改进
