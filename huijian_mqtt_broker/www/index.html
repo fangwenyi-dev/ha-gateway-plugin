@@ -515,10 +515,9 @@
                     '<button class="btn btn-sm" style="background:#78909c;color:white;" onclick="controlDevice(\'' + jsQuote(safeDevId) + '\',\'wind_lock_flat\',\'' + jsQuote(safeEntryId) + '\')">平开</button>' +
                     '</div>';
             }
-            // 重命名 + 转移按钮
+            // 重命名按钮
             controls += '<div class="device-controls" style="margin-top:4px;">' +
                 '<button class="btn btn-sm" style="background:#5c6bc0;color:white;" onclick="renameDevice(\'' + jsQuote(safeDevId) + '\',\'' + jsQuote(safeEntryId) + '\',\'' + jsQuote(safeName) + '\')" title="重命名设备">重命名</button>' +
-                '<button class="btn btn-sm" style="background:#78909c;color:white;margin-left:4px;" onclick="transferDevice(\'' + jsQuote(safeDevId) + '\',\'' + jsQuote(safeEntryId) + '\',\'' + jsQuote(safeSn) + '\')" title="转移到其他网关">转移</button>' +
                 '</div>';
             return '<div class="device-item" id="dev-' + safeDevId + '">' +
                 '<div class="device-info"><div class="device-name dev-name">' +
