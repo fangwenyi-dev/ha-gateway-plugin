@@ -27,8 +27,21 @@ fi
 
 echo "[自动配置] 正在检查 HA MQTT 集成状态..."
 
-# 等待 broker 完全启动
-sleep 2
+# 等待 broker 完全启动（exec mosquitto 后需要时间初始化）
+sleep 5
+
+# 循环等待 broker 可连接
+RETRY=0
+while [ ${RETRY} -lt 20 ]; do
+    if mosquitto_pub -h 127.0.0.1 -p 1883 -u "${USERNAME}" -P "${PASSWORD}" \
+        -t "test/ping" -m "ok" -q 0 2>/dev/null; then
+        echo "[自动配置] broker 已就绪"
+        break
+    fi
+    echo "[自动配置] 等待 broker 启动... (${RETRY}/20)"
+    RETRY=$((RETRY + 1))
+    sleep 1
+done
 
 # ---------- 1. 检查是否已有 MQTT 配置条目 ----------
 MQTT_ENTRIES=$(curl -sf -X GET \

@@ -1,8 +1,12 @@
 ARG BUILD_ARCH
 FROM ghcr.io/home-assistant/${BUILD_ARCH}-base:latest
 
-# 安装 mosquitto + curl + jq + avahi + nginx（mDNS 广播 + Ingress Web UI）
-# 注意: Alpine 中 avahi 包名是 "avahi"（不是 Debian 的 "avahi-daemon"）
+# 安装依赖包
+# - mosquitto/mosquitto-clients: MQTT broker + 客户端工具
+# - curl/jq: HA API 调用
+# - avahi/avahi-tools/dbus: mDNS 广播
+# - nginx: Ingress Web UI
+# - net-tools/procps: 调试工具（netstat/ps）
 RUN apk add --no-cache \
     mosquitto \
     mosquitto-clients \
@@ -11,7 +15,9 @@ RUN apk add --no-cache \
     avahi \
     avahi-tools \
     dbus \
-    nginx
+    nginx \
+    net-tools \
+    procps
 
 # 复制配置文件
 COPY mosquitto.conf /etc/mosquitto/mosquitto.conf
@@ -26,6 +32,7 @@ COPY custom_components /usr/share/custom_components
 COPY custom_components /data/custom_components
 
 # 复制 Ingress Web UI
+# ingress.conf 在 run.sh 启动时会动态重新生成（注入 SUPERVISOR_TOKEN）
 COPY ingress.conf /etc/nginx/http.d/ingress.conf
 COPY www/ /usr/share/nginx/html/
 

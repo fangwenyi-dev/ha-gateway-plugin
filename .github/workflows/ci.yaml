@@ -1,11 +1,8 @@
-name: Build
+name: Build and Release
 
 on:
   push:
     branches: [main]
-    tags: ['v*']
-  release:
-    types: [published]
   workflow_dispatch:
 
 env:
@@ -13,11 +10,56 @@ env:
   IMAGE_NAME: huijian-mqtt-broker
 
 permissions:
-  contents: read
+  contents: write
+  packages: write
+  id-token: write
 
 jobs:
+  # ========== 1. 读取版本号 & 准备变更日志 ==========
+  prepare:
+    name: Prepare
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      changelog: ${{ steps.changelog.outputs.changelog }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract version from config.yaml
+        id: version
+        run: |
+          VERSION=$(grep '^version:' huijian_mqtt_broker/config.yaml | head -1 | awk -F'"' '{print $2}')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "提取到版本号: $VERSION"
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          CHANGELOG=""
+          if [ -f CHANGELOG.md ]; then
+            CHANGELOG=$(awk -v ver="${{ steps.version.outputs.version }}" '
+              /^## \[/{ found=0 }
+              $0 ~ "^## \\["ver"]" { found=1; next }
+              /^## \[/{ if(found) exit }
+              found { print }
+            ' CHANGELOG.md | head -50)
+          fi
+          if [ -z "$CHANGELOG" ]; then
+            CHANGELOG="## v${{ steps.version.outputs.version }}
+
+          - 修复 Mosquitto 启动崩溃问题
+          - Web UI 新增网关配对、子设备控制、状态显示
+          - Web UI 新增版本检查/更新功能"
+          fi
+          EOF=$(dd if=/dev/urandom bs=15 count=1 status=none | base64)
+          echo "changelog<<$EOF" >> $GITHUB_OUTPUT
+          echo "$CHANGELOG" >> $GITHUB_OUTPUT
+          echo "$EOF" >> $GITHUB_OUTPUT
+
+  # ========== 2. 构建 Docker 镜像 ==========
   init:
-    name: Initialize build
+    name: Init
+    needs: prepare
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
@@ -31,13 +73,9 @@ jobs:
           image-name: ${{ env.IMAGE_NAME }}
 
   build:
-    name: Build ${{ matrix.arch }} image
-    needs: init
+    name: Build ${{ matrix.arch }}
+    needs: [prepare, init]
     runs-on: ${{ matrix.os }}
-    permissions:
-      contents: read
-      id-token: write
-      packages: write
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.init.outputs.matrix) }}
@@ -51,18 +89,15 @@ jobs:
           container-registry-password: ${{ secrets.GITHUB_TOKEN }}
           image: ${{ matrix.image }}
           image-tags: |
-            ${{ github.ref_name }}
+            ${{ needs.prepare.outputs.version }}
             latest
           push: "true"
-          version: ${{ github.ref_name }}
+          version: ${{ needs.prepare.outputs.version }}
 
   manifest:
-    name: Publish multi-arch manifest
-    needs: [init, build]
+    name: Manifest
+    needs: [prepare, init, build]
     runs-on: ubuntu-latest
-    permissions:
-      id-token: write
-      packages: write
     steps:
       - name: Publish multi-arch manifest
         uses: home-assistant/builder/actions/publish-multi-arch-manifest@2026.06.0
@@ -71,5 +106,24 @@ jobs:
           container-registry-password: ${{ secrets.GITHUB_TOKEN }}
           image-name: ${{ env.IMAGE_NAME }}
           image-tags: |
-            ${{ github.ref_name }}
+            ${{ needs.prepare.outputs.version }}
             latest
+
+  # ========== 3. 创建 GitHub Release ==========
+  release:
+    name: Release
+    needs: [prepare, manifest]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create or Update Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.prepare.outputs.version }}
+          name: v${{ needs.prepare.outputs.version }}
+          body: ${{ needs.prepare.outputs.changelog }}
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
