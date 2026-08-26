@@ -1,18 +1,17 @@
-#!/usr/bin/with-contenv bashio
+#!/bin/bash
 # =============================================================================
 # 慧尖 LoRa 网关一体化插件 — 自动配置 HA MQTT 集成
 #
 # 架构：
-#   - 容器内 mosquitto 监听 1883
+#   - 容器内 mosquitto 监听 2022
 #   - Docker 端口映射: 主机 2022 → 容器 2022
-#   - 本脚本用 127.0.0.1:1883 检测 broker 可达性（容器内部）
-#   - 告诉 HA MQTT 集成连接 172.30.32.1:{mqtt_port}（Docker 网桥网关 + 主机端口）
+#   - 本脚本用 127.0.0.1:2022 检测 broker 可达性（容器内部）
+#   - 告诉 HA MQTT 集成连接 172.30.32.1:2022（Docker 网桥网关 + 主机端口）
 # =============================================================================
 
 set -e
 
-# 从环境变量读取（run.sh 中 export 的）
-# bashio 默认启用 set -u（未定义变量报错），所以必须提供默认值
+# 从环境变量读取（run.sh 中显式传递的）
 USERNAME="${USERNAME:-huijian}"
 PASSWORD="${PASSWORD:-huijian2022}"
 MQTT_PORT="${MQTT_PORT:-2022}"
@@ -34,6 +33,8 @@ if [ -z "${HA_TOKEN}" ]; then
     exit 0
 fi
 
+# 调试: 输出 token 前缀确认是否有效
+echo "[自动配置] SUPERVISOR_TOKEN 前缀: ${HA_TOKEN:0:8}..."
 echo "[自动配置] 正在检查 HA MQTT 集成状态..."
 
 # 等待 broker 完全启动

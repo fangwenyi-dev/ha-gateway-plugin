@@ -5,12 +5,16 @@ FROM ghcr.io/home-assistant/${BUILD_ARCH}-base:latest
 # - mosquitto/mosquitto-clients: MQTT broker + 客户端工具
 # - curl/jq: HA API 调用
 # - nginx: Ingress Web UI
+# - avahi/dbbus: mDNS 广播，让 LoRa 网关通过 huijian.local 发现
 RUN apk add --no-cache \
     mosquitto \
     mosquitto-clients \
     curl \
     jq \
-    nginx
+    nginx \
+    avahi \
+    avahi-compat-libdns_sd \
+    dbus
 
 # 复制配置文件
 COPY mosquitto.conf /etc/mosquitto/mosquitto.conf

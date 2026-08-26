@@ -1,6 +1,6 @@
 # 慧尖 LoRa 网关一体化插件
 
-[![版本](https://img.shields.io/badge/version-1.1.6-blue)]()
+[![版本](https://img.shields.io/badge/version-1.1.7-blue)]()
 [![HA Add-on](https://img.shields.io/badge/HA-Add--on-green)]()
 
 慧尖开窗器 LoRa 网关的 Home Assistant 一体化插件。**内置 Mosquitto Broker + 网关集成，安装一个插件即可获得全部能力**。
@@ -85,7 +85,7 @@ https://github.com/fangwenyi-dev/ha-gateway-plugin
 
 | 字段 | 值 |
 |------|-----|
-| Broker 地址 | HA 的 IP 地址 |
+| Broker 地址 | `huijian.local`（mDNS 自动发现）或 HA 的 IP 地址 |
 | 端口 | `2022` |
 | 用户名 | `huijian`（默认值，可在插件配置中修改） |
 | 密码 | `huijian2022`（默认值，可在插件配置中修改） |
@@ -111,7 +111,7 @@ https://github.com/fangwenyi-dev/ha-gateway-plugin
 
 ### Q: LoRa 网关连接的 Broker 地址填什么？
 
-填 HA 的 IP 地址（不是 `huijian.local`）。本插件不再使用 host_network 模式，LoRa 网关通过 HA 的 IP 地址连接。
+填 `huijian.local`（mDNS 自动发现）或 HA 的 IP 地址。插件内置 avahi-daemon，会广播 `huijian.local` 主机名。
 
 ### Q: 可以和 HA 官方 Mosquitto broker 附加组件共存吗？
 

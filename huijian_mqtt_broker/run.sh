@@ -1,6 +1,6 @@
 #!/usr/bin/with-contenv bashio
 # =============================================================================
-# 慧尖 LoRa 网关一体化插件 — 启动脚本 v1.1.6
+# 慧尖 LoRa 网关一体化插件 — 启动脚本 v1.1.7
 #
 # 架构：
 #   - 容器内 mosquitto 固定监听 2022（不使用 1883，避免与 HA 官方 Mosquitto 冲突）
@@ -121,6 +121,35 @@ nginx 2>/dev/null || {
     echo "[Ingress] nginx 启动失败，侧边栏可能不可用"
 }
 
+# ---------- 3b. 配置并启动 avahi mDNS ----------
+echo "[mDNS] 配置 avahi-daemon..."
+# 移除默认的 avahi 服务配置（避免冲突）
+cat > /etc/avahi/avahi-daemon.conf <<AVAHI_EOF
+[server]
+use-ipv4=yes
+use-ipv6=no
+enable-dbus=yes
+
+[publish]
+publish-addresses=yes
+publish-hinfo=yes
+publish-workstation=no
+publish-domain=yes
+
+[reflector]
+enable-reflector=yes
+AVAHI_EOF
+
+# 设置 huijian.local 主机名
+hostname huijian 2>/dev/null || true
+
+# 启动 dbus 和 avahi-daemon
+dbus-daemon --system 2>/dev/null || true
+avahi-daemon -D 2>/dev/null || {
+    echo "[mDNS] avahi-daemon 启动失败，huijian.local 可能不可用"
+}
+echo "[mDNS] avahi-daemon 已启动，LoRa 网关可通过 huijian.local 发现本机"
+
 # ---------- 4. 自动安装慧尖网关集成 ----------
 if [ "${INSTALL_INTEGRATION}" = "true" ]; then
     echo ""
@@ -212,7 +241,7 @@ echo "Ingress Web UI: 8099 (侧边栏)"
 echo "MQTT 用户名: ${USERNAME}"
 echo ""
 echo "LoRa 网关配置:"
-echo "  Broker 地址: HA 的 IP 地址"
+echo "  Broker 地址: huijian.local (mDNS) 或 HA 的 IP 地址"
 echo "  端口: ${MQTT_PORT}"
 echo "  用户名: ${USERNAME}"
 echo "  密码: ${PASSWORD}"

@@ -3,6 +3,21 @@
 所有版本变更记录在此文件中。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.1.7] - 2026-08-26
+
+### 修复
+- **auto_setup_mqtt.sh HTTP 401**：bashio shebang (`#!/usr/bin/with-contenv bashio`) 可能重新加载环境覆盖了 SUPERVISOR_TOKEN，改用 `#!/bin/bash` 普通解释器
+- 新增调试日志：输出 SUPERVISOR_TOKEN 前缀确认是否有效传递
+
+### 新增
+- **mDNS 支持**：Dockerfile 添加 avahi + dbus 依赖，run.sh 添加 avahi-daemon 配置和启动，LoRa 网关可通过 `huijian.local` 发现 HA 主机
+
+### 变更
+- `auto_setup_mqtt.sh` shebang 从 bashio 改为普通 bash
+- Dockerfile 添加 avahi、avahi-compat-libdns_sd、dbus 包
+- README 更新 LoRa 网关地址说明，支持 `huijian.local`
+- 版本号 1.1.6 → 1.1.7
+
 ## [1.1.6] - 2026-08-26
 
 ### 修复（关键 - 根本原因）
