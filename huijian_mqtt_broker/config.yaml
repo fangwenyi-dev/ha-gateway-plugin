@@ -1,8 +1,9 @@
 name: 慧尖 LoRa 网关
-version: "1.1.9"
+version: "1.2.0"
 slug: huijian_mqtt_broker
 description: 慧尖开窗器 LoRa 网关一体化插件，内置 Mosquitto Broker + 网关集成，安装即用
 url: 'https://github.com/fangwenyi-dev/ha-gateway-plugin'
+image: ghcr.io/fangwenyi-dev/ha-gateway-plugin/huijian-mqtt-broker
 arch:
   - amd64
   - aarch64
@@ -14,6 +15,23 @@ ingress_port: 8099
 panel_icon: mdi:remote
 panel_title: 慧尖网关
 # avahi-daemon + dbus 需要 full_access 才能正常运行 mDNS 广播
+# ---------------------------------------------------------------------------
+# 【已评估的最小权限替代方案 — 2026-08-26 复核后拒绝，保持 full_access】
+# 备选: host_network: true + privileged: [NET_ADMIN, NET_RAW] + dbus: true
+#       （另评估过 host_name: huijian 用于设置容器主机名）
+# 拒绝原因（依据 supervisor 官方 schema supervisor/apps/validate.py main 分支）:
+#   1. supervisor app 配置 schema 中【不存在】host_name/hostname 顶层选项
+#      （仅有 host_network/host_pid/host_ipc/host_uts/host_dbus），
+#      容器主机名只能靠 run.sh 运行时 `hostname huijian` 设置，无法声明式配置。
+#   2. host_network: true 后容器与宿主共享网络命名空间，avahi-daemon 需绑定
+#      UDP 5353；HAOS 宿主自身运行 avahi-daemon（用于 homeassistant.local /
+#      hassio.local 发现），必然 "Address already in use"，huijian.local 会失效。
+#   3. host_network 下 ports 映射(2022) 失效，mosquitto 直接暴露在宿主 0.0.0.0，
+#      与宿主已有服务端口冲突风险更高。
+#   结论: 该组合无法在当前 HAOS 上等价复刻 mDNS 行为且无法降级验证，贸然修改
+#         会破坏用户 huijian.local 发现；维持 full_access 并按需用 devices 等
+#         细粒度选项最小化。TODO: 若 HAOS 未来移除宿主 avahi 或 supervisor
+#         schema 增加 host_name 选项，可重新评估 host_network 方案。
 full_access: true
 ports:
   2022/tcp: 2022
