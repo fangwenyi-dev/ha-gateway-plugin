@@ -3,7 +3,7 @@
 所有版本变更记录在此文件中。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
-## [1.2.0] - 2026-08-26
+## [1.1.2] - 2026-08-26
 
 ### 修复（关键）
 - **Web UI「MQTT Broker无法连接」**：nginx ingress 配置了 `allow/deny` IP 限制，Ingress 模式下来源 IP 不固定导致 403，移除 IP 限制
@@ -15,7 +15,7 @@
 - `run.sh` 中显式传递环境变量给 `auto_setup_mqtt.sh` 子进程
 - `ingress.conf` 默认配置同步添加 `/api/ha/` 和 `/api/github/` 代理
 - Web UI 新增 `updateConnectionInfo()` 从 `/api/status` 动态读取端口显示
-- 版本号 1.1.1 → 1.2.0
+- 版本号 1.1.1 → 1.1.2
 
 ## [1.1.1] - 2026-08-26
 
