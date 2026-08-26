@@ -511,6 +511,8 @@
             if (supportsWindLock) {
                 controls += '<div class="device-controls" style="margin-top:4px;">' +
                     '<button class="btn btn-sm" style="background:#607d8b;color:white;" onclick="controlDevice(\'' + jsQuote(safeDevId) + '\',\'a\',\'' + jsQuote(safeEntryId) + '\')">内倒</button>' +
+                    '<button class="btn btn-sm" style="background:#455a64;color:white;margin-left:4px;" onclick="controlDevice(\'' + jsQuote(safeDevId) + '\',\'wind_lock_tilt\',\'' + jsQuote(safeEntryId) + '\')">内倒模式</button>' +
+                    '<button class="btn btn-sm" style="background:#546e7a;color:white;margin-left:4px;" onclick="controlDevice(\'' + jsQuote(safeDevId) + '\',\'wind_lock_flat\',\'' + jsQuote(safeEntryId) + '\')">平开模式</button>' +
                     '</div>';
             }
             // 重命名按钮
