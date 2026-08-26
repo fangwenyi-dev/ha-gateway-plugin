@@ -3,6 +3,11 @@
 所有版本变更记录在此文件中。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.2.4] - 2026-08-26
+
+### 修复
+- **一键升级 403 修复**：升级函数调用 `/addons/{slug}/update`（需 admin 权限），addon 的 SUPERVISOR_TOKEN 无权限被 Supervisor 拒绝。改用 `/addons/self/update`（免 admin 路径，Supervisor 自动识别调用者身份）
+
 ## [1.2.3] - 2026-08-26
 
 ### 修复

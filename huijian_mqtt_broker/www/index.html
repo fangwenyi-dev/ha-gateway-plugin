@@ -156,7 +156,7 @@
     <div class="header">
         <div>
             <h1>慧尖 LoRa 网关</h1>
-            <div class="ver" id="addonVersion">v1.2.3</div>
+            <div class="ver" id="addonVersion">v1.2.4</div>
         </div>
         <div class="actions">
             <button class="btn btn-primary" onclick="checkForUpdates()">检查更新</button>
@@ -220,11 +220,11 @@
     </div>
 
     <div class="footer">
-        <p>慧尖 LoRa 网关一体化插件 <span id="footerVersion">v1.2.3</span></p>
+        <p>慧尖 LoRa 网关一体化插件 <span id="footerVersion">v1.2.4</span></p>
     </div>
 
     <script>
-        let CURRENT_VERSION = '1.2.3';
+        let CURRENT_VERSION = '1.2.4';
         const DOMAIN = 'window_controller_gateway';
 
         // Ingress 下页面路径形如 /hassio/ingress/<token>/，直连插件端口时为 /
@@ -646,29 +646,14 @@
             if (!confirm('确定要一键升级插件吗？\n\n升级过程：\n1. 调用 HA Supervisor 更新插件\n2. 更新完成后需重启插件\n3. 重启后自动安装最新集成代码\n\n升级期间插件会短暂不可用。')) return;
             showToast('正在执行一键升级...', 'warn');
             try {
-                // Step 1: 获取插件列表动态定位目标（git 仓库安装的 slug 带仓库前缀，不能硬编码）
-                const listResp = await fetch(INGRESS_BASE + 'api/supervisor/addons');
-                if (!listResp.ok) throw new Error('Supervisor API ' + listResp.status);
-                const listJson = await listResp.json().catch(() => ({}));
-                const addons = (listJson && Array.isArray(listJson.data)) ? listJson.data : (Array.isArray(listJson) ? listJson : []);
-                const addon = addons.find(a =>
-                    (a.slug || '') === 'huijian_mqtt_broker' ||
-                    (a.name || '').indexOf('慧尖') !== -1 ||
-                    ((a.repository || '').indexOf('ha-gateway-plugin') !== -1)
-                );
-                if (!addon) {
-                    showToast('未找到慧尖插件（已检索 ' + addons.length + ' 个插件）', 'err');
-                    return;
-                }
-                // Step 2: 调用 Supervisor API 更新指定 slug
-                // 通过 nginx /api/supervisor/ 代理，token 已在 Nginx 层注入
-                const resp = await fetch(INGRESS_BASE + 'api/supervisor/addons/' + encodeURIComponent(addon.slug) + '/update', {
+                // 使用 /addons/self/update（免 admin 权限路径，Supervisor 自动识别调用者）
+                // 原用 /addons/{slug}/update 需要 hassio_api: true + admin 角色，addon token 无权限返回 403
+                const resp = await fetch(INGRESS_BASE + 'api/supervisor/addons/self/update', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ backup: false })
                 });
                 const data = await resp.json().catch(() => ({}));
-                // Step 3: 按消息模式分类结果，避免 "already" 同时命中"已是最新"与"任务进行中"
                 const msg = data.message || '';
                 if (resp.ok && data.result === 'ok') {
                     showToast('升级完成，正在刷新…', 'ok');
