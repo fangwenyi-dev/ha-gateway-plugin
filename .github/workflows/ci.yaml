@@ -26,7 +26,7 @@ jobs:
         run: |
           # 检查所有 shell 脚本语法是否正确
           apt-get update -qq && apt-get install -y -qq shellcheck > /dev/null 2>&1 || true
-          for f in huijian_mqtt_broker/run.sh huijian_mqtt_broker/auto_setup_mqtt.sh; do
+          for f in huijian_mqtt_broker/run.sh; do
             echo "检查 $f ..."
             bash -n "$f" || exit 1
             shellcheck "$f" || echo "⚠ shellcheck 警告（非阻塞）"

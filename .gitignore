@@ -20,3 +20,8 @@ Thumbs.db
 # 临时文件
 *.tmp
 *.log
+
+# OpenCode / VibeLoop tool artifacts
+.omo/
+.vibe-loop.json
+.vibe-loop-agents/

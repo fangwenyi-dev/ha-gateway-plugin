@@ -3,6 +3,33 @@
 所有版本变更记录在此文件中。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.2.0] - 2026-08-26
+
+### 修复（核心）
+- **MQTT 自动配置根本重写**：旧方案通过 HA Core REST API 自动创建 MQTT 配置条目，但 HA Core REST API 从未提供"创建配置条目"端点（`/api/config/config_entries/entry` 仅支持 GET 列表，`/api/config/config_entries/entry/{entry_id}` 仅支持 DELETE），导致所有版本的自动配置静默失败。新方案改用标记文件机制：插件 `run.sh` 启动时将 broker 连接信息写入 HA 配置目录下的 `window_controller_gateway_mqtt_bootstrap.json`，集成侧新增 `mqtt_bootstrap.py` 模块在 `async_setup_entry` 时读取标记并通过程序化 config flow 自动创建 MQTT 配置条目
+- **依赖声明修正**：`manifest.json` 中 `dependencies` 改为 `after_dependencies`，避免鸡生蛋问题（集成需要 MQTT 但 bootstrap 在集成 setup 时创建 MQTT 条目）
+- **密码和 token 不再打印到容器日志**：`run.sh` 移除密码明文输出和 SUPERVISOR_TOKEN 前缀输出，符合安全最佳实践
+- **新增集成版本下限**：`manifest.json` 添加 `"homeassistant": "2023.8.0"` 最低版本要求
+
+### 改进
+- **插件镜像声明**：`config.yaml` 添加 `image:` 键，支持从 GHCR 拉取预构建镜像而非本地构建
+- **CI lint 列表同步**：移除已删除的 `auto_setup_mqtt.sh` 引用
+- **版本号同步**：插件版本 1.1.9 → 1.2.0，集成版本 1.4.4 → 1.4.5
+
+### 修复（回归审查轮）
+- **Supervisor 环境菜单流程适配**：HA 2024.9+ 在 HAOS/Supervised 安装上，MQTT config flow 首步返回 menu（addon/broker 选择）而非表单；bootstrap 现在自动导航到 broker 子步骤，否则自动配置会无限重试永不完成
+- **新版 broker schema 兼容**：2026.8+ 校验器要求 `other_settings` 段，缺失直接 KeyError 导致 SETUP_ERROR 无重试；按 `__version__` 探测决定是否附带
+- **`async_wait_for_mqtt_client` 用法修正**：该辅助函数超时返回 `False` 而非抛异常，原实现忽略返回值误报连接成功；所有失败路径现在会中止残留流程避免堆积
+- **陈旧标记清理**：关闭 `auto_setup_ha_mqtt` 选项后启动时删除历史引导标记文件，避免集成读到过期凭据无限重试
+- **前端 Ingress 全量修复**：API 基路径改为从 `location.pathname` 推导（此前在 HA 侧边栏 iframe 中所有请求打到 HA 根路径全部 404）；位置滑块改调集成真实服务 `set_position`（cover 实体无 SET_POSITION 特性）；在线徽章空 SN 误匹配守卫；一键升级动态发现插件 slug（git 仓库安装的 slug 带仓库前缀）并正确区分"已是最新 / 任务进行中 / 已中止"
+- **集成运行时缺陷**：畸形 sn 类型帧不再因 AttributeError 导致整帧丢弃（含心跳，避免网关被误判离线）；persist 深拷贝消除并发持久化静默丢失；已手动删除的设备不再被晚到的绑定确认复活；后台任务随配置条目卸载取消；补齐 `invalid_input` 中止翻译键
+
+### 安全加固
+- nginx ingress 仅允许 HA Core（172.30.32.2）来源访问
+- Docker 基础镜像固定为 `ghcr.io/home-assistant/{arch}-base:3.21`（amd64/aarch64 双架构经 GHCR registry 验证）
+- 移除 services.yaml 中未注册的幽灵服务声明 `migrate_devices`
+- `full_access` 经 Supervisor app schema 核验后保留（当前 schema 无 `host_name` 选项，且 `host_network` 会与 HAOS 系统 avahi 冲突抢占 UDP 5353）
+
 ## [1.1.9] - 2026-08-26
 
 ### 新功能
