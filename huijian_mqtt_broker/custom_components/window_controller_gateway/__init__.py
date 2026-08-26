@@ -35,6 +35,7 @@ from .const import (
 )
 from .persist import load_persistent_data, save_persistent_data
 from .services import register_services
+from .api import async_setup_api
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -74,6 +75,13 @@ async def async_setup(hass: HomeAssistant, config: Dict[str, Any]) -> bool:
 
     if not register_services(hass):
         return False
+
+    # 注册供插件 Web UI 调用的设备列表 REST 端点。
+    # 背景：HA Core 仅通过 WebSocket 暴露 device_registry（config/device_registry/list），
+    # 不提供 REST 端点；而插件 Web UI（ingress）只能经 Supervisor 代理走 REST
+    # （/api/ha/ -> http://supervisor/core/api/）。此视图在 HA 内部序列化设备注册表，
+    # 使 Web UI 能列出某配置条目下的网关（父）与子设备。
+    async_setup_api(hass)
 
     return True
 

@@ -35,6 +35,10 @@ full_access: true
 # 允许通过 Supervisor /core/api/ 代理访问 HA Core REST API（设备、状态、服务等）
 # Web UI 的 haApi() 调用依赖此权限，否则返回 401
 homeassistant_api: true
+# 允许 add-on token 访问 Supervisor 管理 API（/addons/*、/supervisor/* 等）
+# Web UI「一键升级」POST /api/supervisor/addons/self/update 依赖此权限，
+# 缺失时 Supervisor 拒绝访问并返回 403 Forbidden
+hassio_api: true
 ports:
   2022/tcp: 2022
 ports_description:

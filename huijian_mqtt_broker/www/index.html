@@ -375,7 +375,7 @@
             const statusEl = document.getElementById('gw-status-' + entryId);
             if (!deviceListEl) return;
             try {
-                const resp = await haApi('/config/device_registry?config_entry_id=' + entryId);
+                const resp = await haApi('/window_controller_gateway/devices?config_entry_id=' + entryId);
                 if (!resp.ok) throw new Error('HA API ' + resp.status);
                 const devices = await resp.json();
                 if (!devices || devices.length === 0) {
@@ -629,7 +629,7 @@
             const statusEl = document.getElementById('gw-status-' + entryId);
             updateGatewayStatus(statusEl, 'pairing');
             try {
-                const resp = await haApi('/config/device_registry?config_entry_id=' + entryId);
+                const resp = await haApi('/window_controller_gateway/devices?config_entry_id=' + entryId);
                 if (!resp.ok) throw new Error('HA API ' + resp.status);
                 const devices = await resp.json();
                 const gwDevice = devices.find(d => !d.via_device_id);
@@ -711,7 +711,7 @@
                 const resp = await haApi('/states');
                 if (!resp.ok) throw new Error('HA API ' + resp.status);
                 const states = await resp.json();
-                const devResp = await haApi('/config/device_registry?config_entry_id=' + entryId);
+                const devResp = await haApi('/window_controller_gateway/devices?config_entry_id=' + entryId);
                 if (!devResp.ok) throw new Error('HA API ' + devResp.status);
                 const devices = await devResp.json();
                 const dev = devices.find(d => d.id === deviceId);
@@ -789,7 +789,7 @@
                 const resp = await haApi('/states');
                 if (!resp.ok) throw new Error('HA API ' + resp.status);
                 const states = await resp.json();
-                const devResp = await haApi('/config/device_registry?config_entry_id=' + entryId);
+                const devResp = await haApi('/window_controller_gateway/devices?config_entry_id=' + entryId);
                 if (!devResp.ok) throw new Error('HA API ' + devResp.status);
                 const devices = await devResp.json();
                 const dev = devices.find(d => d.id === deviceId);
