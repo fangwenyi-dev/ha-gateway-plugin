@@ -364,7 +364,6 @@
                 '</div><div>' +
                 '<span class="badge badge-info" id="gw-status-' + safeEntryId + '">检测中</span>' +
                 '<button class="btn btn-success btn-sm" onclick="startPairing(\'' + jsQuote(safeEntryId) + '\',\'' + jsQuote(safeSn) + '\')" style="margin-left:8px;">配对</button>' +
-                '<button class="btn btn-sm" style="background:#5c6bc0;color:white;margin-left:4px;" onclick="refreshDevices(\'' + jsQuote(safeEntryId) + '\',\'' + jsQuote(safeSn) + '\')" title="刷新设备列表">刷新</button>' +
                 '<button class="btn btn-sm" style="background:#78909c;color:white;margin-left:4px;" onclick="checkGatewayStatus(\'' + jsQuote(safeEntryId) + '\',\'' + jsQuote(safeSn) + '\')" title="检查网关连接状态">状态</button>' +
                 '</div></div>' +
                 '<div class="device-list" id="devices-' + safeEntryId + '"><div class="loading"><div class="spinner" style="width:16px;height:16px;"></div></div></div>' +
@@ -511,8 +510,7 @@
                 '<span class="slider-value strength-value">' + (strengthValid ? strengthEntity.state + strengthUnit : '--') + '</span></div>';
             if (supportsWindLock) {
                 controls += '<div class="device-controls" style="margin-top:4px;">' +
-                    '<button class="btn btn-sm" style="background:#607d8b;color:white;" onclick="controlDevice(\'' + jsQuote(safeDevId) + '\',\'wind_lock_tilt\',\'' + jsQuote(safeEntryId) + '\')">内倒</button>' +
-                    '<button class="btn btn-sm" style="background:#78909c;color:white;" onclick="controlDevice(\'' + jsQuote(safeDevId) + '\',\'wind_lock_flat\',\'' + jsQuote(safeEntryId) + '\')">平开</button>' +
+                    '<button class="btn btn-sm" style="background:#607d8b;color:white;" onclick="controlDevice(\'' + jsQuote(safeDevId) + '\',\'a\',\'' + jsQuote(safeEntryId) + '\')">内倒</button>' +
                     '</div>';
             }
             // 重命名按钮
