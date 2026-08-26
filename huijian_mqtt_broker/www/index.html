@@ -110,7 +110,7 @@
     <div class="header">
         <div>
             <h1>慧尖 LoRa 网关</h1>
-            <span class="ver" id="addonVersion">v1.1.8</span>
+            <span class="ver" id="addonVersion">v1.1.9</span>
         </div>
         <div class="actions">
             <button class="btn btn-primary" onclick="checkForUpdates()">检查更新</button>
@@ -173,13 +173,13 @@
     </div>
 
     <div class="footer">
-        <p>慧尖 LoRa 网关一体化插件 <span id="footerVersion">v1.1.8</span></p>
+        <p>慧尖 LoRa 网关一体化插件 <span id="footerVersion">v1.1.9</span></p>
     </div>
 
     <script>
         // ========== 全局变量 ==========
         // HA Ingress 模式下不需要前端 token，Nginx 代理已注入 SUPERVISOR_TOKEN
-        let CURRENT_VERSION = '1.1.8';
+        let CURRENT_VERSION = '1.1.9';
         const DOMAIN = 'window_controller_gateway';
 
         // ========== 初始化 ==========
@@ -204,39 +204,63 @@
 
         // ========== 检查服务状态 ==========
         async function checkServiceStatus() {
+            // 1. MQTT Broker 状态 — nginx 直接返回，不依赖 HA API
             try {
                 const resp = await fetch('/api/status');
-                const data = await resp.json();
-                if (data.status === 'running') {
-                    setStatusDot('mqttStatus', 'ok', '运行中');
+                if (resp.ok) {
+                    const data = await resp.json();
+                    if (data.status === 'running') {
+                        setStatusDot('mqttStatus', 'ok', '运行中');
+                    } else {
+                        setStatusDot('mqttStatus', 'err', '已停止');
+                    }
                 } else {
-                    setStatusDot('mqttStatus', 'err', '已停止');
+                    setStatusDot('mqttStatus', 'err', 'HTTP ' + resp.status);
                 }
             } catch (e) {
                 setStatusDot('mqttStatus', 'err', '无法连接');
             }
-            // 通过 Nginx 代理调用 HA API（token 已在 Nginx 层注入）
+
+            // 2. 网关集成检测 — 通过 nginx 代理调用 HA API
             try {
                 const resp = await haApi('/config/config_entries/entry?domain=' + DOMAIN);
-                const entries = await resp.json();
-                if (entries && entries.length > 0) {
-                    setStatusDot('integrationStatus', 'ok', '已安装');
+                if (!resp.ok) {
+                    if (resp.status === 401) {
+                        setStatusDot('integrationStatus', 'err', '认证失败');
+                    } else {
+                        setStatusDot('integrationStatus', 'warn', 'HTTP ' + resp.status);
+                    }
                 } else {
-                    setStatusDot('integrationStatus', 'warn', '未安装');
+                    const entries = await resp.json();
+                    if (entries && entries.length > 0) {
+                        setStatusDot('integrationStatus', 'ok', '已安装');
+                    } else {
+                        setStatusDot('integrationStatus', 'warn', '未安装');
+                    }
                 }
             } catch (e) {
-                setStatusDot('integrationStatus', 'warn', '检测失败');
+                setStatusDot('integrationStatus', 'err', '代理连接失败');
             }
+
+            // 3. HA MQTT 集成检测
             try {
                 const resp = await haApi('/config/config_entries/entry?domain=mqtt');
-                const entries = await resp.json();
-                if (entries && entries.length > 0) {
-                    setStatusDot('haMqttStatus', 'ok', '已配置');
+                if (!resp.ok) {
+                    if (resp.status === 401) {
+                        setStatusDot('haMqttStatus', 'err', '认证失败');
+                    } else {
+                        setStatusDot('haMqttStatus', 'warn', 'HTTP ' + resp.status);
+                    }
                 } else {
-                    setStatusDot('haMqttStatus', 'warn', '未配置');
+                    const entries = await resp.json();
+                    if (entries && entries.length > 0) {
+                        setStatusDot('haMqttStatus', 'ok', '已配置');
+                    } else {
+                        setStatusDot('haMqttStatus', 'warn', '未配置');
+                    }
                 }
             } catch (e) {
-                setStatusDot('haMqttStatus', 'warn', '检测失败');
+                setStatusDot('haMqttStatus', 'err', '代理连接失败');
             }
         }
 
@@ -249,12 +273,12 @@
 
         // ========== HA API 调用 ==========
         // 通过 Nginx /api/ha/ 代理，token 已在 Nginx 配置中注入
+        // 注意：resp.ok 为 false 时直接返回 resp（不 throw），由调用方处理错误状态码
         async function haApi(path, method = 'GET', body = null) {
             const opts = { method: method, headers: { 'Content-Type': 'application/json' } };
             if (body) opts.body = JSON.stringify(body);
             // Nginx proxy_pass 末尾有 /，所以 /api/ha/config/xxx → /core/api/config/xxx
             const resp = await fetch('/api/ha/' + path, opts);
-            if (!resp.ok) throw new Error('HA API ' + resp.status);
             return resp;
         }
 
@@ -263,6 +287,7 @@
             const container = document.getElementById('gatewayContainer');
             try {
                 const resp = await haApi('/config/config_entries/entry?domain=' + DOMAIN);
+                if (!resp.ok) throw new Error('HA API ' + resp.status);
                 const entries = await resp.json();
                 if (!entries || entries.length === 0) {
                     container.innerHTML = '<div class="empty-state"><div class="icon">📡</div><p>暂无网关</p><p style="font-size:12px;margin-top:8px;">LoRa 网关上电后自动发现，或手动添加集成</p></div>';
@@ -304,6 +329,7 @@
             const statusEl = document.getElementById('gw-status-' + entryId);
             try {
                 const resp = await haApi('/config/device_registry?config_entry_id=' + entryId);
+                if (!resp.ok) throw new Error('HA API ' + resp.status);
                 const devices = await resp.json();
                 if (!devices || devices.length === 0) {
                     deviceListEl.innerHTML = '<p style="font-size:12px;color:#999;padding:8px;">暂无子设备，点击「配对」按钮添加</p>';
@@ -317,6 +343,7 @@
                 // 更新网关在线状态
                 try {
                     const stateResp = await haApi('/states');
+                    if (!stateResp.ok) throw new Error('HA API ' + stateResp.status);
                     const states = await stateResp.json();
                     const snSuffix = gatewaySn.slice(-6).toLowerCase();
                     const gwSensor = states.find(s =>
@@ -444,6 +471,7 @@
             updateGatewayStatus(statusEl, 'pairing');
             try {
                 const resp = await haApi('/config/device_registry?config_entry_id=' + entryId);
+                if (!resp.ok) throw new Error('HA API ' + resp.status);
                 const devices = await resp.json();
                 const gwDevice = devices.find(d => !d.via_device_id);
                 if (!gwDevice) { showToast('未找到网关设备', 'err'); return; }
@@ -463,8 +491,10 @@
             showToast('正在发送命令: ' + command + '...', 'warn');
             try {
                 const resp = await haApi('/states');
+                if (!resp.ok) throw new Error('HA API ' + resp.status);
                 const states = await resp.json();
                 const devResp = await haApi('/config/device_registry?config_entry_id=' + entryId);
+                if (!devResp.ok) throw new Error('HA API ' + devResp.status);
                 const devices = await devResp.json();
                 const dev = devices.find(d => d.id === deviceId);
                 let sn = '';
@@ -510,8 +540,10 @@
         async function controlDevicePosition(deviceId, position, entryId) {
             try {
                 const resp = await haApi('/states');
+                if (!resp.ok) throw new Error('HA API ' + resp.status);
                 const states = await resp.json();
                 const devResp = await haApi('/config/device_registry?config_entry_id=' + entryId);
+                if (!devResp.ok) throw new Error('HA API ' + devResp.status);
                 const devices = await devResp.json();
                 const dev = devices.find(d => d.id === deviceId);
                 let sn = '';

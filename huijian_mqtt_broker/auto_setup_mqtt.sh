@@ -21,8 +21,22 @@ MQTT_PORT="${MQTT_PORT:-2022}"
 INTERNAL_PORT="${INTERNAL_PORT:-2022}"
 
 # HA Supervisor API — with-contenv 会从 /run/s6/container-env 加载正确的 SUPERVISOR_TOKEN
-HA_API="http://supervisor/core/api"
+# 兜底：如果 with-contenv 未加载到，尝试从 container-env 文件手动 source
 HA_TOKEN="${SUPERVISOR_TOKEN:-}"
+
+if [ -z "${HA_TOKEN}" ] && [ -f /run/s6/container-env ]; then
+    echo "[自动配置] SUPERVISOR_TOKEN 为空，尝试从 /run/s6/container-env 读取..."
+    source /run/s6/container-env 2>/dev/null || true
+    HA_TOKEN="${SUPERVISOR_TOKEN:-}"
+fi
+
+# HA Supervisor 地址：优先用主机名，兜底用固定 IP（full_access 模式下 DNS 可能不解析）
+SUPERVISOR_HOST="supervisor"
+if ! getent hosts supervisor >/dev/null 2>&1; then
+    SUPERVISOR_HOST="172.30.32.2"
+fi
+
+HA_API="http://${SUPERVISOR_HOST}/core/api"
 
 # HA Core 连接 broker 的地址（Docker 网桥网关 + 主机映射端口）
 BROKER_ADDR="172.30.32.1"

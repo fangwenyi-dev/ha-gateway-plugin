@@ -1,6 +1,6 @@
 #!/usr/bin/with-contenv bashio
 # =============================================================================
-# 慧尖 LoRa 网关一体化插件 — 启动脚本 v1.1.8
+# 慧尖 LoRa 网关一体化插件 — 启动脚本 v1.1.9
 #
 # 架构：
 #   - 容器内 mosquitto 固定监听 2022（不使用 1883，避免与 HA 官方 Mosquitto 冲突）
@@ -75,7 +75,32 @@ echo "[OK] 持久化目录已创建"
 echo "[Ingress] 配置 nginx Web UI..."
 mkdir -p /run/nginx
 
+# SUPERVISOR_TOKEN 由 with-contenv 从 /run/s6/container-env 自动加载
 HA_SUPERVISOR_TOKEN="${SUPERVISOR_TOKEN:-}"
+
+if [ -z "${HA_SUPERVISOR_TOKEN}" ]; then
+    echo "[Ingress] 警告: SUPERVISOR_TOKEN 为空，HA API 代理将返回 401"
+    echo "[Ingress] 尝试从 /run/s6/container-env 读取..."
+    if [ -f /run/s6/container-env ]; then
+        source /run/s6/container-env 2>/dev/null || true
+        HA_SUPERVISOR_TOKEN="${SUPERVISOR_TOKEN:-}"
+    fi
+fi
+
+if [ -n "${HA_SUPERVISOR_TOKEN}" ]; then
+    echo "[Ingress] SUPERVISOR_TOKEN 已加载 (前缀: ${HA_SUPERVISOR_TOKEN:0:8}...)"
+else
+    echo "[Ingress] 错误: SUPERVISOR_TOKEN 仍为空，Web UI 状态检测将不可用"
+fi
+
+# HA Supervisor 地址：优先用主机名，兜底用固定 IP（full_access 模式下 DNS 可能不解析）
+SUPERVISOR_HOST="supervisor"
+# 解析测试：如果不通则使用 Supervisor 固定 IP
+if ! getent hosts supervisor >/dev/null 2>&1; then
+    echo "[Ingress] supervisor 主机名无法解析，使用固定 IP 172.30.32.2"
+    SUPERVISOR_HOST="172.30.32.2"
+fi
+
 cat > /etc/nginx/http.d/ingress.conf <<NGINXEOF
 server {
     listen 8099;
@@ -87,16 +112,20 @@ server {
         try_files \$uri \$uri/ /index.html;
     }
 
+    # 代理 HA Supervisor API — token 在此注入，前端无需携带
     location /api/ha/ {
-        proxy_pass http://supervisor/core/api/;
+        proxy_pass http://${SUPERVISOR_HOST}/core/api/;
         proxy_set_header Authorization "Bearer ${HA_SUPERVISOR_TOKEN}";
         proxy_set_header Content-Type "application/json";
+        proxy_set_header Accept "application/json";
         proxy_read_timeout 30s;
         proxy_connect_timeout 5s;
+        proxy_ssl_verify off;
     }
 
+    # MQTT Broker 状态检测 — nginx 直接返回，无需调用 HA API
     location /api/status {
-        add_header Content-Type application/json;
+        add_header Content-Type application/json always;
         return 200 '{"status":"running","broker":"mosquitto","port":${MQTT_PORT},"internal_port":${INTERNAL_PORT}}';
     }
 
@@ -119,6 +148,8 @@ NGINXEOF
 
 nginx 2>/dev/null || {
     echo "[Ingress] nginx 启动失败，侧边栏可能不可用"
+    # 诊断：输出 nginx 配置测试结果
+    nginx -t 2>&1 || true
 }
 
 # ---------- 3b. 配置并启动 avahi mDNS ----------
@@ -269,10 +300,10 @@ if [ "${AUTO_SETUP}" = "true" ]; then
     echo "============================================"
     echo "  自动配置 HA MQTT 集成..."
     echo "============================================"
-    # 显式传递所有变量（含 SUPERVISOR_TOKEN），避免 bashio set -u 导致子 shell 中 unbound variable
-    USERNAME="${USERNAME}" PASSWORD="${PASSWORD}" MQTT_PORT="${MQTT_PORT}" INTERNAL_PORT="${INTERNAL_PORT}" \
-        SUPERVISOR_TOKEN="${SUPERVISOR_TOKEN:-}" \
-        /auto_setup_mqtt.sh &
+    # 不传递 SUPERVISOR_TOKEN — auto_setup_mqtt.sh 的 with-contenv 会从
+    # /run/s6/container-env 自动加载最新有效的 token
+    # 显式传递旧 token 会覆盖 with-contenv 加载的新 token，导致 HTTP 401
+    /auto_setup_mqtt.sh &
     echo ""
 fi
 
