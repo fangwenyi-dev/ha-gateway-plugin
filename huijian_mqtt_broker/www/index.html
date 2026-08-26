@@ -364,6 +364,8 @@
                 '</div><div>' +
                 '<span class="badge badge-info" id="gw-status-' + safeEntryId + '">检测中</span>' +
                 '<button class="btn btn-success btn-sm" onclick="startPairing(\'' + jsQuote(safeEntryId) + '\',\'' + jsQuote(safeSn) + '\')" style="margin-left:8px;">配对</button>' +
+                '<button class="btn btn-sm" style="background:#5c6bc0;color:white;margin-left:4px;" onclick="refreshDevices(\'' + jsQuote(safeEntryId) + '\',\'' + jsQuote(safeSn) + '\')" title="刷新设备列表">刷新</button>' +
+                '<button class="btn btn-sm" style="background:#78909c;color:white;margin-left:4px;" onclick="checkGatewayStatus(\'' + jsQuote(safeEntryId) + '\',\'' + jsQuote(safeSn) + '\')" title="检查网关连接状态">状态</button>' +
                 '</div></div>' +
                 '<div class="device-list" id="devices-' + safeEntryId + '"><div class="loading"><div class="spinner" style="width:16px;height:16px;"></div></div></div>' +
                 '</div>';
@@ -513,6 +515,11 @@
                     '<button class="btn btn-sm" style="background:#78909c;color:white;" onclick="controlDevice(\'' + jsQuote(safeDevId) + '\',\'wind_lock_flat\',\'' + jsQuote(safeEntryId) + '\')">平开</button>' +
                     '</div>';
             }
+            // 重命名 + 转移按钮
+            controls += '<div class="device-controls" style="margin-top:4px;">' +
+                '<button class="btn btn-sm" style="background:#5c6bc0;color:white;" onclick="renameDevice(\'' + jsQuote(safeDevId) + '\',\'' + jsQuote(safeEntryId) + '\',\'' + jsQuote(safeName) + '\')" title="重命名设备">重命名</button>' +
+                '<button class="btn btn-sm" style="background:#78909c;color:white;margin-left:4px;" onclick="transferDevice(\'' + jsQuote(safeDevId) + '\',\'' + jsQuote(safeEntryId) + '\',\'' + jsQuote(safeSn) + '\')" title="转移到其他网关">转移</button>' +
+                '</div>';
             return '<div class="device-item" id="dev-' + safeDevId + '">' +
                 '<div class="device-info"><div class="device-name dev-name">' +
                 '<span class="dev-dot ' + (isOnline ? 'dot-online' : 'dot-offline') + '" id="dev-dot-' + safeDevId + '"></span>' +
@@ -638,6 +645,63 @@
             } catch (e) {
                 showToast('配对启动失败: ' + e.message, 'err');
                 updateGatewayStatus(statusEl, 'online');
+            }
+        }
+
+        async function refreshDevices(entryId, gatewaySn) {
+            showToast('正在刷新设备列表...', 'warn');
+            try {
+                const resp = await haApi('/services/window_controller_gateway/refresh_devices', 'POST', {});
+                if (!resp.ok) throw new Error('HA API ' + resp.status);
+                showToast('刷新命令已发送', 'ok');
+                setTimeout(() => loadGatewayDevices(entryId, gatewaySn), 3000);
+            } catch (e) {
+                showToast('刷新失败: ' + e.message, 'err');
+            }
+        }
+
+        async function checkGatewayStatus(entryId, gatewaySn) {
+            showToast('正在检查网关状态...', 'warn');
+            try {
+                const resp = await haApi('/services/window_controller_gateway/check_gateway_status', 'POST', {});
+                if (!resp.ok) throw new Error('HA API ' + resp.status);
+                showToast('状态检查已发送', 'ok');
+                setTimeout(() => loadGatewayDevices(entryId, gatewaySn), 2000);
+            } catch (e) {
+                showToast('状态检查失败: ' + e.message, 'err');
+            }
+        }
+
+        async function renameDevice(deviceId, entryId, currentName) {
+            const newName = prompt('请输入新设备名称:', currentName);
+            if (!newName || newName === currentName) return;
+            showToast('正在重命名...', 'warn');
+            try {
+                const resp = await haApi('/services/window_controller_gateway/rename_device', 'POST', {
+                    device_id: deviceId, name: newName
+                });
+                if (!resp.ok) throw new Error('HA API ' + resp.status);
+                showToast('重命名成功: ' + newName, 'ok');
+                setTimeout(() => loadGatewayDevices(entryId, GATEWAY_SN_BY_ENTRY[entryId] || ''), 2000);
+            } catch (e) {
+                showToast('重命名失败: ' + e.message, 'err');
+            }
+        }
+
+        async function transferDevice(deviceId, entryId, deviceSn) {
+            const targetSn = prompt('请输入目标网关 SN:\n（将设备 ' + deviceSn + ' 转移到该网关）');
+            if (!targetSn) return;
+            if (!confirm('确定要将设备转移到网关 ' + targetSn + ' 吗？')) return;
+            showToast('正在转移设备...', 'warn');
+            try {
+                const resp = await haApi('/services/window_controller_gateway/transfer_device', 'POST', {
+                    device_id: deviceId, target_gateway_sn: targetSn
+                });
+                if (!resp.ok) throw new Error('HA API ' + resp.status);
+                showToast('转移命令已发送', 'ok');
+                setTimeout(() => loadGatewayDevices(entryId, GATEWAY_SN_BY_ENTRY[entryId] || ''), 3000);
+            } catch (e) {
+                showToast('转移失败: ' + e.message, 'err');
             }
         }
 
