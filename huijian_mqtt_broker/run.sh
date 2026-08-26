@@ -1,12 +1,16 @@
 #!/usr/bin/with-contenv bashio
 # =============================================================================
-# 慧尖 LoRa 网关一体化插件 — 启动脚本 v1.0.8
+# 慧尖 LoRa 网关一体化插件 — 启动脚本 v1.0.9
 #
-# 核心修复：
-#   1. 启动前检查端口 1883 是否被占用，如果被占用则停止占用进程
-#   2. Mosquitto 直接前台 exec 运行
-#   3. avahi-daemon 修复：创建 machine-id，前台启动后转后台
-#   4. Nginx 用 heredoc 动态生成配置，直接写入 SUPERVISOR_TOKEN
+# 架构变更：
+#   移除 host_network，使用 Docker 端口映射，避免与 HA core-mosquitto 端口冲突
+#
+# 启动流程：
+#   1. 生成 mosquitto 密码文件和 ACL
+#   2. 启动 nginx（Ingress Web UI）
+#   3. 自动安装慧尖网关集成
+#   4. 后台启动 auto_setup_mqtt.sh
+#   5. exec mosquitto 前台运行
 # =============================================================================
 
 set -e
@@ -14,148 +18,29 @@ set -e
 USERNAME=$(bashio::config 'username')
 PASSWORD=$(bashio::config 'password')
 AUTO_SETUP=$(bashio::config 'auto_setup_ha_mqtt')
-MDNS_HOSTNAME=$(bashio::config 'mdns_hostname')
 INSTALL_INTEGRATION=$(bashio::config 'install_integration')
 
 echo "============================================"
 echo "  慧尖 LoRa 网关一体化插件启动中..."
 echo "============================================"
 echo "[配置] MQTT 用户名: ${USERNAME}"
-echo "[配置] mDNS 主机名: ${MDNS_HOSTNAME}.local"
 echo "[配置] 自动配置 HA MQTT 集成: ${AUTO_SETUP}"
 echo "[配置] 自动安装网关集成: ${INSTALL_INTEGRATION}"
 echo ""
 
-# ---------- 0. 检查端口 1883 是否被占用 ----------
-echo "[检查] 端口 1883 状态..."
-if netstat -tlnp 2>/dev/null | grep -q ":1883.*LISTEN"; then
-    echo "[检查] 端口 1883 已被占用！"
-    # 查找占用 1883 端口的进程
-    OCCUPY_PID=$(netstat -tlnp 2>/dev/null | grep ":1883.*LISTEN" | awk '{print $NF}' | awk -F'/' '{print $1}' | head -1)
-    if [ -n "${OCCUPY_PID}" ] && [ "${OCCUPY_PID}" != "-" ]; then
-        OCCUPY_NAME=$(ps -p ${OCCUPY_PID} -o comm= 2>/dev/null || echo "unknown")
-        echo "[检查] 占用进程: ${OCCUPY_NAME} (PID: ${OCCUPY_PID})"
-        echo "[检查] 停止占用进程..."
-        kill ${OCCUPY_PID} 2>/dev/null || true
-        sleep 2
-        # 如果进程仍然存活，强制杀掉
-        if kill -0 ${OCCUPY_PID} 2>/dev/null; then
-            echo "[检查] 进程未停止，强制终止..."
-            kill -9 ${OCCUPY_PID} 2>/dev/null || true
-            sleep 1
-        fi
-    else
-        echo "[检查] 端口被占用但无法识别进程（可能是 HA 官方 Mosquitto 插件）"
-        echo "[检查] 请停止 HA 官方 Mosquitto broker 插件后重试"
-        echo "[检查] 或在 HA 设置 → 加载项 → Mosquitto broker → 停止"
-    fi
-    # 再次检查端口
-    if netstat -tlnp 2>/dev/null | grep -q ":1883.*LISTEN"; then
-        echo "[检查] 端口 1883 仍被占用，无法启动 broker"
-        echo "[错误] 请确保没有其他 MQTT broker 在运行"
-        exit 1
-    else
-        echo "[检查] 端口 1883 已释放"
-    fi
-else
-    echo "[检查] 端口 1883 空闲"
-fi
-echo ""
-
-# ---------- 1. 配置并启动 mDNS (avahi) ----------
-echo "[mDNS] 配置 avahi-daemon..."
-
-# avahi 需要 dbus 和 machine-id
-mkdir -p /run/dbus
-if [ ! -f /etc/machine-id ]; then
-    echo "${MDNS_HOSTNAME}" > /etc/machine-id 2>/dev/null || true
-fi
-if [ ! -f /var/lib/dbus/machine-id ]; then
-    mkdir -p /var/lib/dbus 2>/dev/null || true
-    cp /etc/machine-id /var/lib/dbus/machine-id 2>/dev/null || true
-fi
-
-# 启动 dbus
-if ! pgrep dbus-daemon >/dev/null 2>&1; then
-    dbus-daemon --system --fork 2>/dev/null || {
-        echo "[mDNS] dbus-daemon 启动失败，尝试无 dbus 模式"
-    }
-    sleep 1
-fi
-
-# 生成 avahi 配置
-mkdir -p /etc/avahi
-cat > /etc/avahi/avahi-daemon.conf <<EOF
-[server]
-host-name=${MDNS_HOSTNAME}
-use-ipv4=yes
-use-ipv6=no
-enable-dbus=yes
-publish-hostname=yes
-publish-addresses=yes
-publish-hinfo=yes
-publish-workstation=yes
-publish-domain=yes
-
-[wide-area]
-enable-wide-area=yes
-
-[rlimits]
-rlimit-core=0
-rlimit-data=4194304
-rlimit-fsize=0
-rlimit-nofile=768
-rlimit-stack=4194304
-rlimit-nproc=3
-EOF
-
-# 启动 avahi-daemon（重试机制）
-AVAHIPID=""
-for i in 1 2 3; do
-    # 前台启动一次看错误信息
-    if avahi-daemon -D 2>/dev/null; then
-        AVAHIPID="ok"
-        break
-    fi
-    # 如果 -D 失败，尝试直接前台启动后转后台
-    if [ ${i} -eq 1 ]; then
-        avahi-daemon 2>/dev/null &
-        AVAHIPID=$!
-        sleep 2
-        if kill -0 ${AVAHIPID} 2>/dev/null; then
-            AVAHIPID="ok"
-            break
-        fi
-    fi
-    echo "[mDNS] avahi-daemon 启动重试 ${i}/3..."
-    sleep 1
-done
-
-if [ -n "${AVAHIPID}" ]; then
-    sleep 1
-    if avahi-resolve-host-name "${MDNS_HOSTNAME}.local" >/dev/null 2>&1; then
-        echo "[mDNS] OK — ${MDNS_HOSTNAME}.local 可解析"
-    else
-        echo "[mDNS] avahi-daemon 已启动，广播 ${MDNS_HOSTNAME}.local"
-    fi
-else
-    echo "[mDNS] avahi-daemon 启动失败"
-    echo "[mDNS] LoRa 网关请使用 HA 的 IP 地址，而非 ${MDNS_HOSTNAME}.local"
-fi
-echo ""
-
-# ---------- 2. 生成密码文件 ----------
+# ---------- 1. 生成密码文件 ----------
 PASSWD_FILE="/etc/mosquitto/passwd"
 
 if ! mosquitto_passwd -b -c "${PASSWD_FILE}" "${USERNAME}" "${PASSWORD}" 2>/dev/null; then
     echo "[错误] 创建用户 ${USERNAME} 密码失败"
     exit 1
 fi
-chmod 644 "${PASSWD_FILE}"
+# mosquitto 2.x 要求密码文件权限 0700
+chmod 700 "${PASSWD_FILE}"
 chown mosquitto:mosquitto "${PASSWD_FILE}" 2>/dev/null || true
-echo "[OK] 密码文件已生成: ${PASSWD_FILE}"
+echo "[OK] 密码文件已生成"
 
-# ---------- 2b. 动态生成 ACL 文件 ----------
+# ---------- 1b. 动态生成 ACL 文件 ----------
 ACL_FILE="/etc/mosquitto/acl"
 cat > "${ACL_FILE}" <<EOF
 # 动态生成 — 用户: ${USERNAME}
@@ -175,17 +60,18 @@ topic readwrite test/#
 # \$SYS 主题
 topic read \$SYS/#
 EOF
-chmod 644 "${ACL_FILE}"
+# mosquitto 2.x 要求 ACL 文件权限 0700
+chmod 700 "${ACL_FILE}"
 chown mosquitto:mosquitto "${ACL_FILE}" 2>/dev/null || true
-echo "[OK] ACL 文件已生成: ${ACL_FILE} (用户: ${USERNAME})"
+echo "[OK] ACL 文件已生成 (用户: ${USERNAME})"
 
-# ---------- 3. 创建持久化目录 ----------
+# ---------- 2. 创建持久化目录 ----------
 mkdir -p /data/mosquitto
 chmod 755 /data/mosquitto
 chown mosquitto:mosquitto /data/mosquitto 2>/dev/null || true
-echo "[OK] 持久化目录已创建: /data/mosquitto"
+echo "[OK] 持久化目录已创建"
 
-# ---------- 3b. 配置并启动 nginx（Ingress Web UI） ----------
+# ---------- 3. 配置并启动 nginx（Ingress Web UI） ----------
 echo "[Ingress] 配置 nginx Web UI..."
 mkdir -p /run/nginx
 
@@ -290,11 +176,9 @@ if [ "${INSTALL_INTEGRATION}" = "true" ]; then
             echo "[集成] 重启 HA 后，设置 → 设备与服务 → 添加集成 → 搜索「慧尖」"
         else
             echo "[集成] 警告: 集成源码目录不存在"
-            echo "[集成] 已搜索: /usr/share/custom_components/ 和 /data/custom_components/"
         fi
     else
-        echo "[集成] 警告: HA 配置目录未找到（/homeassistant 和 /config 均不存在）"
-        echo "[集成] 请确保插件配置中已映射 homeassistant_config"
+        echo "[集成] 警告: HA 配置目录未找到"
     fi
 fi
 
@@ -303,18 +187,13 @@ echo ""
 echo "[启动] 正在配置 mosquitto broker..."
 chown -R mosquitto:mosquitto /etc/mosquitto/ 2>/dev/null || true
 chown -R mosquitto:mosquitto /data/mosquitto/ 2>/dev/null || true
+# 再次确保文件权限正确（mosquitto 2.x 要求 0700）
+chmod 700 /etc/mosquitto/passwd 2>/dev/null || true
+chmod 700 /etc/mosquitto/acl 2>/dev/null || true
 
-# 最终端口检查
-if netstat -tlnp 2>/dev/null | grep -q ":1883.*LISTEN"; then
-    echo "[错误] 端口 1883 仍被占用，无法启动 mosquitto"
-    echo "[错误] 请停止 HA 官方 Mosquitto broker 插件后重试"
-    exit 1
-fi
-
-# ---------- 6. 前台启动 mosquitto ----------
+# ---------- 6. 启动信息 ----------
 echo "[启动] 启动 mosquitto broker（前台模式）..."
 echo "[启动] 监听: 0.0.0.0:1883 (MQTT TCP)"
-echo "[启动] ACL: gateway/+/req, gateway/rpt_rsp"
 
 echo ""
 echo "============================================"
@@ -322,12 +201,11 @@ echo "  慧尖 LoRa 网关一体化插件已就绪"
 echo "============================================"
 echo ""
 echo "MQTT Broker: 0.0.0.0:1883"
-echo "mDNS 主机名: ${MDNS_HOSTNAME}.local"
 echo "Ingress Web UI: 8099 (侧边栏)"
 echo "MQTT 用户名: ${USERNAME}"
 echo ""
 echo "LoRa 网关配置:"
-echo "  Broker 地址: ${MDNS_HOSTNAME}.local (或 HA 的 IP)"
+echo "  Broker 地址: HA 的 IP 地址"
 echo "  端口: 1883"
 echo "  用户名: ${USERNAME}"
 echo "  密码: ${PASSWORD}"

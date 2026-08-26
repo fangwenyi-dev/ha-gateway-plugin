@@ -1,13 +1,12 @@
 name: 慧尖 LoRa 网关
-version: "1.0.8"
+version: "1.0.9"
 slug: huijian_mqtt_broker
-description: 慧尖开窗器 LoRa 网关一体化插件，内置 Mosquitto Broker + mDNS 广播 + 网关集成，安装即用
+description: 慧尖开窗器 LoRa 网关一体化插件，内置 Mosquitto Broker + 网关集成，安装即用
 url: 'https://github.com/fangwenyi-dev/ha-gateway-plugin'
 arch:
   - amd64
   - aarch64
 init: false
-host_network: true
 startup: system
 watchdog: tcp://[HOST]:1883
 services:
@@ -27,11 +26,9 @@ options:
   username: huijian
   password: huijian2022
   auto_setup_ha_mqtt: true
-  mdns_hostname: huijian
   install_integration: true
 schema:
   username: str
   password: str
   auto_setup_ha_mqtt: bool
-  mdns_hostname: str
   install_integration: bool

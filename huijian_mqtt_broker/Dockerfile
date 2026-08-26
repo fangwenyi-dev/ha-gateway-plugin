@@ -4,38 +4,21 @@ FROM ghcr.io/home-assistant/${BUILD_ARCH}-base:latest
 # 安装依赖包
 # - mosquitto/mosquitto-clients: MQTT broker + 客户端工具
 # - curl/jq: HA API 调用
-# - avahi/avahi-tools/dbus: mDNS 广播（需要 dbus 和 machine-id）
 # - nginx: Ingress Web UI
-# - net-tools/procps: 调试工具（netstat/ps）
 RUN apk add --no-cache \
     mosquitto \
     mosquitto-clients \
     curl \
     jq \
-    avahi \
-    avahi-tools \
-    avahi-compat-libdns_sd \
-    dbus \
-    dbus-libs \
-    nginx \
-    net-tools \
-    procps \
-    util-linux
-
-# 创建 avahi/dbus 所需的目录和 machine-id
-RUN mkdir -p /run/dbus /var/lib/dbus /etc/avahi && \
-    echo "huijian" > /etc/machine-id && \
-    cp /etc/machine-id /var/lib/dbus/machine-id 2>/dev/null || true
+    nginx
 
 # 复制配置文件
 COPY mosquitto.conf /etc/mosquitto/mosquitto.conf
-COPY acl /etc/mosquitto/acl
 COPY run.sh /run.sh
 COPY auto_setup_mqtt.sh /auto_setup_mqtt.sh
 
 # 复制慧尖网关集成代码
-# 注意: /data 在运行时是 HA 挂载的持久化卷，会覆盖镜像内容
-#       所以同时复制到 /usr/share 作为备份，run.sh 会从备份路径查找
+# /data 在运行时被 HA 挂载的持久化卷覆盖，所以同时复制到 /usr/share 作为备份
 COPY custom_components /usr/share/custom_components
 COPY custom_components /data/custom_components
 
