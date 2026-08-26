@@ -1,6 +1,7 @@
 """开窗器网关实体"""
 import logging
 import asyncio
+import threading
 
 from homeassistant.core import HomeAssistant
 from homeassistant.components.binary_sensor import (
@@ -98,10 +99,16 @@ class GatewayOnlineSensor(BinarySensorEntity):
         """当MQTT状态改变时调用"""
         self._update_state()
         # 通知Home Assistant状态已更新
-        # 使用schedule_update_ha_state确保在事件循环线程中执行
+        # 本回调经 hass.add_job 调度，可能在事件循环线程或线程池线程中执行：
+        # - 事件循环线程内 → async_write_ha_state（HA 2024.12+ 推荐，避免
+        #   schedule_update_ha_state 的弃用告警与多余的线程池跳转）
+        # - 线程池线程内 → schedule_update_ha_state（线程安全版本）
         try:
             if self.hass is not None:
-                self.schedule_update_ha_state()
+                if threading.get_ident() == self.hass.loop_thread_id:
+                    self.async_write_ha_state()
+                else:
+                    self.schedule_update_ha_state()
             else:
                 _LOGGER.warning("无法更新网关状态：hass为None")
         except Exception as e:
