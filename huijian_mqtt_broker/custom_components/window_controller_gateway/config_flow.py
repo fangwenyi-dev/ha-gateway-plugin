@@ -70,7 +70,11 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._pending_gateway_name = None
 
     async def async_step_user(self, user_input: Optional[Dict[str, Any]] = None) -> FlowResult:
-        """Handle user step"""
+        """Handle user step
+
+        网关 SN 为可选项：用户可以先安装集成（点"下一步"），
+        之后通过选项页面添加网关，或等待 MQTT 自动发现。
+        """
         errors = {}
 
         # 从上下文中获取网关SN和名称（如果是从发现流程进入）
@@ -78,67 +82,72 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         gateway_name_from_context = self.context.get("gateway_name")
 
         if user_input is not None:
-            gateway_sn = user_input[CONF_GATEWAY_SN].strip()
-            gateway_name = user_input.get(CONF_GATEWAY_NAME, "").strip() or f"{DEFAULT_GATEWAY_NAME} {gateway_sn[-4:]}"
+            raw_sn = user_input.get(CONF_GATEWAY_SN, "").strip()
+            raw_name = user_input.get(CONF_GATEWAY_NAME, "").strip()
 
-            # Validate gateway SN
-            if not validate_gateway_sn(gateway_sn):
-                errors[CONF_GATEWAY_SN] = "invalid_sn_format"
-            else:
-                # Check if already configured
-                # unique_id 统一小写：HA 的 config entry unique_id 比较大小写敏感，
-                # 而集成其他模块均按小写比较，避免同一网关不同大小写重复添加
-                await self.async_set_unique_id(gateway_sn.lower())
-                self._abort_if_unique_id_configured()
-                # 兜底：历史 entry 的 unique_id 可能为旧版输入原样（大小写敏感），
-                # 精确匹配会漏判，此处按 data 中的网关 SN 小写遍历补一次检查
-                for entry in self.hass.config_entries.async_entries(DOMAIN):
-                    if entry.data.get(CONF_GATEWAY_SN, "").lower() == gateway_sn.lower():
-                        return self.async_abort(reason="already_configured")
+            if raw_sn:
+                # ---- 有 SN：走原有的验证+连接测试流程 ----
+                gateway_sn = raw_sn
+                gateway_name = raw_name or f"{DEFAULT_GATEWAY_NAME} {gateway_sn[-4:]}"
 
-                # 测试网关连接性
-                try:
-                    # 一体化插件：若存在引导标记且尚无 MQTT 条目，先自动创建
+                if not validate_gateway_sn(gateway_sn):
+                    errors[CONF_GATEWAY_SN] = "invalid_sn_format"
+                else:
+                    # unique_id 统一小写，避免大小写不同导致重复添加
+                    await self.async_set_unique_id(gateway_sn.lower())
+                    self._abort_if_unique_id_configured()
+                    for entry in self.hass.config_entries.async_entries(DOMAIN):
+                        if entry.data.get(CONF_GATEWAY_SN, "").lower() == gateway_sn.lower():
+                            return self.async_abort(reason="already_configured")
+
                     try:
-                        await ensure_mqtt_connection(self.hass)
-                    except ConfigEntryNotReady:
-                        errors["base"] = "mqtt_not_available"
+                        try:
+                            await ensure_mqtt_connection(self.hass)
+                        except ConfigEntryNotReady:
+                            errors["base"] = "mqtt_not_available"
 
-                    # MQTT 集成未启用是硬性前置条件，直接报错（不可跳过）
-                    if not self.hass.data.get("mqtt"):
-                        errors["base"] = "mqtt_not_available"
-                    else:
-                        connected = await self._test_gateway_connectivity(gateway_sn)
-                        if not connected:
-                            # 未在测试窗口内收到网关上报：不阻塞添加。
-                            # 网关可能未上电/未连 MQTT/上报间隔较长，
-                            # 进入确认步骤让用户决定是否仍然添加。
-                            self._pending_gateway_sn = gateway_sn
-                            self._pending_gateway_name = gateway_name
-                            return await self.async_step_confirm_add()
-                except Exception:
-                    errors["base"] = "cannot_connect"
+                        if not self.hass.data.get("mqtt"):
+                            errors["base"] = "mqtt_not_available"
+                        else:
+                            connected = await self._test_gateway_connectivity(gateway_sn)
+                            if not connected:
+                                self._pending_gateway_sn = gateway_sn
+                                self._pending_gateway_name = gateway_name
+                                return await self.async_step_confirm_add()
+                    except Exception:
+                        errors["base"] = "cannot_connect"
 
-                if not errors:
-                    # 创建配置条目
-                    return self.async_create_entry(
-                        title=gateway_name,
-                        data={
-                            CONF_GATEWAY_SN: gateway_sn,
-                            CONF_GATEWAY_NAME: gateway_name
-                        }
-                    )
+                    if not errors:
+                        return self.async_create_entry(
+                            title=gateway_name,
+                            data={
+                                CONF_GATEWAY_SN: gateway_sn,
+                                CONF_GATEWAY_NAME: gateway_name
+                            }
+                        )
+            else:
+                # ---- 无 SN：直接完成安装，网关待后续添加 ----
+                try:
+                    await ensure_mqtt_connection(self.hass)
+                except ConfigEntryNotReady:
+                    pass  # MQTT 稍后就绪即可，不阻塞安装
 
-        # Configuration form
+                return self.async_create_entry(
+                    title="慧尖网关",
+                    data={}
+                )
+
+        # ---- 表单 ----
         default_sn = gateway_sn_from_context or (user_input.get(CONF_GATEWAY_SN, "") if user_input else "")
         if default_sn:
             default_name = gateway_name_from_context or (user_input.get(CONF_GATEWAY_NAME, f"{DEFAULT_GATEWAY_NAME} {default_sn[-4:]}") if user_input else f"{DEFAULT_GATEWAY_NAME} {default_sn[-4:]}")
         else:
             default_name = gateway_name_from_context or (user_input.get(CONF_GATEWAY_NAME, DEFAULT_GATEWAY_NAME) if user_input else DEFAULT_GATEWAY_NAME)
-        
+
         data_schema = vol.Schema({
-            vol.Required(
+            vol.Optional(
                 CONF_GATEWAY_SN,
+                description={"suggested_value": default_sn},
                 default=default_sn
             ): str,
             vol.Optional(
@@ -542,13 +551,76 @@ class OptionsFlow(config_entries.OptionsFlow):
         self._config_entry = config_entry
 
     async def async_step_init(self, user_input: Optional[Dict[str, Any]] = None) -> FlowResult:
-        """Manage options"""
+        """Manage options — 首次进入时根据是否已配置网关分流"""
+        current_sn = self._config_entry.data.get(CONF_GATEWAY_SN, "")
+        if not current_sn:
+            # 无网关 SN：进入添加网关步骤
+            return await self.async_step_add_gateway()
+        # 已有网关：进入常规选项
+        return await self.async_step_options()
+
+    async def async_step_add_gateway(self, user_input: Optional[Dict[str, Any]] = None) -> FlowResult:
+        """添加网关 SN（首次配置或无网关时）"""
+        errors = {}
+        if user_input is not None:
+            gateway_sn = user_input.get(CONF_GATEWAY_SN, "").strip()
+            gateway_name = user_input.get(CONF_GATEWAY_NAME, "").strip()
+
+            if not gateway_sn:
+                errors[CONF_GATEWAY_SN] = "required"
+            elif not validate_gateway_sn(gateway_sn):
+                errors[CONF_GATEWAY_SN] = "invalid_sn_format"
+            else:
+                # 检查是否已配置该网关
+                for entry in self.hass.config_entries.async_entries(DOMAIN):
+                    if entry.data.get(CONF_GATEWAY_SN, "").lower() == gateway_sn.lower():
+                        errors[CONF_GATEWAY_SN] = "already_configured"
+                        break
+
+                if not errors:
+                    if not gateway_name:
+                        gateway_name = f"{DEFAULT_GATEWAY_NAME} {gateway_sn[-4:]}"
+
+                    # 更新 config entry DATA（不是 options）
+                    new_data = {
+                        **self._config_entry.data,
+                        CONF_GATEWAY_SN: gateway_sn,
+                        CONF_GATEWAY_NAME: gateway_name,
+                    }
+                    self.hass.config_entries.async_update_entry(
+                        self._config_entry, data=new_data
+                    )
+                    # 重新加载以触发 async_setup_entry
+                    await self.hass.config_entries.async_reload(self._config_entry.entry_id)
+                    return self.async_create_entry(title="", data={})
+
+        return self.async_show_form(
+            step_id="add_gateway",
+            data_schema=vol.Schema({
+                vol.Required(CONF_GATEWAY_SN): str,
+                vol.Optional(
+                    CONF_GATEWAY_NAME,
+                    description={"suggested_value": "慧尖网关"}
+                ): str,
+            }),
+            errors=errors,
+            description_placeholders={
+                "example_sn": "100121501186",
+            },
+        )
+
+    async def async_step_options(self, user_input: Optional[Dict[str, Any]] = None) -> FlowResult:
+        """常规选项（已有网关时显示）"""
         if user_input is not None:
             return self.async_create_entry(title="", data=user_input)
 
         return self.async_show_form(
-            step_id="init",
+            step_id="options",
             data_schema=vol.Schema({
+                vol.Optional(
+                    "gateway_sn",
+                    default=self._config_entry.data.get(CONF_GATEWAY_SN, "")
+                ): str,
                 vol.Optional(
                     "discovery_interval",
                     default=self._config_entry.options.get("discovery_interval", 300)

@@ -74,6 +74,20 @@ async def async_discover_gateway(hass: HomeAssistant, gateway_sn: str, gateway_n
             _LOGGER.debug("网关 %s 已在配置条目中，跳过发现", gateway_sn)
             return
     
+    # 3.5 自动填充空 SN 的已有条目：用户先安装了集成（无 SN），
+    #     之后网关上电被发现，直接填充该条目而非创建新流程
+    for entry in existing_entries:
+        if not entry.data.get(CONF_GATEWAY_SN):
+            _LOGGER.info("发现网关 %s，自动填充空 SN 的已有条目 %s", gateway_sn, entry.entry_id)
+            new_data = {
+                **entry.data,
+                CONF_GATEWAY_SN: gateway_sn,
+                CONF_GATEWAY_NAME: entry.data.get(CONF_GATEWAY_NAME, gateway_name),
+            }
+            hass.config_entries.async_update_entry(entry, data=new_data)
+            await hass.config_entries.async_reload(entry.entry_id)
+            return
+    
     # 4. 检查网关是否已在设备注册表中
     device_registry = dr.async_get(hass)
     existing_device = device_registry.async_get_device(

@@ -78,9 +78,14 @@ async def async_setup(hass: HomeAssistant, config: Dict[str, Any]) -> bool:
     return True
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """设置配置条目"""
-    gateway_sn = entry.data[CONF_GATEWAY_SN]
-    _LOGGER.info("=== 开始设置配置条目: %s, gateway: %s ===", entry.entry_id, gateway_sn)
+    """设置配置条目
+
+    支持两种模式：
+    - 有 gateway_sn：完整设置（MQTT + 设备管理器）
+    - 无 gateway_sn：最小设置（仅注册平台），等待用户通过选项页或自动发现添加网关
+    """
+    gateway_sn = entry.data.get(CONF_GATEWAY_SN, "")
+    _LOGGER.info("=== 开始设置配置条目: %s, gateway: %s ===", entry.entry_id, gateway_sn or "(待配置)")
     
     # 检查持久化数据是否已加载
     if DEVICE_TO_GATEWAY_MAPPING in hass.data[DOMAIN]:
@@ -96,6 +101,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _LOGGER.critical("导入核心模块失败: %s", e)
         return False
 
+    # ---- 无网关 SN：最小设置，等待后续配置 ----
+    if not gateway_sn:
+        _LOGGER.info("网关 SN 未配置，进入等待模式（可通过选项页或自动发现添加）")
+        hass.data[DOMAIN].setdefault(entry.entry_id, {})
+        hass.data[DOMAIN][entry.entry_id]["gateway_sn"] = ""
+        hass.data[DOMAIN][entry.entry_id]["_awaiting_gateway"] = True
+        # 注册空平台，让 HA 知道这个集成已加载（避免 UI 报错）
+        await hass.config_entries.async_forward_entry_setups(entry, [
+            Platform.SENSOR, Platform.COVER, Platform.BUTTON, Platform.NUMBER
+        ])
+        return True
+
+    # ---- 有网关 SN：完整设置 ----
     gateway_name = entry.data.get(CONF_GATEWAY_NAME, f"{DEFAULT_GATEWAY_NAME} {gateway_sn[-4:]}")
     
     device_manager = None
