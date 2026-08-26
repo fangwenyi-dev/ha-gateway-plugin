@@ -1,6 +1,6 @@
 #!/usr/bin/with-contenv bashio
 # =============================================================================
-# 慧尖 LoRa 网关一体化插件 — 启动脚本 v1.1.2
+# 慧尖 LoRa 网关一体化插件 — 启动脚本 v1.1.3
 #
 # 架构：
 #   - 容器内 mosquitto 固定监听 1883
@@ -227,8 +227,9 @@ if [ "${AUTO_SETUP}" = "true" ]; then
     echo "============================================"
     echo "  自动配置 HA MQTT 集成..."
     echo "============================================"
-    # 显式传递变量，避免 bashio set -u 导致子 shell 中 unbound variable
+    # 显式传递所有变量（含 SUPERVISOR_TOKEN），避免 bashio set -u 导致子 shell 中 unbound variable
     USERNAME="${USERNAME}" PASSWORD="${PASSWORD}" MQTT_PORT="${MQTT_PORT}" INTERNAL_PORT="${INTERNAL_PORT}" \
+        SUPERVISOR_TOKEN="${SUPERVISOR_TOKEN:-}" \
         /auto_setup_mqtt.sh &
     echo ""
 fi

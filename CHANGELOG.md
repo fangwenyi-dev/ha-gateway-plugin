@@ -3,6 +3,18 @@
 所有版本变更记录在此文件中。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.1.3] - 2026-08-26
+
+### 修复（关键）
+- **auto_setup_mqtt.sh HTTP 401 Unauthorized**：`SUPERVISOR_TOKEN` 未显式传递给子进程，导致调用 HA Supervisor API 认证失败
+- **README 端口信息过时**：文档中 LoRa 网关端口仍写 1883，实际应为 1885
+
+### 变更
+- `run.sh` 显式传递 `SUPERVISOR_TOKEN` 给 `auto_setup_mqtt.sh`
+- `auto_setup_mqtt.sh` 中 `HA_TOKEN` 添加默认值防止 `set -u` 报错
+- README 全部端口信息更新为 1885
+- 版本号 1.1.2 → 1.1.3
+
 ## [1.1.2] - 2026-08-26
 
 ### 修复（关键）

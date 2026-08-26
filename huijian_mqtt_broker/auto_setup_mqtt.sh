@@ -20,7 +20,7 @@ INTERNAL_PORT="${INTERNAL_PORT:-1883}"
 
 # HA Supervisor API
 HA_API="http://supervisor/core/api"
-HA_TOKEN="${SUPERVISOR_TOKEN}"
+HA_TOKEN="${SUPERVISOR_TOKEN:-}"
 
 # HA Core 连接 broker 的地址（Docker 网桥网关 + 主机映射端口）
 BROKER_ADDR="172.30.32.1"
