@@ -3,6 +3,15 @@
 所有版本变更记录在此文件中。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.1.5] - 2026-08-26
+
+### 修复（关键 - 根本原因）
+- **端口 1883 冲突（根本原因）**：`config.yaml` 中 `services: - mqtt:provide` 导致 HA Supervisor 自动将 1883 端口分配给插件，与官方 Mosquitto broker 的 1883 冲突。移除 `services: mqtt:provide`，插件不再向 HA 声明为 MQTT 服务提供者，HA MQTT 集成通过 auto_setup_mqtt.sh 手动配置连接到 172.30.32.1:1885
+
+### 变更
+- `config.yaml` 移除 `services: - mqtt:provide`
+- 版本号 1.1.4 → 1.1.5
+
 ## [1.1.4] - 2026-08-26
 
 ### 修复（关键）
