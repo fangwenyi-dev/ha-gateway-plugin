@@ -156,7 +156,7 @@
     <div class="header">
         <div>
             <h1>慧尖 LoRa 网关</h1>
-            <div class="ver" id="addonVersion">v1.2.1</div>
+            <div class="ver" id="addonVersion">v1.2.2</div>
         </div>
         <div class="actions">
             <button class="btn btn-primary" onclick="checkForUpdates()">检查更新</button>
@@ -220,11 +220,11 @@
     </div>
 
     <div class="footer">
-        <p>慧尖 LoRa 网关一体化插件 <span id="footerVersion">v1.2.1</span></p>
+        <p>慧尖 LoRa 网关一体化插件 <span id="footerVersion">v1.2.2</span></p>
     </div>
 
     <script>
-        let CURRENT_VERSION = '1.2.1';
+        let CURRENT_VERSION = '1.2.2';
         const DOMAIN = 'window_controller_gateway';
 
         // Ingress 下页面路径形如 /hassio/ingress/<token>/，直连插件端口时为 /
@@ -270,31 +270,32 @@
             } catch (e) {
                 setStatusDot('mqttStatus', 'err', '无法连接');
             }
-            // 2. 网关集成检测
+            // 2. 网关集成检测 — 插件本地事实（run.sh 安装集成后写入 integration.json），
+            //    不经 /api/ha/ 代理调 HA Core API（Core 会拒绝插件 token，报 401）
             try {
-                const resp = await haApi('/config/config_entries/entry?domain=' + DOMAIN);
+                const resp = await fetch(INGRESS_BASE + 'api/integration');
                 if (!resp.ok) {
-                    setStatusDot('integrationStatus', 'err', resp.status === 401 ? '认证失败' : 'HTTP ' + resp.status);
+                    setStatusDot('integrationStatus', 'err', 'HTTP ' + resp.status);
                 } else {
-                    const entries = await resp.json();
-                    setStatusDot('integrationStatus', entries && entries.length > 0 ? 'ok' : 'warn',
-                        entries && entries.length > 0 ? '已安装' : '未安装');
+                    const info = await resp.json();
+                    setStatusDot('integrationStatus', info.installed ? 'ok' : 'warn',
+                        info.installed ? '已安装 v' + (info.version || '?') : '未安装');
                 }
             } catch (e) {
-                setStatusDot('integrationStatus', 'err', '代理失败');
+                setStatusDot('integrationStatus', 'err', '无法读取');
             }
-            // 3. HA MQTT 集成检测
+            // 3. HA MQTT 连接检测 — broker 实际连接数（broker_status.json 由后台循环刷新）
             try {
-                const resp = await haApi('/config/config_entries/entry?domain=mqtt');
+                const resp = await fetch(INGRESS_BASE + 'api/broker');
                 if (!resp.ok) {
-                    setStatusDot('haMqttStatus', 'err', resp.status === 401 ? '认证失败' : 'HTTP ' + resp.status);
+                    setStatusDot('haMqttStatus', 'err', 'HTTP ' + resp.status);
                 } else {
-                    const entries = await resp.json();
-                    setStatusDot('haMqttStatus', entries && entries.length > 0 ? 'ok' : 'warn',
-                        entries && entries.length > 0 ? '已配置' : '未配置');
+                    const info = await resp.json();
+                    setStatusDot('haMqttStatus', info.clients > 0 ? 'ok' : 'warn',
+                        info.clients > 0 ? '已连接 (' + info.clients + ')' : '未连接');
                 }
             } catch (e) {
-                setStatusDot('haMqttStatus', 'err', '代理失败');
+                setStatusDot('haMqttStatus', 'err', '无法读取');
             }
         }
 
@@ -308,7 +309,7 @@
         async function haApi(path, method = 'GET', body = null) {
             const opts = { method, headers: { 'Content-Type': 'application/json' } };
             if (body) opts.body = JSON.stringify(body);
-            return await fetch(INGRESS_BASE + 'api/ha/' + path, opts);
+            return await fetch(INGRESS_BASE + 'api/ha/' + path.replace(/^\//, ''), opts);
         }
 
         // ========== 加载网关列表 ==========

@@ -3,6 +3,12 @@
 所有版本变更记录在此文件中。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.2.2] - 2026-08-26
+
+### 修复
+- **Web UI 状态检查改用插件本地事实**：HA Core 拒绝插件 SUPERVISOR_TOKEN 访问 Core REST API（401），导致面板「网关集成/HA MQTT」永远显示"认证失败"。现改为：网关集成状态读取 run.sh 安装集成时写入的 `integration.json`（`/api/integration`）；MQTT 状态读取 broker 实际 ESTABLISHED 连接数（后台循环每 10 秒写入 `broker_status.json`，`/api/broker`）——面板不再依赖任何 HA API 认证
+- **修复 `/api/ha/` 双斜杠**：`haApi` 拼接路径时剥离前导斜杠，消除 `/api/ha//config/...` 形式的请求
+
 ## [1.2.1] - 2026-08-26
 
 ### 修复

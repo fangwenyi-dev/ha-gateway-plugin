@@ -1,6 +1,6 @@
 #!/usr/bin/with-contenv bashio
 # =============================================================================
-# 慧尖 LoRa 网关一体化插件 — 启动脚本 v1.2.1
+# 慧尖 LoRa 网关一体化插件 — 启动脚本 v1.2.2
 #
 # 架构：
 #   - 容器内 mosquitto 固定监听 2022（不使用 1883，避免与 HA 官方 Mosquitto 冲突）
@@ -150,6 +150,20 @@ server {
         try_files /version.json =404;
     }
 
+    # 集成安装状态 — 插件本地事实（integration.json 由本脚本写入），不依赖 HA API
+    location = /api/integration {
+        add_header Content-Type application/json always;
+        root /usr/share/nginx/html;
+        try_files /integration.json =404;
+    }
+
+    # Broker 客户端连接数 — broker_status.json 由后台循环每 10 秒刷新
+    location = /api/broker {
+        add_header Content-Type application/json always;
+        root /usr/share/nginx/html;
+        try_files /broker_status.json =404;
+    }
+
     # 代理 GitHub API（检查更新用），避免 Ingress iframe 中 CSP 拦截外部请求
     location /api/github/ {
         proxy_pass https://api.github.com/;
@@ -276,6 +290,23 @@ if [ "${INSTALL_INTEGRATION}" = "true" ]; then
     fi
 fi
 
+# ---------- 4b. 写入集成安装状态（Web UI 本地读取，不依赖 HA Core API） ----------
+# 背景：HA Core 会拒绝插件 SUPERVISOR_TOKEN 访问 Core REST API（401），
+# 因此 Web UI 的状态检查全部改用插件本地生成的状态文件。
+STATUS_CONFIG_DIR="/homeassistant"
+if [ ! -d "${STATUS_CONFIG_DIR}" ]; then
+    STATUS_CONFIG_DIR="/config"
+fi
+INTEGRATION_MANIFEST="${STATUS_CONFIG_DIR}/custom_components/window_controller_gateway/manifest.json"
+if [ -f "${INTEGRATION_MANIFEST}" ]; then
+    INTG_VER=$(jq -r '.version // "unknown"' "${INTEGRATION_MANIFEST}" 2>/dev/null || echo "unknown")
+    if jq -n --arg v "${INTG_VER}" '{installed:true, version:$v}' > /usr/share/nginx/html/integration.json 2>/dev/null; then
+        echo "[状态] 集成安装状态已写入 (v${INTG_VER})"
+    fi
+else
+    echo '{"installed":false}' > /usr/share/nginx/html/integration.json 2>/dev/null || true
+fi
+
 # ---------- 5. 确保 mosquitto 用户权限 ----------
 echo ""
 echo "[启动] 正在配置 mosquitto broker..."
@@ -332,6 +363,18 @@ else
     # 自动配置已关闭：清理历史标记（含凭据），避免集成侧读到过期数据无限重试
     rm -f "${HA_CONFIG_DIR}/window_controller_gateway_mqtt_bootstrap.json" 2>/dev/null || true
 fi
+
+# ---------- 7b. Broker 连接数后台采集（Web UI 本地读取，不依赖 HA API） ----------
+# 每 10 秒统计 :2022 上的 ESTABLISHED 连接数写入 broker_status.json。
+# exec mosquitto 后此子进程继续运行（独立进程，被 init 接管）。
+(
+    while true; do
+        CLIENTS=$(netstat -tn 2>/dev/null | grep ':2022' | grep -c 'ESTABLISHED' || true)
+        jq -n --argjson c "${CLIENTS:-0}" '{clients:$c, updated:(now|todate)}' \
+            > /usr/share/nginx/html/broker_status.json 2>/dev/null || true
+        sleep 10
+    done
+) &
 
 # ---------- 8. exec 到前台 mosquitto ----------
 echo "[运行] Broker 以前台模式运行..."
