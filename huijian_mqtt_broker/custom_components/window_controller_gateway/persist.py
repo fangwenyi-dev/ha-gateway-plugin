@@ -1,4 +1,5 @@
 """持久化数据管理 - 避免 __init__.py 与 device_manager.py 之间的循环导入"""
+import copy
 import logging
 import os
 import json
@@ -91,12 +92,14 @@ async def _do_save(hass: HomeAssistant) -> None:
         config_dir = hass.config.config_dir
         data_file = os.path.join(config_dir, PERSISTENT_DATA_FILE)
 
-        # 在事件循环内先做快照（浅拷贝即可，值为字符串/标量），
-        # 避免 executor 线程 json.dump 期间事件循环并发增删设备时
-        # 抛 "dictionary changed size during iteration" 或写入不一致数据
+        # 在事件循环内先做快照，避免 executor 线程 json.dump 期间事件循环
+        # 并发增删设备时抛 "dictionary changed size during iteration" 或写入不一致数据。
+        # DEVICE_SETPOINTS 是嵌套 dict（设备 → 参数表），滑动条回调会并发修改其内层
+        # dict，浅拷贝只保护外层；必须深拷贝生成不可变快照，否则 executor 序列化
+        # 期间内层 dict 被并发增删键仍会触发 RuntimeError，导致持久化静默丢失。
         mapping_snapshot = dict(hass.data[DOMAIN].get(DEVICE_TO_GATEWAY_MAPPING, {}))
         removed_snapshot = list(hass.data[DOMAIN].get(GLOBAL_MANUALLY_REMOVED_DEVICES, set()))
-        setpoints_snapshot = dict(hass.data[DOMAIN].get(DEVICE_SETPOINTS, {}))
+        setpoints_snapshot = copy.deepcopy(hass.data[DOMAIN].get(DEVICE_SETPOINTS, {}))
 
         data = {
             'schema_version': SCHEMA_VERSION,
