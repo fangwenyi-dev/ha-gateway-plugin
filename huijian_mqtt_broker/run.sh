@@ -1,16 +1,12 @@
 #!/usr/bin/with-contenv bashio
 # =============================================================================
-# 慧尖 LoRa 网关一体化插件 — 启动脚本 v1.0.9
+# 慧尖 LoRa 网关一体化插件 — 启动脚本 v1.1.0
 #
-# 架构变更：
-#   移除 host_network，使用 Docker 端口映射，避免与 HA core-mosquitto 端口冲突
-#
-# 启动流程：
-#   1. 生成 mosquitto 密码文件和 ACL
-#   2. 启动 nginx（Ingress Web UI）
-#   3. 自动安装慧尖网关集成
-#   4. 后台启动 auto_setup_mqtt.sh
-#   5. exec mosquitto 前台运行
+# 核心改进：
+#   1. MQTT 端口可配置（默认 1885，避免与 HA 官方 MQTT 集成 1883 冲突）
+#   2. mosquitto.conf 中端口由 run.sh 动态替换
+#   3. auto_setup_mqtt.sh 使用配置的端口
+#   4. mosquitto 文件权限 0700（符合 2.x 要求）
 # =============================================================================
 
 set -e
@@ -19,11 +15,13 @@ USERNAME=$(bashio::config 'username')
 PASSWORD=$(bashio::config 'password')
 AUTO_SETUP=$(bashio::config 'auto_setup_ha_mqtt')
 INSTALL_INTEGRATION=$(bashio::config 'install_integration')
+MQTT_PORT=$(bashio::config 'mqtt_port')
 
 echo "============================================"
 echo "  慧尖 LoRa 网关一体化插件启动中..."
 echo "============================================"
 echo "[配置] MQTT 用户名: ${USERNAME}"
+echo "[配置] MQTT 端口: ${MQTT_PORT}"
 echo "[配置] 自动配置 HA MQTT 集成: ${AUTO_SETUP}"
 echo "[配置] 自动安装网关集成: ${INSTALL_INTEGRATION}"
 echo ""
@@ -35,7 +33,6 @@ if ! mosquitto_passwd -b -c "${PASSWD_FILE}" "${USERNAME}" "${PASSWORD}" 2>/dev/
     echo "[错误] 创建用户 ${USERNAME} 密码失败"
     exit 1
 fi
-# mosquitto 2.x 要求密码文件权限 0700
 chmod 700 "${PASSWD_FILE}"
 chown mosquitto:mosquitto "${PASSWD_FILE}" 2>/dev/null || true
 echo "[OK] 密码文件已生成"
@@ -60,7 +57,6 @@ topic readwrite test/#
 # \$SYS 主题
 topic read \$SYS/#
 EOF
-# mosquitto 2.x 要求 ACL 文件权限 0700
 chmod 700 "${ACL_FILE}"
 chown mosquitto:mosquitto "${ACL_FILE}" 2>/dev/null || true
 echo "[OK] ACL 文件已生成 (用户: ${USERNAME})"
@@ -70,6 +66,11 @@ mkdir -p /data/mosquitto
 chmod 755 /data/mosquitto
 chown mosquitto:mosquitto /data/mosquitto 2>/dev/null || true
 echo "[OK] 持久化目录已创建"
+
+# ---------- 2b. 动态替换 mosquitto.conf 中的端口 ----------
+CONF_FILE="/etc/mosquitto/mosquitto.conf"
+sed -i "s/__MQTT_PORT__/${MQTT_PORT}/g" "${CONF_FILE}"
+echo "[OK] mosquitto.conf 端口设为 ${MQTT_PORT}"
 
 # ---------- 3. 配置并启动 nginx（Ingress Web UI） ----------
 echo "[Ingress] 配置 nginx Web UI..."
@@ -99,7 +100,7 @@ server {
 
     location /api/status {
         add_header Content-Type application/json;
-        return 200 '{"status":"running","broker":"mosquitto","port":1883}';
+        return 200 '{"status":"running","broker":"mosquitto","port":${MQTT_PORT}}';
     }
 
     location /api/version {
@@ -187,31 +188,35 @@ echo ""
 echo "[启动] 正在配置 mosquitto broker..."
 chown -R mosquitto:mosquitto /etc/mosquitto/ 2>/dev/null || true
 chown -R mosquitto:mosquitto /data/mosquitto/ 2>/dev/null || true
-# 再次确保文件权限正确（mosquitto 2.x 要求 0700）
 chmod 700 /etc/mosquitto/passwd 2>/dev/null || true
 chmod 700 /etc/mosquitto/acl 2>/dev/null || true
 
 # ---------- 6. 启动信息 ----------
 echo "[启动] 启动 mosquitto broker（前台模式）..."
-echo "[启动] 监听: 0.0.0.0:1883 (MQTT TCP)"
+echo "[启动] 监听: 0.0.0.0:${MQTT_PORT} (MQTT TCP)"
 
 echo ""
 echo "============================================"
 echo "  慧尖 LoRa 网关一体化插件已就绪"
 echo "============================================"
 echo ""
-echo "MQTT Broker: 0.0.0.0:1883"
+echo "MQTT Broker: 0.0.0.0:${MQTT_PORT}"
 echo "Ingress Web UI: 8099 (侧边栏)"
 echo "MQTT 用户名: ${USERNAME}"
 echo ""
 echo "LoRa 网关配置:"
 echo "  Broker 地址: HA 的 IP 地址"
-echo "  端口: 1883"
+echo "  端口: ${MQTT_PORT}"
 echo "  用户名: ${USERNAME}"
 echo "  密码: ${PASSWORD}"
 echo ""
 
 # ---------- 7. 自动配置 HA MQTT 集成（后台执行） ----------
+# 将端口传递给 auto_setup_mqtt.sh
+export MQTT_PORT
+export USERNAME
+export PASSWORD
+
 if [ "${AUTO_SETUP}" = "true" ]; then
     echo "============================================"
     echo "  自动配置 HA MQTT 集成..."
