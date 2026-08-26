@@ -171,7 +171,10 @@ class WindowControllerMQTTHandler:
         await self._subscribe_topics()
         
         # 启动定时检查任务，每30秒检查一次是否超时
-        self._check_task = self.hass.loop.create_task(self._check_gateway_timeout())
+        self._check_task = asyncio.create_task(
+            self._check_gateway_timeout(),
+            name=f"{DOMAIN}_check_timeout_{self.gateway_sn}"
+        )
         
         return True
     
@@ -400,7 +403,10 @@ class WindowControllerMQTTHandler:
         if self._reconnect_task and not self._reconnect_task.done():
             _LOGGER.debug("MQTT重连任务已在运行，跳过重复调度")
             return
-        self._reconnect_task = self.hass.loop.create_task(self._reconnect_mqtt())
+        self._reconnect_task = asyncio.create_task(
+            self._reconnect_mqtt(),
+            name=f"{DOMAIN}_reconnect_{self.gateway_sn}"
+        )
     
     async def _reconnect_mqtt(self):
         """MQTT重连逻辑 - 自适应重试策略，结合抖动和随机化"""
@@ -425,7 +431,10 @@ class WindowControllerMQTTHandler:
                             await self._check_task
                         except (asyncio.CancelledError, Exception):
                             pass
-                self._check_task = self.hass.loop.create_task(self._check_gateway_timeout())
+                self._check_task = asyncio.create_task(
+                    self._check_gateway_timeout(),
+                    name=f"{DOMAIN}_check_timeout_{self.gateway_sn}"
+                )
                 
                 _LOGGER.debug("MQTT重新连接成功")
                 return
