@@ -121,9 +121,11 @@ async def async_setup(hass: HomeAssistant, config: Dict[str, Any]) -> bool:
             mqtt_handler.pairing_active = True
             mqtt_handler._notify_status_change()
 
-            hass.async_create_task(
+            _pairing_status_task = hass.async_create_task(
                 gateway_data["device_manager"].update_gateway_status("pairing")
             )
+            # 任务引用存入条目 _bg_tasks，供卸载时统一取消
+            gateway_data.setdefault("_bg_tasks", []).append(_pairing_status_task)
 
             _LOGGER.info("已为网关 %s 发起配对，持续时间: %d秒", gateway_sn, duration)
 
@@ -131,11 +133,13 @@ async def async_setup(hass: HomeAssistant, config: Dict[str, Any]) -> bool:
                 mqtt_handler.pairing_timeout_handle = None
                 mqtt_handler.pairing_active = False
                 mqtt_handler._notify_status_change()
-                hass.async_create_task(
+                _status_restore_task = hass.async_create_task(
                     gateway_data["device_manager"].update_gateway_status(
                         "online" if mqtt_handler.connected else "offline"
                     )
                 )
+                # 任务引用存入条目 _bg_tasks，供卸载时统一取消
+                gateway_data.setdefault("_bg_tasks", []).append(_status_restore_task)
                 _LOGGER.info("配对模式已超时，恢复正常状态")
 
             mqtt_handler.pairing_timeout_handle = hass.loop.call_later(duration, pairing_timeout)
@@ -518,8 +522,11 @@ async def async_setup(hass: HomeAssistant, config: Dict[str, Any]) -> bool:
                         if identifier[0] == DOMAIN:
                             device_sn = identifier[1]
                             break
-            except Exception:
-                pass
+            except Exception as e:
+                # 保持韧性：注册表解析失败不阻断转移，但必须留下可排查日志
+                _LOGGER.warning(
+                    "通过设备注册表解析设备SN失败（将尝试其他方式）: %s", e, exc_info=True
+                )
 
         # 方法3：在所有设备管理器的设备列表中查找
         if not device_sn:
@@ -681,6 +688,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.data[DOMAIN][entry.entry_id]["gateway_name"] = gateway_name
         hass.data[DOMAIN][entry.entry_id]["_setup_in_progress"] = True
 
+        # 一体化插件：确保 MQTT 集成已建立连接（需要时按引导标记自动创建条目）。
+        # 必须在创建 MQTT 处理器之前完成，否则订阅会因 MQTT 未就绪而失败。
+        from .mqtt_bootstrap import ensure_mqtt_connection
+        await ensure_mqtt_connection(hass)
+
         # 创建设备管理器
         _LOGGER.debug("正在创建设备管理器...")
         device_manager = WindowControllerDeviceManager(hass, entry)
@@ -793,8 +805,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # P0 修复 Bug #1：注册选项更新监听器，使配置选项变更即时生效
         entry.async_on_unload(entry.add_update_listener(async_update_options))
 
-        # 创建后台任务，延迟触发发现
-        hass.async_create_task(_background_initialization(mqtt_handler), eager_start=True)
+        # 创建后台任务，延迟触发发现；任务引用存入 _bg_tasks 供卸载时取消，
+        # 避免任务在条目卸载/重载后继续存活并访问已清理的对象
+        _bg_task = hass.async_create_task(
+            _background_initialization(hass, entry.entry_id, mqtt_handler),
+            eager_start=True,
+            name=f"{DOMAIN}_background_init_{entry.entry_id}",
+        )
+        hass.data[DOMAIN][entry.entry_id].setdefault("_bg_tasks", []).append(_bg_task)
 
         # ============ 自动设备迁移（替换网关流程）暂禁用 ============
         # 迁移功能先不使用：即使 entry.data 中带 migration_info（替换网关流程
@@ -872,6 +890,20 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             stop_unsub()
         except Exception as e:
             _LOGGER.debug("取消停止监听器时出错: %s", e)
+
+    # 1.5 取消后台任务（_bg_tasks），避免任务在卸载后继续执行
+    for bg_task in data.get("_bg_tasks", []):
+        if bg_task and not bg_task.done():
+            try:
+                bg_task.cancel()
+                try:
+                    await bg_task
+                except asyncio.CancelledError:
+                    _LOGGER.debug("后台任务已取消")
+                except Exception as e:
+                    _LOGGER.debug("后台任务异常: %s", e)
+            except Exception as e:
+                _LOGGER.warning("取消后台任务时出错: %s", e)
 
     # 2. 先停止所有定时任务和监听器
     for unsub in data.get("unsub_listeners", []):
@@ -1029,10 +1061,15 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
         _LOGGER.error("删除网关 %s 的子设备注册表条目失败: %s", gateway_sn, e)
 
 
-async def _background_initialization(mqtt_handler):
+async def _background_initialization(hass, entry_id, mqtt_handler):
     """后台初始化任务，不阻塞主流程"""
     try:
         await asyncio.sleep(0.5)
+        # P0 守卫：条目已被卸载/重载（hass.data 中已无该条目数据）时
+        # 直接返回，不访问已清理的 mqtt_handler 等对象。
+        if DOMAIN not in hass.data or entry_id not in hass.data[DOMAIN]:
+            _LOGGER.debug("后台初始化任务：条目 %s 已卸载，跳过初始化", entry_id)
+            return
         _LOGGER.debug("后台任务：正在触发快速设备发现...")
         await mqtt_handler.fast_discovery()
         _LOGGER.debug("后台任务：初始化完成")

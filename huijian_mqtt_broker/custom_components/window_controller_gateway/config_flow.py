@@ -8,6 +8,7 @@ from typing import Any, Dict, Optional
 from homeassistant import config_entries
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.data_entry_flow import FlowResult
+from homeassistant.exceptions import ConfigEntryNotReady
 import homeassistant.helpers.config_validation as cv
 from homeassistant.components import mqtt
 
@@ -19,6 +20,7 @@ from .const import (
     GATEWAY_CONNECT_TIMEOUT
 )
 from .mqtt_handler import WindowControllerMQTTHandler
+from .mqtt_bootstrap import ensure_mqtt_connection
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -96,6 +98,12 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
                 # 测试网关连接性
                 try:
+                    # 一体化插件：若存在引导标记且尚无 MQTT 条目，先自动创建
+                    try:
+                        await ensure_mqtt_connection(self.hass)
+                    except ConfigEntryNotReady:
+                        errors["base"] = "mqtt_not_available"
+
                     # MQTT 集成未启用是硬性前置条件，直接报错（不可跳过）
                     if not self.hass.data.get("mqtt"):
                         errors["base"] = "mqtt_not_available"
