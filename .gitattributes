@@ -14,6 +14,9 @@ acl text eol=lf
 # Markdown 使用本地默认换行符
 *.md text=auto
 
+# HTML 使用 LF
+*.html text eol=lf
+
 # 二进制文件
 *.png binary
 *.base64 text eol=lf

@@ -6,15 +6,13 @@
 #   1. 从插件配置读取 username / password / mdns_hostname
 #   2. 配置并启动 avahi-daemon（mDNS 广播 <hostname>.local）
 #   3. 从插件配置读取 username / password，动态生成 mosquitto 密码文件
-#   4. 创建持久化目录
-#   5. 自动安装慧尖网关集成到 HA custom_components（如果启用）
-#   6. 后台启动 mosquitto 检测就绪
-#   7. 自动配置 HA MQTT 集成（如果启用）
-#   8. 前台运行 mosquitto（Docker CMD 要求前台运行）
-#
-# MQTT 主题协议（与 ha-window-controller-gateway 集成 const.py 完全一致）：
-#   gateway/{gateway_sn}/req   — HA 发布命令，LoRa 网关订阅
-#   gateway/rpt_rsp            — LoRa 网关发布上报，HA 订阅
+#   4. 动态生成 ACL 文件
+#   5. 创建持久化目录
+#   6. 启动 nginx（Ingress Web UI）
+#   7. 自动安装慧尖网关集成到 HA custom_components（如果启用）
+#   8. 后台启动 mosquitto 检测就绪
+#   9. 自动配置 HA MQTT 集成（如果启用）
+#  10. 前台运行 mosquitto（Docker CMD 要求前台运行）
 # =============================================================================
 
 set -e
@@ -39,9 +37,14 @@ echo "[mDNS] 配置 avahi-daemon..."
 
 # avahi 需要 dbus 运行
 mkdir -p /run/dbus
-dbus-daemon --system --fork 2>/dev/null || true
+if ! pgrep dbus-daemon >/dev/null 2>&1; then
+    dbus-daemon --system --fork 2>/dev/null || {
+        echo "[mDNS] dbus-daemon 启动失败"
+    }
+fi
 
 # 生成 avahi 配置文件
+mkdir -p /etc/avahi
 cat > /etc/avahi/avahi-daemon.conf <<EOF
 [server]
 host-name=${MDNS_HOSTNAME}
@@ -66,30 +69,41 @@ rlimit-stack=4194304
 rlimit-nproc=3
 EOF
 
-# 启动 avahi-daemon
-avahi-daemon -D 2>/dev/null || {
+# 启动 avahi-daemon（重试机制）
+AVAHIPID=""
+for i in 1 2 3; do
+    if avahi-daemon -D 2>/dev/null; then
+        AVAHIPID="ok"
+        break
+    fi
+    echo "[mDNS] avahi-daemon 启动重试 ${i}/3..."
+    sleep 1
+done
+
+if [ -n "${AVAHIPID}" ]; then
+    sleep 1
+    if avahi-resolve-host-name "${MDNS_HOSTNAME}.local" >/dev/null 2>&1; then
+        echo "[mDNS] OK — ${MDNS_HOSTNAME}.local 可解析"
+    else
+        echo "[mDNS] avahi-daemon 已启动，广播 ${MDNS_HOSTNAME}.local"
+    fi
+else
     echo "[mDNS] avahi-daemon 启动失败，LoRa 网关请使用 HA 的 IP 地址"
     echo "[mDNS] 而非 ${MDNS_HOSTNAME}.local"
-}
-
-# 等待 avahi 就绪并验证
-sleep 1
-if avahi-resolve-host-name "${MDNS_HOSTNAME}.local" >/dev/null 2>&1; then
-    echo "[mDNS] OK — ${MDNS_HOSTNAME}.local 可解析"
-else
-    # avahi-resolve 可能无法在容器内自解析，但外部设备可以
-    echo "[mDNS] avahi-daemon 已启动，广播 ${MDNS_HOSTNAME}.local"
 fi
 echo ""
 
 # ---------- 2. 生成密码文件 ----------
 PASSWD_FILE="/etc/mosquitto/passwd"
 
+# mosquitto_passwd 需要以 root 运行，生成的文件 mosquitto 用户需要可读
 if ! mosquitto_passwd -b -c "${PASSWD_FILE}" "${USERNAME}" "${PASSWORD}" 2>/dev/null; then
     echo "[错误] 创建用户 ${USERNAME} 密码失败"
     exit 1
 fi
-chmod 600 "${PASSWD_FILE}"
+# 密码文件需要 mosquitto 用户可读
+chmod 644 "${PASSWD_FILE}"
+chown mosquitto:mosquitto "${PASSWD_FILE}" 2>/dev/null || true
 echo "[OK] 密码文件已生成: ${PASSWD_FILE}"
 
 # ---------- 2b. 动态生成 ACL 文件（根据配置的用户名） ----------
@@ -113,12 +127,21 @@ topic readwrite test/#
 topic read \$SYS/#
 EOF
 chmod 644 "${ACL_FILE}"
+chown mosquitto:mosquitto "${ACL_FILE}" 2>/dev/null || true
 echo "[OK] ACL 文件已生成: ${ACL_FILE} (用户: ${USERNAME})"
 
 # ---------- 3. 创建持久化目录 ----------
 mkdir -p /data/mosquitto
 chmod 755 /data/mosquitto
+chown mosquitto:mosquitto /data/mosquitto 2>/dev/null || true
 echo "[OK] 持久化目录已创建: /data/mosquitto"
+
+# ---------- 3b. 启动 nginx（Ingress Web UI） ----------
+echo "[Ingress] 启动 nginx Web UI..."
+mkdir -p /run/nginx
+nginx 2>/dev/null || {
+    echo "[Ingress] nginx 启动失败，侧边栏可能不可用"
+}
 
 # ---------- 4. 自动安装慧尖网关集成 ----------
 if [ "${INSTALL_INTEGRATION}" = "true" ]; then
@@ -135,10 +158,19 @@ if [ "${INSTALL_INTEGRATION}" = "true" ]; then
     fi
 
     if [ -d "${HA_CONFIG_DIR}" ]; then
-        INTEGRATION_SRC="/data/custom_components/window_controller_gateway"
-        INTEGRATION_DST="${HA_CONFIG_DIR}/custom_components/window_controller_gateway"
+        # 集成代码在 Dockerfile 中 COPY 到 /data/custom_components
+        # 但运行时 /data 是 HA 挂载的持久化卷，会覆盖镜像中的内容
+        # 所以需要从镜像中备份的路径查找
+        INTEGRATION_SRC=""
+        for src in /data/custom_components/window_controller_gateway /usr/share/custom_components/window_controller_gateway; do
+            if [ -d "${src}" ]; then
+                INTEGRATION_SRC="${src}"
+                break
+            fi
+        done
 
-        if [ -d "${INTEGRATION_SRC}" ]; then
+        if [ -n "${INTEGRATION_SRC}" ]; then
+            INTEGRATION_DST="${HA_CONFIG_DIR}/custom_components/window_controller_gateway"
             mkdir -p "${HA_CONFIG_DIR}/custom_components"
 
             # 检查版本，仅在版本更新时才覆盖
@@ -181,7 +213,8 @@ if [ "${INSTALL_INTEGRATION}" = "true" ]; then
             echo "[集成] OK — 网关集成已就绪"
             echo "[集成] 重启 HA 后，设置 → 设备与服务 → 添加集成 → 搜索「慧尖」"
         else
-            echo "[集成] 警告: 集成源码目录不存在: ${INTEGRATION_SRC}"
+            echo "[集成] 警告: 集成源码目录不存在"
+            echo "[集成] 已搜索: /data/custom_components/ 和 /usr/share/custom_components/"
         fi
     else
         echo "[集成] 警告: HA 配置目录未找到（/homeassistant 和 /config 均不存在）"
@@ -195,12 +228,16 @@ echo "[启动] 正在启动 mosquitto broker..."
 echo "[启动] 监听: 0.0.0.0:1883 (MQTT TCP)"
 echo "[启动] ACL: gateway/+/req, gateway/rpt_rsp"
 
+# 确保 mosquitto 用户有权限读取配置目录
+chown -R mosquitto:mosquitto /etc/mosquitto/ 2>/dev/null || true
+
+# 后台启动 mosquitto
 mosquitto -c /etc/mosquitto/mosquitto.conf -d
 
 # 等待端口就绪
 echo -n "[启动] 等待 broker 就绪..."
 RETRY=0
-MAX_RETRIES=10
+MAX_RETRIES=20
 while [ ${RETRY} -lt ${MAX_RETRIES} ]; do
     if mosquitto_pub -h 127.0.0.1 -p 1883 -u "${USERNAME}" -P "${PASSWORD}" \
         -t "test/ping" -m "ok" -q 0 2>/dev/null; then
@@ -215,6 +252,11 @@ done
 if [ ${RETRY} -ge ${MAX_RETRIES} ]; then
     echo " FAILED"
     echo "[错误] Broker 启动失败"
+    # 输出 mosquitto 日志用于调试
+    echo "[调试] mosquitto 进程状态:"
+    ps aux | grep mosquitto || echo "  mosquitto 未运行"
+    echo "[调试] 端口 1883 状态:"
+    netstat -tlnp 2>/dev/null | grep 1883 || echo "  端口 1883 未监听"
     # 停止后台进程
     pkill mosquitto 2>/dev/null || true
     exit 1
@@ -227,6 +269,7 @@ echo "============================================"
 echo ""
 echo "MQTT Broker: 0.0.0.0:1883"
 echo "mDNS 主机名: ${MDNS_HOSTNAME}.local"
+echo "Ingress Web UI: 8099 (侧边栏)"
 echo "MQTT 用户名: ${USERNAME}"
 echo ""
 echo "LoRa 网关配置:"
