@@ -1,9 +1,4 @@
----
-# 慧尖 HA 插件仓库索引
-# HA 加载此仓库后会在加载项商店中展示以下插件
-#
-# target  : 插件目录名（相对于仓库根目录）
-# image   : 预构建的 Docker 镜像地址（可选，不填则 HA 本地构建）
-huijian_mqtt_broker:
-  target: huijian_mqtt_broker
-  image: ghcr.io/fangwenyi-dev/huijian-mqtt-broker
+# https://developers.home-assistant.io/docs/apps/repository#repository-configuration
+name: 慧尖 HA 网关插件仓库
+url: 'https://github.com/fangwenyi-dev/ha-gateway-plugin'
+maintainer: fangwenyi-dev
