@@ -113,12 +113,24 @@ server {
     }
 
     # 代理 HA Supervisor API — token 在此注入，前端无需携带
+    # /api/ha/ → HA Core REST API（设备、服务、实体等）
     location /api/ha/ {
         proxy_pass http://${SUPERVISOR_HOST}/core/api/;
         proxy_set_header Authorization "Bearer ${HA_SUPERVISOR_TOKEN}";
         proxy_set_header Content-Type "application/json";
         proxy_set_header Accept "application/json";
         proxy_read_timeout 30s;
+        proxy_connect_timeout 5s;
+        proxy_ssl_verify off;
+    }
+
+    # /api/supervisor/ → Supervisor API（插件更新、重启等）
+    location /api/supervisor/ {
+        proxy_pass http://${SUPERVISOR_HOST}/supervisor/;
+        proxy_set_header Authorization "Bearer ${HA_SUPERVISOR_TOKEN}";
+        proxy_set_header Content-Type "application/json";
+        proxy_set_header Accept "application/json";
+        proxy_read_timeout 120s;
         proxy_connect_timeout 5s;
         proxy_ssl_verify off;
     }

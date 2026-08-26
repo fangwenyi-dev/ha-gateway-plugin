@@ -5,6 +5,19 @@
 
 ## [1.1.9] - 2026-08-26
 
+### 新功能
+- **Web UI 一键升级**：检查更新发现新版本时，点击「一键升级」按钮直接调用 Supervisor API 更新插件，无需手动操作 HA 插件商店
+- **nginx 新增 Supervisor API 代理**：`/api/supervisor/` 代理到 `http://supervisor/supervisor/`，支持前端直接调用插件更新/重启等 Supervisor 端点
+- **GitHub API 代理修复**：检查更新改为通过 nginx `/api/github/` 代理，避免 Ingress iframe 中 CSP 拦截外部 `api.github.com` 请求
+
+### 优化（Web UI 全面重构）
+- **CSS 变量化**：使用 `:root` CSS 变量统一管理颜色，全站一致
+- **配色现代化**：主色改为 #5b6ee1，状态色用绿/黄/红+对应浅色背景，视觉层次更清晰
+- **卡片/按钮/徽章重设计**：圆角、阴影、hover 过渡效果统一
+- **状态指示器优化**：带 `box-shadow` 光环的圆点，更醒目
+- **响应式适配**：窄屏状态网格自动折叠为单列
+- **代码精简**：`checkServiceStatus` 和 `loadDeviceState` 去重，逻辑更紧凑
+
 ### 修复（关键 - Web UI 状态检测三项全失败）
 - **MQTT Broker 状态"无法连接"**：`/api/status` 由 nginx 直接返回，但 nginx 启动失败时不可达。添加 `nginx -t` 诊断输出，同时 `add_header` 添加 `always` 确保错误响应也带 Content-Type
 - **网关集成/HA MQTT 检测"检测失败"**：nginx 代理到 Supervisor API 时 `supervisor` 主机名在 `full_access: true` 模式下可能无法解析。添加 `getent hosts` DNS 解析检测，失败时兜底为 Supervisor 固定 IP `172.30.32.2`
@@ -16,7 +29,7 @@
 
 ### 改进（前端容错）
 - **`haApi` 函数不再 throw**：改为始终返回 `resp` 对象，由调用方检查 `resp.ok` 和 `resp.status`，可区分 401（认证失败）、502（代理连接失败）等不同错误
-- **`checkServiceStatus` 错误分类**：401 显示"认证失败"（红色），代理连接异常显示"代理连接失败"（红色），其他 HTTP 错误显示状态码（黄色）
+- **`checkServiceStatus` 错误分类**：401 显示"认证失败"（红色），代理连接异常显示"代理失败"（红色），其他 HTTP 错误显示状态码（黄色）
 - **所有 `haApi` 调用方添加 `resp.ok` 检查**：`loadGateways`、`loadGatewayDevices`、`startPairing`、`controlDevice`、`controlDevicePosition` 均添加
 
 ## [1.1.8] - 2026-08-26

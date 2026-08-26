@@ -5,112 +5,158 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>慧尖 LoRa 网关</title>
     <style>
+        :root {
+            --primary: #5b6ee1;
+            --primary-dark: #4451b5;
+            --primary-light: #818cf8;
+            --bg: #f5f6fa;
+            --card-bg: #ffffff;
+            --text: #1a1a2e;
+            --text-muted: #6b7280;
+            --border: #e5e7eb;
+            --green: #10b981;
+            --green-bg: #ecfdf5;
+            --red: #ef4444;
+            --red-bg: #fef2f2;
+            --yellow: #f59e0b;
+            --yellow-bg: #fffbeb;
+            --blue: #3b82f6;
+            --blue-bg: #eff6ff;
+            --radius: 12px;
+            --shadow: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+            --shadow-md: 0 4px 6px -1px rgba(0,0,0,0.08), 0 2px 4px -1px rgba(0,0,0,0.04);
+        }
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
-            background: #f0f2f5; color: #1a1a2e; padding: 12px; max-width: 900px; margin: 0 auto;
+            background: var(--bg); color: var(--text); padding: 12px; max-width: 860px; margin: 0 auto;
+            -webkit-font-smoothing: antialiased;
         }
+        /* ===== Header ===== */
         .header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white;
-            padding: 20px 24px; border-radius: 14px; margin-bottom: 14px;
+            background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
+            color: white; padding: 20px 24px; border-radius: var(--radius); margin-bottom: 12px;
             display: flex; justify-content: space-between; align-items: center;
+            box-shadow: var(--shadow-md);
         }
-        .header h1 { font-size: 20px; }
-        .header .ver { font-size: 12px; opacity: 0.8; }
-        .header .actions { display: flex; gap: 8px; }
+        .header h1 { font-size: 20px; font-weight: 700; }
+        .header .ver { font-size: 11px; opacity: 0.75; margin-top: 2px; }
+        .header .actions { display: flex; gap: 6px; }
         .btn {
-            padding: 6px 14px; border-radius: 8px; border: none; font-size: 13px;
-            cursor: pointer; font-weight: 600; transition: all .2s;
+            padding: 7px 16px; border-radius: 8px; border: none; font-size: 13px;
+            cursor: pointer; font-weight: 600; transition: all .15s; display: inline-flex;
+            align-items: center; gap: 4px;
         }
-        .btn-primary { background: white; color: #667eea; }
+        .btn-primary { background: white; color: var(--primary); }
         .btn-primary:hover { background: #f0f0ff; }
-        .btn-success { background: #4caf50; color: white; }
-        .btn-success:hover { background: #45a049; }
-        .btn-danger { background: #f44336; color: white; }
-        .btn-danger:hover { background: #d32f2f; }
-        .btn-warn { background: #ff9800; color: white; }
-        .btn-warn:hover { background: #e68a00; }
-        .btn-sm { padding: 4px 10px; font-size: 12px; }
-        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .btn-success { background: var(--green); color: white; }
+        .btn-success:hover { background: #059669; }
+        .btn-danger { background: var(--red); color: white; }
+        .btn-danger:hover { background: #dc2626; }
+        .btn-warn { background: var(--yellow); color: white; }
+        .btn-warn:hover { background: #d97706; }
+        .btn-sm { padding: 5px 12px; font-size: 12px; }
+        .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+        /* ===== Card ===== */
         .card {
-            background: white; border-radius: 12px; padding: 16px 18px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.08); margin-bottom: 14px;
+            background: var(--card-bg); border-radius: var(--radius); padding: 16px 18px;
+            box-shadow: var(--shadow); margin-bottom: 12px;
         }
         .card-title {
-            font-size: 14px; font-weight: 700; color: #555; margin-bottom: 12px;
+            font-size: 13px; font-weight: 700; color: var(--text-muted); margin-bottom: 14px;
             display: flex; align-items: center; gap: 6px;
-            border-bottom: 2px solid #f0f0f0; padding-bottom: 8px;
         }
-        .status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+        /* ===== Status Grid ===== */
+        .status-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
         .status-item {
-            display: flex; flex-direction: column; align-items: center;
-            padding: 10px; border-radius: 8px; background: #f8f9fa;
+            display: flex; flex-direction: column; align-items: center; text-align: center;
+            padding: 14px 8px; border-radius: 10px; background: var(--bg); transition: all .2s;
         }
-        .status-item .dot { width: 8px; height: 8px; border-radius: 50%; margin-bottom: 6px; }
-        .dot-ok { background: #4caf50; } .dot-err { background: #f44336; } .dot-warn { background: #ff9800; }
-        .status-item .label { font-size: 12px; color: #888; }
-        .status-item .value { font-size: 13px; font-weight: 600; margin-top: 2px; }
-        .gateway-item { border: 1px solid #e0e0e0; border-radius: 10px; padding: 12px; margin-bottom: 10px; }
-        .gateway-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
-        .gateway-name { font-size: 15px; font-weight: 600; }
-        .gateway-sn { font-size: 12px; color: #888; margin-left: 8px; }
-        .device-list { margin-top: 10px; }
+        .status-item .dot { width: 10px; height: 10px; border-radius: 50%; margin-bottom: 8px; }
+        .dot-ok { background: var(--green); box-shadow: 0 0 0 3px var(--green-bg); }
+        .dot-err { background: var(--red); box-shadow: 0 0 0 3px var(--red-bg); }
+        .dot-warn { background: var(--yellow); box-shadow: 0 0 0 3px var(--yellow-bg); }
+        .status-item .label { font-size: 11px; color: var(--text-muted); margin-bottom: 2px; }
+        .status-item .value { font-size: 13px; font-weight: 700; }
+        /* ===== Gateway ===== */
+        .gateway-item {
+            border: 1px solid var(--border); border-radius: 10px; padding: 14px; margin-bottom: 10px;
+            transition: border-color .2s;
+        }
+        .gateway-item:hover { border-color: var(--primary-light); }
+        .gateway-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+        .gateway-name { font-size: 15px; font-weight: 700; }
+        .gateway-sn { font-size: 11px; color: var(--text-muted); margin-left: 8px; }
+        .device-list { margin-top: 8px; }
         .device-item {
             display: flex; align-items: center; justify-content: space-between;
-            padding: 8px 10px; border-radius: 8px; background: #f8f9fa;
-            margin-bottom: 6px; flex-wrap: wrap; gap: 8px;
+            padding: 10px 12px; border-radius: 8px; background: var(--bg);
+            margin-bottom: 6px; flex-wrap: wrap; gap: 8px; transition: background .15s;
         }
-        .device-info { flex: 1; min-width: 120px; }
+        .device-item:hover { background: #eef0f4; }
+        .device-info { flex: 1; min-width: 100px; }
         .device-name { font-size: 13px; font-weight: 600; }
-        .device-sn { font-size: 11px; color: #999; }
-        .device-status { font-size: 12px; margin-top: 2px; }
+        .device-sn { font-size: 10px; color: var(--text-muted); }
+        .device-status { font-size: 11px; margin-top: 3px; color: var(--text-muted); }
         .device-controls { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; }
-        .position-slider { width: 100px; height: 24px; }
-        .badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 600; }
-        .badge-ok { background: #e8f5e9; color: #2e7d32; }
-        .badge-warn { background: #fff3e0; color: #e65100; }
-        .badge-err { background: #ffebee; color: #c62828; }
-        .badge-info { background: #e3f2fd; color: #1565c0; }
-        .badge-gray { background: #f0f0f0; color: #666; }
+        .position-slider { width: 90px; height: 22px; }
+        /* ===== Badge ===== */
+        .badge {
+            display: inline-flex; align-items: center; padding: 3px 10px; border-radius: 20px;
+            font-size: 11px; font-weight: 600;
+        }
+        .badge-ok { background: var(--green-bg); color: #065f46; }
+        .badge-warn { background: var(--yellow-bg); color: #92400e; }
+        .badge-err { background: var(--red-bg); color: #991b1b; }
+        .badge-info { background: var(--blue-bg); color: #1e40af; }
+        .badge-gray { background: #f3f4f6; color: #6b7280; }
+        /* ===== Update ===== */
         .update-box {
-            background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%);
-            border-radius: 10px; padding: 14px; margin-top: 10px;
+            background: linear-gradient(135deg, var(--blue-bg) 0%, #dbeafe 100%);
+            border-radius: 10px; padding: 16px; margin-top: 10px;
             display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;
         }
         .update-info { flex: 1; min-width: 200px; }
-        .update-title { font-size: 14px; font-weight: 600; color: #1565c0; }
-        .update-desc { font-size: 12px; color: #555; margin-top: 4px; }
-        .loading { text-align: center; padding: 20px; color: #999; }
+        .update-title { font-size: 14px; font-weight: 700; color: var(--blue); }
+        .update-desc { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+        /* ===== Misc ===== */
+        .loading { text-align: center; padding: 20px; color: var(--text-muted); }
         .spinner {
             display: inline-block; width: 24px; height: 24px;
-            border: 3px solid #f0f0f0; border-top: 3px solid #667eea;
-            border-radius: 50%; animation: spin 1s linear infinite;
+            border: 3px solid var(--border); border-top: 3px solid var(--primary);
+            border-radius: 50%; animation: spin 0.8s linear infinite;
         }
         @keyframes spin { to { transform: rotate(360deg); } }
         .toast {
-            position: fixed; bottom: 20px; right: 20px; padding: 12px 20px;
-            border-radius: 10px; color: white; font-size: 14px; z-index: 9999;
-            animation: slideIn .3s ease; max-width: 350px;
+            position: fixed; bottom: 24px; right: 24px; padding: 12px 20px;
+            border-radius: 10px; color: white; font-size: 13px; z-index: 9999;
+            animation: slideIn .3s ease; max-width: 360px; box-shadow: var(--shadow-md);
         }
         @keyframes slideIn { from { transform: translateX(400px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
-        .toast-ok { background: #4caf50; } .toast-err { background: #f44336; } .toast-warn { background: #ff9800; }
-        .info-box { background: #e3f2fd; border-left: 4px solid #2196f3; padding: 12px; border-radius: 8px; margin-top: 10px; }
-        .info-box h3 { font-size: 13px; color: #1565c0; margin-bottom: 4px; }
-        .info-box p { font-size: 12px; color: #555; line-height: 1.5; }
+        .toast-ok { background: var(--green); }
+        .toast-err { background: var(--red); }
+        .toast-warn { background: var(--yellow); }
+        .info-box { background: var(--blue-bg); border-left: 4px solid var(--blue); padding: 12px; border-radius: 8px; margin-top: 10px; }
+        .info-box h3 { font-size: 12px; color: var(--blue); margin-bottom: 6px; font-weight: 700; }
+        .info-box p { font-size: 12px; color: var(--text-muted); line-height: 1.6; }
         .info-box code {
-            background: #fff; padding: 1px 5px; border-radius: 4px;
-            font-family: "SF Mono", Consolas, monospace; font-size: 12px;
+            background: white; padding: 2px 6px; border-radius: 4px;
+            font-family: "SF Mono", Consolas, monospace; font-size: 11px; color: var(--text);
         }
-        .footer { text-align: center; padding: 16px; color: #aaa; font-size: 11px; }
-        .empty-state { text-align: center; padding: 30px; color: #999; }
-        .empty-state .icon { font-size: 32px; margin-bottom: 8px; }
+        .footer { text-align: center; padding: 16px; color: #b0b0b0; font-size: 11px; }
+        .empty-state { text-align: center; padding: 30px; color: var(--text-muted); }
+        .empty-state .icon { font-size: 36px; margin-bottom: 8px; }
+        .empty-state .hint { font-size: 12px; margin-top: 8px; }
+        @media (max-width: 520px) {
+            .status-grid { grid-template-columns: 1fr; }
+        }
     </style>
 </head>
 <body>
     <div class="header">
         <div>
             <h1>慧尖 LoRa 网关</h1>
-            <span class="ver" id="addonVersion">v1.1.9</span>
+            <div class="ver" id="addonVersion">v1.1.9</div>
         </div>
         <div class="actions">
             <button class="btn btn-primary" onclick="checkForUpdates()">检查更新</button>
@@ -119,7 +165,7 @@
     </div>
 
     <div class="card">
-        <div class="card-title">🔌 服务状态</div>
+        <div class="card-title">服务状态</div>
         <div class="status-grid" id="statusGrid">
             <div class="status-item">
                 <div class="dot dot-warn"></div>
@@ -140,35 +186,36 @@
     </div>
 
     <div class="card">
-        <div class="card-title">📡 网关与子设备</div>
+        <div class="card-title">网关与子设备</div>
         <div id="gatewayContainer">
             <div class="loading"><div class="spinner"></div><p>正在加载网关信息...</p></div>
         </div>
     </div>
 
     <div class="card">
-        <div class="card-title">🔗 连接信息</div>
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+        <div class="card-title">连接信息</div>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px;">
             <div>
-                <span style="font-size:12px;color:#888;">MQTT 地址</span><br>
-                <strong id="mqttAddr">huijian.local:2022</strong>
+                <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">MQTT 地址</div>
+                <strong style="font-size:13px;">huijian.local:2022</strong>
             </div>
             <div>
-                <span style="font-size:12px;color:#888;">用户名/密码</span><br>
-                <strong id="mqttCreds">huijian / huijian2022</strong>
+                <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">用户名 / 密码</div>
+                <strong style="font-size:13px;">huijian / huijian2022</strong>
             </div>
         </div>
         <div class="info-box">
-            <h3>💡 LoRa 网关配置</h3>
+            <h3>LoRa 网关配置说明</h3>
             <p>
                 Broker: <code>huijian.local</code>（mDNS）或 HA 的 IP 地址<br>
-                端口: <code>2022</code> | 用户名: <code>huijian</code> | 密码: <code>huijian2022</code>
+                端口: <code>2022</code> | 用户名: <code>huijian</code> | 密码: <code>huijian2022</code><br>
+                网关上电后自动发现，无需手动填写 SN
             </p>
         </div>
     </div>
 
     <div class="card" id="updateCard" style="display:none;">
-        <div class="card-title">🔄 版本更新</div>
+        <div class="card-title">版本更新</div>
         <div id="updateContent"></div>
     </div>
 
@@ -177,8 +224,6 @@
     </div>
 
     <script>
-        // ========== 全局变量 ==========
-        // HA Ingress 模式下不需要前端 token，Nginx 代理已注入 SUPERVISOR_TOKEN
         let CURRENT_VERSION = '1.1.9';
         const DOMAIN = 'window_controller_gateway';
 
@@ -220,66 +265,45 @@
             } catch (e) {
                 setStatusDot('mqttStatus', 'err', '无法连接');
             }
-
-            // 2. 网关集成检测 — 通过 nginx 代理调用 HA API
+            // 2. 网关集成检测
             try {
                 const resp = await haApi('/config/config_entries/entry?domain=' + DOMAIN);
                 if (!resp.ok) {
-                    if (resp.status === 401) {
-                        setStatusDot('integrationStatus', 'err', '认证失败');
-                    } else {
-                        setStatusDot('integrationStatus', 'warn', 'HTTP ' + resp.status);
-                    }
+                    setStatusDot('integrationStatus', 'err', resp.status === 401 ? '认证失败' : 'HTTP ' + resp.status);
                 } else {
                     const entries = await resp.json();
-                    if (entries && entries.length > 0) {
-                        setStatusDot('integrationStatus', 'ok', '已安装');
-                    } else {
-                        setStatusDot('integrationStatus', 'warn', '未安装');
-                    }
+                    setStatusDot('integrationStatus', entries && entries.length > 0 ? 'ok' : 'warn',
+                        entries && entries.length > 0 ? '已安装' : '未安装');
                 }
             } catch (e) {
-                setStatusDot('integrationStatus', 'err', '代理连接失败');
+                setStatusDot('integrationStatus', 'err', '代理失败');
             }
-
             // 3. HA MQTT 集成检测
             try {
                 const resp = await haApi('/config/config_entries/entry?domain=mqtt');
                 if (!resp.ok) {
-                    if (resp.status === 401) {
-                        setStatusDot('haMqttStatus', 'err', '认证失败');
-                    } else {
-                        setStatusDot('haMqttStatus', 'warn', 'HTTP ' + resp.status);
-                    }
+                    setStatusDot('haMqttStatus', 'err', resp.status === 401 ? '认证失败' : 'HTTP ' + resp.status);
                 } else {
                     const entries = await resp.json();
-                    if (entries && entries.length > 0) {
-                        setStatusDot('haMqttStatus', 'ok', '已配置');
-                    } else {
-                        setStatusDot('haMqttStatus', 'warn', '未配置');
-                    }
+                    setStatusDot('haMqttStatus', entries && entries.length > 0 ? 'ok' : 'warn',
+                        entries && entries.length > 0 ? '已配置' : '未配置');
                 }
             } catch (e) {
-                setStatusDot('haMqttStatus', 'err', '代理连接失败');
+                setStatusDot('haMqttStatus', 'err', '代理失败');
             }
         }
 
         function setStatusDot(elementId, status, text) {
             const el = document.getElementById(elementId);
             el.textContent = text;
-            const dot = el.parentElement.querySelector('.dot');
-            dot.className = 'dot dot-' + status;
+            el.parentElement.querySelector('.dot').className = 'dot dot-' + status;
         }
 
         // ========== HA API 调用 ==========
-        // 通过 Nginx /api/ha/ 代理，token 已在 Nginx 配置中注入
-        // 注意：resp.ok 为 false 时直接返回 resp（不 throw），由调用方处理错误状态码
         async function haApi(path, method = 'GET', body = null) {
-            const opts = { method: method, headers: { 'Content-Type': 'application/json' } };
+            const opts = { method, headers: { 'Content-Type': 'application/json' } };
             if (body) opts.body = JSON.stringify(body);
-            // Nginx proxy_pass 末尾有 /，所以 /api/ha/config/xxx → /core/api/config/xxx
-            const resp = await fetch('/api/ha/' + path, opts);
-            return resp;
+            return await fetch('/api/ha/' + path, opts);
         }
 
         // ========== 加载网关列表 ==========
@@ -290,7 +314,7 @@
                 if (!resp.ok) throw new Error('HA API ' + resp.status);
                 const entries = await resp.json();
                 if (!entries || entries.length === 0) {
-                    container.innerHTML = '<div class="empty-state"><div class="icon">📡</div><p>暂无网关</p><p style="font-size:12px;margin-top:8px;">LoRa 网关上电后自动发现，或手动添加集成</p></div>';
+                    container.innerHTML = '<div class="empty-state"><div class="icon">📡</div><p>暂无网关</p><p class="hint">LoRa 网关上电后自动发现，或手动添加集成</p></div>';
                     return;
                 }
                 let html = '';
@@ -304,7 +328,7 @@
                     await loadGatewayDevices(entry.entry_id, entry.data.gateway_sn);
                 }
             } catch (e) {
-                container.innerHTML = '<div class="empty-state"><div class="icon">📡</div><p>无法连接 HA API</p><p style="font-size:12px;margin-top:8px;">请确保通过 HA 侧边栏访问</p></div><div class="info-box"><h3>💡 使用说明</h3><p>1. LoRa 网关上电后会自动发现<br>2. 在网关设备上点击「配对」按钮添加子设备<br>3. 在 HA 设备页面控制子设备</p></div>';
+                container.innerHTML = '<div class="empty-state"><div class="icon">📡</div><p>无法连接 HA API</p><p class="hint">请确保通过 HA 侧边栏访问</p></div><div class="info-box"><h3>使用说明</h3><p>1. LoRa 网关上电后会自动发现<br>2. 在网关设备上点击「配对」按钮添加子设备<br>3. 在 HA 设备页面控制子设备</p></div>';
             }
         }
 
@@ -317,7 +341,7 @@
                 '<span class="gateway-name">' + safeName + '</span>' +
                 '<span class="gateway-sn">SN: ' + safeSn + '</span>' +
                 '</div><div>' +
-                '<span class="badge badge-info" id="gw-status-' + safeEntryId + '">状态: 检测中</span>' +
+                '<span class="badge badge-info" id="gw-status-' + safeEntryId + '">检测中</span>' +
                 '<button class="btn btn-success btn-sm" onclick="startPairing(\'' + safeEntryId + '\',\'' + safeSn + '\')" style="margin-left:8px;">配对</button>' +
                 '</div></div>' +
                 '<div class="device-list" id="devices-' + safeEntryId + '"><div class="loading"><div class="spinner" style="width:16px;height:16px;"></div></div></div>' +
@@ -327,12 +351,13 @@
         async function loadGatewayDevices(entryId, gatewaySn) {
             const deviceListEl = document.getElementById('devices-' + entryId);
             const statusEl = document.getElementById('gw-status-' + entryId);
+            if (!deviceListEl) return;
             try {
                 const resp = await haApi('/config/device_registry?config_entry_id=' + entryId);
                 if (!resp.ok) throw new Error('HA API ' + resp.status);
                 const devices = await resp.json();
                 if (!devices || devices.length === 0) {
-                    deviceListEl.innerHTML = '<p style="font-size:12px;color:#999;padding:8px;">暂无子设备，点击「配对」按钮添加</p>';
+                    deviceListEl.innerHTML = '<p style="font-size:12px;color:var(--text-muted);padding:8px;">暂无子设备，点击「配对」按钮添加</p>';
                     updateGatewayStatus(statusEl, 'offline');
                     return;
                 }
@@ -340,7 +365,6 @@
                 for (const dev of devices) {
                     if (dev.via_device_id) subDevices.push(dev);
                 }
-                // 更新网关在线状态
                 try {
                     const stateResp = await haApi('/states');
                     if (!stateResp.ok) throw new Error('HA API ' + stateResp.status);
@@ -351,23 +375,19 @@
                         s.entity_id.toLowerCase().includes(snSuffix) &&
                         s.entity_id.includes('online')
                     );
-                    if (gwSensor) {
-                        updateGatewayStatus(statusEl, gwSensor.state === 'on' ? 'online' : 'offline');
-                    } else {
-                        updateGatewayStatus(statusEl, 'unknown');
-                    }
+                    updateGatewayStatus(statusEl, gwSensor ? (gwSensor.state === 'on' ? 'online' : 'offline') : 'unknown');
                     if (subDevices.length === 0) {
-                        deviceListEl.innerHTML = '<p style="font-size:12px;color:#999;padding:8px;">暂无子设备，点击「配对」按钮添加</p>';
+                        deviceListEl.innerHTML = '<p style="font-size:12px;color:var(--text-muted);padding:8px;">暂无子设备，点击「配对」按钮添加</p>';
                         return;
                     }
                     let html = '';
                     for (const dev of subDevices) html += renderDevice(dev, entryId, states);
                     deviceListEl.innerHTML = html;
-                    for (const dev of subDevices) await loadDeviceState(dev, states);
+                    for (const dev of subDevices) loadDeviceState(dev, states);
                 } catch (e) {
                     updateGatewayStatus(statusEl, 'unknown');
                     if (subDevices.length === 0) {
-                        deviceListEl.innerHTML = '<p style="font-size:12px;color:#999;padding:8px;">暂无子设备，点击「配对」按钮添加</p>';
+                        deviceListEl.innerHTML = '<p style="font-size:12px;color:var(--text-muted);padding:8px;">暂无子设备，点击「配对」按钮添加</p>';
                         return;
                     }
                     let html = '';
@@ -375,7 +395,7 @@
                     deviceListEl.innerHTML = html;
                 }
             } catch (e) {
-                deviceListEl.innerHTML = '<p style="font-size:12px;color:#f44336;">加载设备失败: ' + e.message + '</p>';
+                deviceListEl.innerHTML = '<p style="font-size:12px;color:var(--red);">加载设备失败: ' + escapeHtml(e.message) + '</p>';
             }
         }
 
@@ -400,7 +420,6 @@
                 s.entity_id.startsWith('cover.') && s.entity_id.toLowerCase().includes(snSuffix)
             );
             const currentPos = coverEntity ? (coverEntity.attributes.current_position || 0) : 0;
-            // 安全转义用户可控字段，防止 XSS
             const safeName = escapeHtml(devName);
             const safeSn = escapeHtml(sn);
             const safeDevId = escapeHtml(devId);
@@ -426,7 +445,7 @@
                 controls + '</div>';
         }
 
-        async function loadDeviceState(dev, states) {
+        function loadDeviceState(dev, states) {
             const stateEl = document.getElementById('dev-state-' + dev.id);
             if (!stateEl) return;
             try {
@@ -442,7 +461,7 @@
                 if (coverEntity) {
                     const pos = coverEntity.attributes.current_position;
                     const state = coverEntity.state;
-                    let statusText = '';
+                    let statusText;
                     if (state === 'open') statusText = '打开';
                     else if (state === 'closed' || state === 'close') statusText = '关闭';
                     else if (state === 'opening') statusText = '正在打开';
@@ -475,12 +494,13 @@
                 const devices = await resp.json();
                 const gwDevice = devices.find(d => !d.via_device_id);
                 if (!gwDevice) { showToast('未找到网关设备', 'err'); return; }
-                await haApi('/services/window_controller_gateway/start_pairing', 'POST', {
+                const pairResp = await haApi('/services/window_controller_gateway/start_pairing', 'POST', {
                     device_id: gwDevice.id, duration: 60
                 });
+                if (!pairResp.ok) throw new Error('HA API ' + pairResp.status);
                 showToast('配对模式已启动（60秒），请操作子设备', 'ok');
-                setTimeout(() => { loadGatewayDevices(entryId, gatewaySn); }, 10000);
-                setTimeout(() => { loadGatewayDevices(entryId, gatewaySn); }, 60000);
+                setTimeout(() => loadGatewayDevices(entryId, gatewaySn), 10000);
+                setTimeout(() => loadGatewayDevices(entryId, gatewaySn), 60000);
             } catch (e) {
                 showToast('配对启动失败: ' + e.message, 'err');
                 updateGatewayStatus(statusEl, 'online');
@@ -512,7 +532,8 @@
                     else if (command === 'close') service = 'close_cover';
                     else if (command === 'stop') service = 'stop_cover';
                     if (service) {
-                        await haApi('/services/cover/' + service, 'POST', { entity_id: coverEntity.entity_id });
+                        const r = await haApi('/services/cover/' + service, 'POST', { entity_id: coverEntity.entity_id });
+                        if (!r.ok) throw new Error('HA API ' + r.status);
                         showToast('命令已发送: ' + command, 'ok');
                     } else if (command === 'wind_lock_tilt' || command === 'wind_lock_flat') {
                         const btnSuffix = command === 'wind_lock_tilt' ? 'wind_lock_tilt' : 'wind_lock_flat';
@@ -522,7 +543,8 @@
                             s.entity_id.includes(btnSuffix)
                         );
                         if (btnEntity) {
-                            await haApi('/services/button/press', 'POST', { entity_id: btnEntity.entity_id });
+                            const r = await haApi('/services/button/press', 'POST', { entity_id: btnEntity.entity_id });
+                            if (!r.ok) throw new Error('HA API ' + r.status);
                             showToast('模式切换: ' + (command === 'wind_lock_tilt' ? '内倒' : '平开'), 'ok');
                         } else {
                             showToast('未找到模式按钮实体', 'warn');
@@ -556,9 +578,10 @@
                     s.entity_id.startsWith('cover.') && s.entity_id.toLowerCase().includes(snSuffix)
                 );
                 if (coverEntity) {
-                    await haApi('/services/cover/set_cover_position', 'POST', {
+                    const r = await haApi('/services/cover/set_cover_position', 'POST', {
                         entity_id: coverEntity.entity_id, position: parseInt(position)
                     });
+                    if (!r.ok) throw new Error('HA API ' + r.status);
                     showToast('位置设置: ' + position + '%', 'ok');
                 } else {
                     showToast('未找到设备 cover 实体', 'warn');
@@ -568,39 +591,67 @@
             }
         }
 
+        // ========== 检查更新 ==========
         async function checkForUpdates() {
             const card = document.getElementById('updateCard');
             const content = document.getElementById('updateContent');
             card.style.display = 'block';
             content.innerHTML = '<div class="loading"><div class="spinner"></div><p>正在检查更新...</p></div>';
             try {
-                const resp = await fetch('https://api.github.com/repos/fangwenyi-dev/ha-gateway-plugin/releases/latest');
-                if (!resp.ok) throw new Error('GitHub API 不可用');
+                // 使用 nginx 代理访问 GitHub API，避免 Ingress iframe CSP 拦截外部请求
+                const resp = await fetch('/api/github/repos/fangwenyi-dev/ha-gateway-plugin/releases/latest');
+                if (!resp.ok) throw new Error('GitHub API 不可用 (HTTP ' + resp.status + ')');
                 const release = await resp.json();
                 const latestVersion = release.tag_name.replace(/^v/, '');
                 const hasUpdate = compareVersions(latestVersion, CURRENT_VERSION) > 0;
                 if (hasUpdate) {
                     const body = release.body || '暂无变更日志';
-                    const truncatedBody = body.length > 500 ? body.substring(0, 500) + '...' : body;
+                    const truncatedBody = body.length > 800 ? body.substring(0, 800) + '...' : body;
                     content.innerHTML = '<div class="update-box"><div class="update-info">' +
-                        '<div class="update-title">发现新版本 v' + latestVersion + '</div>' +
-                        '<div class="update-desc">当前版本 v' + CURRENT_VERSION + '，有新版本可用</div></div>' +
-                        '<a class="btn btn-primary" href="' + release.html_url + '" target="_blank">查看详情</a></div>' +
-                        '<div style="margin-top:10px;font-size:12px;color:#555;white-space:pre-wrap;">' + escapeHtml(truncatedBody) + '</div>' +
-                        '<div style="margin-top:10px;"><p style="font-size:12px;color:#888;">更新方法：</p>' +
-                        '<p style="font-size:12px;color:#555;">1. 在 HA 插件商店中点击「更新」<br>2. 或重新添加仓库拉取最新版本<br>3. 更新后需重启插件和 HA</p></div>';
+                        '<div class="update-title">发现新版本 v' + escapeHtml(latestVersion) + '</div>' +
+                        '<div class="update-desc">当前版本 v' + CURRENT_VERSION + '</div></div>' +
+                        '<button class="btn btn-success" onclick="doUpgrade()">一键升级</button>' +
+                        '<a class="btn btn-primary" href="' + escapeHtml(release.html_url) + '" target="_blank">查看详情</a></div>' +
+                        '<div style="margin-top:10px;font-size:12px;color:var(--text-muted);white-space:pre-wrap;">' + escapeHtml(truncatedBody) + '</div>';
                 } else {
-                    content.innerHTML = '<div class="update-box" style="background:linear-gradient(135deg,#e8f5e9,#c8e6c9);"><div class="update-info">' +
-                        '<div class="update-title" style="color:#2e7d32;">已是最新版本 v' + CURRENT_VERSION + '</div>' +
-                        '<div class="update-desc" style="color:#555;">GitHub 最新版本: v' + latestVersion + '</div></div></div>';
+                    content.innerHTML = '<div class="update-box" style="background:linear-gradient(135deg,var(--green-bg),#d1fae5);"><div class="update-info">' +
+                        '<div class="update-title" style="color:#065f46;">已是最新版本 v' + CURRENT_VERSION + '</div>' +
+                        '<div class="update-desc">GitHub 最新版本: v' + escapeHtml(latestVersion) + '</div></div></div>';
                 }
             } catch (e) {
-                content.innerHTML = '<div class="update-box" style="background:#ffebee;"><div class="update-info">' +
-                    '<div class="update-title" style="color:#c62828;">检查更新失败</div>' +
-                    '<div class="update-desc" style="color:#555;">' + e.message + '</div></div></div>';
+                content.innerHTML = '<div class="update-box" style="background:var(--red-bg);"><div class="update-info">' +
+                    '<div class="update-title" style="color:#991b1b;">检查更新失败</div>' +
+                    '<div class="update-desc">' + escapeHtml(e.message) + '</div></div></div>';
             }
         }
 
+        // ========== 一键升级 ==========
+        async function doUpgrade() {
+            if (!confirm('确定要一键升级插件吗？\n\n升级过程：\n1. 调用 HA Supervisor 更新插件\n2. 更新完成后需重启插件\n3. 重启后自动安装最新集成代码\n\n升级期间插件会短暂不可用。')) return;
+            showToast('正在执行一键升级...', 'warn');
+            try {
+                // 调用 Supervisor API 更新插件
+                // POST /supervisor/addons/{slug}/update — 拉取最新镜像并更新
+                // 通过 nginx /api/supervisor/ 代理，token 已在 Nginx 层注入
+                const resp = await fetch('/api/supervisor/addons/huijian_mqtt_broker/update', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                const data = await resp.json().catch(() => ({}));
+                if (resp.ok && data.result === 'ok') {
+                    showToast('升级命令已发送，插件正在更新中...', 'ok');
+                    setTimeout(() => { window.location.reload(); }, 8000);
+                } else if (resp.status === 400 && data.message && data.message.includes('already')) {
+                    showToast('插件已是最新版本，无需升级', 'warn');
+                } else {
+                    showToast('升级失败: ' + (data.message || 'HTTP ' + resp.status), 'err');
+                }
+            } catch (e) {
+                showToast('升级请求失败: ' + e.message, 'err');
+            }
+        }
+
+        // ========== 工具函数 ==========
         function compareVersions(v1, v2) {
             const parts1 = v1.split('.').map(Number);
             const parts2 = v2.split('.').map(Number);
@@ -613,8 +664,9 @@
         }
 
         function escapeHtml(text) {
+            if (text === null || text === undefined) return '';
             const div = document.createElement('div');
-            div.textContent = text;
+            div.textContent = String(text);
             return div.innerHTML;
         }
 
@@ -630,6 +682,7 @@
             }, 3000);
         }
 
+        // ========== 启动 ==========
         init();
         setInterval(refreshAll, 30000);
     </script>
