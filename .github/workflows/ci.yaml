@@ -15,9 +15,62 @@ permissions:
   id-token: write
 
 jobs:
+  # ========== 0. 代码质量检查 ==========
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check shell scripts syntax
+        run: |
+          # 检查所有 shell 脚本语法是否正确
+          apt-get update -qq && apt-get install -y -qq shellcheck > /dev/null 2>&1 || true
+          for f in huijian_mqtt_broker/run.sh huijian_mqtt_broker/auto_setup_mqtt.sh; do
+            echo "检查 $f ..."
+            bash -n "$f" || exit 1
+            shellcheck "$f" || echo "⚠ shellcheck 警告（非阻塞）"
+          done
+
+      - name: Check YAML files syntax
+        run: |
+          pip install -q pyyaml
+          python3 -c '
+          import yaml, sys, glob
+          for f in glob.glob("**/*.yaml", recursive=True):
+              try:
+                  yaml.safe_load(open(f))
+                  print(f"✅ {f}")
+              except Exception as e:
+                  print(f"❌ {f}: {e}")
+                  sys.exit(1)
+          '
+
+      - name: Check JSON files syntax
+        run: |
+          for f in $(find . -name "*.json" -not -path "./.git/*"); do
+            python3 -c "import json; json.load(open('$f'))" || exit 1
+            echo "✅ $f"
+          done
+
+      - name: Verify version consistency
+        run: |
+          VERSION=$(grep '^version:' huijian_mqtt_broker/config.yaml | head -1 | awk -F'"' '{print $2}')
+          echo "config.yaml 版本: $VERSION"
+          # 检查 index.html 版本一致
+          HTML_VER=$(grep -oP "CURRENT_VERSION = '\K[^']+" huijian_mqtt_broker/www/index.html)
+          echo "index.html 版本: $HTML_VER"
+          [ "$VERSION" = "$HTML_VER" ] || { echo "❌ 版本不一致"; exit 1; }
+          # 检查 version.json 版本一致
+          JSON_VER=$(python3 -c "import json; print(json.load(open('huijian_mqtt_broker/www/version.json'))['addon_version'])")
+          echo "version.json 版本: $JSON_VER"
+          [ "$VERSION" = "$JSON_VER" ] || { echo "❌ 版本不一致"; exit 1; }
+          echo "✅ 所有版本号一致: $VERSION"
+
   # ========== 1. 读取版本号 & 准备变更日志 ==========
   prepare:
     name: Prepare
+    needs: lint
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}

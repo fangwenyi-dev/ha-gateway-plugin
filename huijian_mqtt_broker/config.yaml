@@ -1,5 +1,5 @@
 name: 慧尖 LoRa 网关
-version: "1.1.7"
+version: "1.1.8"
 slug: huijian_mqtt_broker
 description: 慧尖开窗器 LoRa 网关一体化插件，内置 Mosquitto Broker + 网关集成，安装即用
 url: 'https://github.com/fangwenyi-dev/ha-gateway-plugin'
@@ -13,6 +13,8 @@ ingress: true
 ingress_port: 8099
 panel_icon: mdi:remote
 panel_title: 慧尖网关
+# avahi-daemon + dbus 需要 full_access 才能正常运行 mDNS 广播
+full_access: true
 ports:
   2022/tcp: 2022
 ports_description:

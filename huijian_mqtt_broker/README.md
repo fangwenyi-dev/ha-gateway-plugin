@@ -1,6 +1,6 @@
 # 慧尖 LoRa 网关一体化插件
 
-[![版本](https://img.shields.io/badge/version-1.1.7-blue)]()
+[![版本](https://img.shields.io/badge/version-1.1.8-blue)]()
 [![HA Add-on](https://img.shields.io/badge/HA-Add--on-green)]()
 
 慧尖开窗器 LoRa 网关的 Home Assistant 一体化插件。**内置 Mosquitto Broker + 网关集成，安装一个插件即可获得全部能力**。
@@ -102,6 +102,10 @@ https://github.com/fangwenyi-dev/ha-gateway-plugin
 | `install_integration` | `true` | 启动时自动安装慧尖网关集成到 HA custom_components |
 
 > **注意**：MQTT 端口固定为 `2022`（主机 2022 → 容器 2022），在 `config.yaml` 的 `ports` 中定义，不可在插件配置中修改。这样避免与 HA 官方 Mosquitto broker 的 1883 端口冲突，两个 broker 可以共存。
+
+> **⚠️ 安全提醒**：默认密码 `huijian2022` 仅供初次测试使用。**请在生产环境中务必修改默认密码**，在插件「配置」标签页中修改 `username` 和 `password` 后重启插件生效。
+
+> **备份数据**：卸载或重新安装插件会清除 `/data` 目录。网关集成持久化数据存储在 HA 配置目录的 `window_controller_gateway_data.json` 中，升级集成时会自动备份恢复。建议定期备份 HA 配置目录。
 
 ## 常见问题
 

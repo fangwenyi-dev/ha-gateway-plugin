@@ -110,7 +110,7 @@
     <div class="header">
         <div>
             <h1>慧尖 LoRa 网关</h1>
-            <span class="ver" id="addonVersion">v1.1.7</span>
+            <span class="ver" id="addonVersion">v1.1.8</span>
         </div>
         <div class="actions">
             <button class="btn btn-primary" onclick="checkForUpdates()">检查更新</button>
@@ -151,7 +151,7 @@
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
             <div>
                 <span style="font-size:12px;color:#888;">MQTT 地址</span><br>
-                <strong id="mqttAddr">HA IP:2022</strong>
+                <strong id="mqttAddr">huijian.local:2022</strong>
             </div>
             <div>
                 <span style="font-size:12px;color:#888;">用户名/密码</span><br>
@@ -161,7 +161,7 @@
         <div class="info-box">
             <h3>💡 LoRa 网关配置</h3>
             <p>
-                Broker: <code>HA 的 IP 地址</code><br>
+                Broker: <code>huijian.local</code>（mDNS）或 HA 的 IP 地址<br>
                 端口: <code>2022</code> | 用户名: <code>huijian</code> | 密码: <code>huijian2022</code>
             </p>
         </div>
@@ -173,13 +173,13 @@
     </div>
 
     <div class="footer">
-        <p>慧尖 LoRa 网关一体化插件 <span id="footerVersion">v1.1.7</span></p>
+        <p>慧尖 LoRa 网关一体化插件 <span id="footerVersion">v1.1.8</span></p>
     </div>
 
     <script>
         // ========== 全局变量 ==========
         // HA Ingress 模式下不需要前端 token，Nginx 代理已注入 SUPERVISOR_TOKEN
-        let CURRENT_VERSION = '1.1.7';
+        let CURRENT_VERSION = '1.1.8';
         const DOMAIN = 'window_controller_gateway';
 
         // ========== 初始化 ==========
@@ -284,15 +284,18 @@
         }
 
         function renderGateway(name, sn, entryId) {
-            return '<div class="gateway-item" id="gw-' + entryId + '">' +
+            const safeName = escapeHtml(name);
+            const safeSn = escapeHtml(sn);
+            const safeEntryId = escapeHtml(entryId);
+            return '<div class="gateway-item" id="gw-' + safeEntryId + '">' +
                 '<div class="gateway-header"><div>' +
-                '<span class="gateway-name">' + name + '</span>' +
-                '<span class="gateway-sn">SN: ' + sn + '</span>' +
+                '<span class="gateway-name">' + safeName + '</span>' +
+                '<span class="gateway-sn">SN: ' + safeSn + '</span>' +
                 '</div><div>' +
-                '<span class="badge badge-info" id="gw-status-' + entryId + '">状态: 检测中</span>' +
-                '<button class="btn btn-success btn-sm" onclick="startPairing(\'' + entryId + '\',\'' + sn + '\')" style="margin-left:8px;">配对</button>' +
+                '<span class="badge badge-info" id="gw-status-' + safeEntryId + '">状态: 检测中</span>' +
+                '<button class="btn btn-success btn-sm" onclick="startPairing(\'' + safeEntryId + '\',\'' + safeSn + '\')" style="margin-left:8px;">配对</button>' +
                 '</div></div>' +
-                '<div class="device-list" id="devices-' + entryId + '"><div class="loading"><div class="spinner" style="width:16px;height:16px;"></div></div></div>' +
+                '<div class="device-list" id="devices-' + safeEntryId + '"><div class="loading"><div class="spinner" style="width:16px;height:16px;"></div></div></div>' +
                 '</div>';
         }
 
@@ -370,24 +373,29 @@
                 s.entity_id.startsWith('cover.') && s.entity_id.toLowerCase().includes(snSuffix)
             );
             const currentPos = coverEntity ? (coverEntity.attributes.current_position || 0) : 0;
+            // 安全转义用户可控字段，防止 XSS
+            const safeName = escapeHtml(devName);
+            const safeSn = escapeHtml(sn);
+            const safeDevId = escapeHtml(devId);
+            const safeEntryId = escapeHtml(entryId);
             let controls = '<div class="device-controls">' +
-                '<button class="btn btn-success btn-sm" onclick="controlDevice(\'' + devId + '\',\'open\',\'' + entryId + '\')">开</button>' +
-                '<button class="btn btn-danger btn-sm" onclick="controlDevice(\'' + devId + '\',\'close\',\'' + entryId + '\')">关</button>' +
-                '<button class="btn btn-warn btn-sm" onclick="controlDevice(\'' + devId + '\',\'stop\',\'' + entryId + '\')">停</button>' +
+                '<button class="btn btn-success btn-sm" onclick="controlDevice(\'' + safeDevId + '\',\'open\',\'' + safeEntryId + '\')">开</button>' +
+                '<button class="btn btn-danger btn-sm" onclick="controlDevice(\'' + safeDevId + '\',\'close\',\'' + safeEntryId + '\')">关</button>' +
+                '<button class="btn btn-warn btn-sm" onclick="controlDevice(\'' + safeDevId + '\',\'stop\',\'' + safeEntryId + '\')">停</button>' +
                 '<input type="range" class="position-slider" min="0" max="100" value="' + currentPos + '"' +
                 ' oninput="this.nextElementSibling.textContent=this.value+\'%\'"' +
-                ' onchange="controlDevicePosition(\'' + devId + '\', this.value, \'' + entryId + '\')">' +
+                ' onchange="controlDevicePosition(\'' + safeDevId + '\', this.value, \'' + safeEntryId + '\')">' +
                 '<span style="font-size:11px;min-width:30px;">' + currentPos + '%</span></div>';
             if (supportsWindLock) {
                 controls += '<div class="device-controls" style="margin-top:4px;">' +
-                    '<button class="btn btn-sm" style="background:#607d8b;color:white;" onclick="controlDevice(\'' + devId + '\',\'wind_lock_tilt\',\'' + entryId + '\')">内倒</button>' +
-                    '<button class="btn btn-sm" style="background:#78909c;color:white;" onclick="controlDevice(\'' + devId + '\',\'wind_lock_flat\',\'' + entryId + '\')">平开</button>' +
+                    '<button class="btn btn-sm" style="background:#607d8b;color:white;" onclick="controlDevice(\'' + safeDevId + '\',\'wind_lock_tilt\',\'' + safeEntryId + '\')">内倒</button>' +
+                    '<button class="btn btn-sm" style="background:#78909c;color:white;" onclick="controlDevice(\'' + safeDevId + '\',\'wind_lock_flat\',\'' + safeEntryId + '\')">平开</button>' +
                     '</div>';
             }
-            return '<div class="device-item" id="dev-' + devId + '">' +
-                '<div class="device-info"><div class="device-name">' + devName + '</div>' +
-                '<div class="device-sn">SN: ' + sn + '</div>' +
-                '<div class="device-status" id="dev-state-' + devId + '">状态: 加载中</div></div>' +
+            return '<div class="device-item" id="dev-' + safeDevId + '">' +
+                '<div class="device-info"><div class="device-name">' + safeName + '</div>' +
+                '<div class="device-sn">SN: ' + safeSn + '</div>' +
+                '<div class="device-status" id="dev-state-' + safeDevId + '">状态: 加载中</div></div>' +
                 controls + '</div>';
         }
 

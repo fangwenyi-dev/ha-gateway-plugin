@@ -1,6 +1,9 @@
-#!/bin/bash
+#!/usr/bin/with-contenv bashio
 # =============================================================================
 # 慧尖 LoRa 网关一体化插件 — 自动配置 HA MQTT 集成
+#
+# 使用 bashio shebang 确保 SUPERVISOR_TOKEN 从 container-env 正确加载
+# 配置变量通过环境变量传递，用 :- 提供默认值避免 set -u 报错
 #
 # 架构：
 #   - 容器内 mosquitto 监听 2022
@@ -11,13 +14,13 @@
 
 set -e
 
-# 从环境变量读取（run.sh 中显式传递的）
+# 从环境变量读取（run.sh 中显式传递的，加默认值避免 bashio set -u 报错）
 USERNAME="${USERNAME:-huijian}"
 PASSWORD="${PASSWORD:-huijian2022}"
 MQTT_PORT="${MQTT_PORT:-2022}"
 INTERNAL_PORT="${INTERNAL_PORT:-2022}"
 
-# HA Supervisor API
+# HA Supervisor API — with-contenv 会从 /run/s6/container-env 加载正确的 SUPERVISOR_TOKEN
 HA_API="http://supervisor/core/api"
 HA_TOKEN="${SUPERVISOR_TOKEN:-}"
 
@@ -40,7 +43,7 @@ echo "[自动配置] 正在检查 HA MQTT 集成状态..."
 # 等待 broker 完全启动
 sleep 3
 
-# 循环等待 broker 可连接（容器内 127.0.0.1:1883）
+# 循环等待 broker 可连接（容器内 127.0.0.1:2022）
 RETRY=0
 while [ ${RETRY} -lt 30 ]; do
     if mosquitto_pub -h 127.0.0.1 -p ${INTERNAL_PORT} -u "${USERNAME}" -P "${PASSWORD}" \

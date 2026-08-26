@@ -1,6 +1,6 @@
 #!/usr/bin/with-contenv bashio
 # =============================================================================
-# 慧尖 LoRa 网关一体化插件 — 启动脚本 v1.1.7
+# 慧尖 LoRa 网关一体化插件 — 启动脚本 v1.1.8
 #
 # 架构：
 #   - 容器内 mosquitto 固定监听 2022（不使用 1883，避免与 HA 官方 Mosquitto 冲突）
@@ -143,12 +143,24 @@ AVAHI_EOF
 # 设置 huijian.local 主机名
 hostname huijian 2>/dev/null || true
 
+# 创建 dbus 运行目录（容器中可能不存在）
+mkdir -p /run/dbus
+
 # 启动 dbus 和 avahi-daemon
-dbus-daemon --system 2>/dev/null || true
-avahi-daemon -D 2>/dev/null || {
-    echo "[mDNS] avahi-daemon 启动失败，huijian.local 可能不可用"
+dbus-daemon --system 2>/dev/null || {
+    echo "[mDNS] dbus-daemon 启动失败"
 }
-echo "[mDNS] avahi-daemon 已启动，LoRa 网关可通过 huijian.local 发现本机"
+
+# 等待 dbus 就绪
+sleep 1
+
+# 启动 avahi-daemon
+if avahi-daemon -D 2>/dev/null; then
+    echo "[mDNS] avahi-daemon 已启动，LoRa 网关可通过 huijian.local 发现本机"
+else
+    echo "[mDNS] avahi-daemon 启动失败，huijian.local 可能不可用"
+    echo "[mDNS] LoRa 网关可改用 HA 的 IP 地址连接"
+fi
 
 # ---------- 4. 自动安装慧尖网关集成 ----------
 if [ "${INSTALL_INTEGRATION}" = "true" ]; then
