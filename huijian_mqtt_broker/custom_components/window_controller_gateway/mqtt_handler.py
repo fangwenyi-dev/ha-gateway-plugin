@@ -93,17 +93,31 @@ class WindowControllerMQTTHandler:
         # {command_id: "bind" / "unbind"}，收到回复即清理，不会累积。
         self._bind_ops = {}
     
-    def _record_bind_op(self, command_id: int, direction: str) -> None:
+    def _record_bind_op(self, command_id: int, direction: str, device_sn: Optional[str] = None) -> None:
         """记录 003 绑定/解绑命令方向（按命令 id 匹配回复）
 
         网关离线/不回复时记录不会被消费，因此设置上限，超出后按
         插入顺序淘汰最旧记录（dict 保持插入顺序），防止无界增长。
+        device_sn 在可确定时一并记录（解绑命令），供设备删除时清理
+        该设备的待处理记录（_clear_bind_ops_for_device）。
         """
-        self._bind_ops[command_id] = direction
+        self._bind_ops[command_id] = (direction, device_sn)
         if len(self._bind_ops) > MAX_BIND_OPS:
             oldest = next(iter(self._bind_ops))
             self._bind_ops.pop(oldest)
             _LOGGER.debug("_bind_ops 超过上限 %d，淘汰最旧记录: %s", MAX_BIND_OPS, oldest)
+
+    def _clear_bind_ops_for_device(self, device_sn: str) -> None:
+        """清除指定设备的待处理 003 绑定/解绑方向记录
+
+        设备删除后，晚到的绑定确认不得再利用 id 匹配复现"绑定"语义；
+        清除后此类回复的 bind_op 为空，将落入 _handle_ctype_003 的
+        手动删除列表拒绝分支，防止设备复活。
+        """
+        for command_id, (direction, op_device_sn) in list(self._bind_ops.items()):
+            if op_device_sn == device_sn:
+                del self._bind_ops[command_id]
+                _LOGGER.debug("已清除设备 %s 的待处理绑定记录 (id=%s, %s)", device_sn, command_id, direction)
     
     def _schedule_async_task(self, coro):
         """安全地将异步任务调度到主事件循环
@@ -224,7 +238,17 @@ class WindowControllerMQTTHandler:
                     response_sn = payload.get("sn")
                     if not response_sn:
                         return
-                    
+
+                    # P0 类型守卫：网关固件可能以 JSON 数字形式发送 SN（int/float），
+                    # 统一转为字符串再比较；其他畸形类型（bool/dict/list 等）只丢弃
+                    # 本消息并记录一行警告，绝不能因 AttributeError 崩溃导致整帧
+                    # （含心跳）处理中断 → 网关被误判离线长达超时窗口。
+                    if isinstance(response_sn, bool) or not isinstance(response_sn, (str, int, float)):
+                        _LOGGER.warning("收到网关SN类型非法，忽略该消息: %r", response_sn)
+                        return
+                    if not isinstance(response_sn, str):
+                        response_sn = str(response_sn)
+
                     # 消息去重检查 - 使用 ctype + id + sn 作为唯一标识
                     msg_key = f"{ctype}_{payload.get('id', 0)}_{response_sn}"
                     current_time = time.time()
@@ -308,7 +332,15 @@ class WindowControllerMQTTHandler:
                 
                 # 处理原有格式的响应（向后兼容）
                 gateway_sn = payload.get("gateway_sn")
-                if not gateway_sn or gateway_sn.lower() != self.gateway_sn.lower():
+                if not gateway_sn:
+                    return
+                # P0 类型守卫：与标准协议格式的 sn 字段一致，畸形类型只丢弃本消息
+                if isinstance(gateway_sn, bool) or not isinstance(gateway_sn, (str, int, float)):
+                    _LOGGER.warning("收到网关SN类型非法，忽略该消息: %r", gateway_sn)
+                    return
+                if not isinstance(gateway_sn, str):
+                    gateway_sn = str(gateway_sn)
+                if gateway_sn.lower() != self.gateway_sn.lower():
                     return
                 
                 response_type = payload.get("type")
@@ -892,8 +924,9 @@ class WindowControllerMQTTHandler:
         if self.command_id > MAX_COMMAND_ID:
             self.command_id = 1
         _LOGGER.debug("解绑命令 id=%s", sent_command_id)
-        # 记录本命令方向（id 匹配回复，供 _handle_ctype_003 判定）
-        self._record_bind_op(payload["id"], "unbind")
+        # 记录本命令方向（id 匹配回复，供 _handle_ctype_003 判定），
+        # 附带设备 SN 供删除时清理待处理记录
+        self._record_bind_op(payload["id"], "unbind", device_sn)
         
         # 发送MQTT消息
         try:
@@ -1242,8 +1275,10 @@ class WindowControllerMQTTHandler:
         # 若网关未在 data 中回传子设备 SN，不把网关自身误当子设备添加
         device_sn = data.get("sn")
         bind_value = data.get("bind", None)
-        # 按命令 id 匹配最近发出的 003 方向（发送端已记录 _bind_ops）
-        bind_op = self._bind_ops.pop(payload.get("id"), None)
+        # 按命令 id 匹配最近发出的 003 方向（发送端已记录 _bind_ops；
+        # 记录为 (方向, 设备SN) 元组）
+        bind_record = self._bind_ops.pop(payload.get("id"), None)
+        bind_op = bind_record[0] if bind_record else None
 
         if errcode == 0 and device_sn:
             # 判断是绑定还是解绑（优先级从高到低）：
@@ -1263,6 +1298,15 @@ class WindowControllerMQTTHandler:
                 # 这里不需要重复处理，仅记录日志
                 _LOGGER.info("设备解绑成功: %s", device_sn)
             else:
+                # P0 设备复活守卫：绑定确认不得复活已手动删除的设备。
+                # 删除后晚到的绑定回复（或网关主动发起的重新绑定）一律拒绝，
+                # 静默 debug 记录，防止绕过手动删除列表复活设备。
+                if self.device_manager.is_device_manually_removed(device_sn):
+                    _LOGGER.debug(
+                        "设备 %s 在手动删除列表中，拒绝晚到的绑定确认（防止设备复活）",
+                        device_sn,
+                    )
+                    return
                 # 绑定成功，添加设备
                 device_count = len(self.device_manager.get_all_devices())
                 device_number = device_count + 1

@@ -707,6 +707,11 @@ class WindowControllerDeviceManager:
                 if gateway_data and isinstance(gateway_data, dict):
                     mqtt_handler = gateway_data.get("mqtt_handler")
                     if mqtt_handler:
+                        # P0 设备复活守卫：删除时清除该设备的待处理绑定/解绑方向记录，
+                        # 晚到的 003 回复无法再按 id 匹配出"绑定"语义，将落入
+                        # _handle_ctype_003 的手动删除列表拒绝分支，防止设备复活。
+                        if hasattr(mqtt_handler, "_clear_bind_ops_for_device"):
+                            mqtt_handler._clear_bind_ops_for_device(device_sn)
                         # trigger_discovery 现在是空实现，仅记录日志
                         self.hass.async_create_task(mqtt_handler.trigger_discovery())
             except KeyError as e:
