@@ -210,15 +210,11 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
 
     async def async_step_replace_gateway(self, user_input: Optional[Dict[str, Any]] = None) -> FlowResult:
-        """Handle gateway replacement flow initialization"""
-        # 从上下文中获取数据
-        # 优先从context中直接获取，如果没有则从context["data"]中获取
-        data = self.context.get("data", {})
-        self.gateway_sn = self.context.get("gateway_sn") or data.get("gateway_sn")
-        self.device_id = self.context.get("device_id") or data.get("device_id")
-
-        # 直接进入替换步骤
-        return await self.async_step_replace()
+        """Handle gateway replacement flow - 暂不支持，提示用户"""
+        return self.async_abort(
+            reason="migration_not_supported",
+            description_placeholders={"error": "迁移功能暂未启用，请手动删除旧网关后重新添加"}
+        )
 
     async def async_step_discovery(self, discovery_info: Dict[str, Any]) -> FlowResult:
         """Handle discovery step"""

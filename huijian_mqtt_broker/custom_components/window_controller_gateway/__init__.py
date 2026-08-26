@@ -87,13 +87,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     gateway_sn = entry.data.get(CONF_GATEWAY_SN, "")
     _LOGGER.info("=== 开始设置配置条目: %s, gateway: %s ===", entry.entry_id, gateway_sn or "(待配置)")
     
-    # 检查持久化数据是否已加载
-    if DEVICE_TO_GATEWAY_MAPPING in hass.data[DOMAIN]:
-        mapping = hass.data[DOMAIN][DEVICE_TO_GATEWAY_MAPPING]
-        _LOGGER.info("持久化映射表已加载: %s", mapping)
-    else:
-        _LOGGER.error("持久化映射表未加载！")
-    
     try:
         from .device_manager import WindowControllerDeviceManager
         from .mqtt_handler import WindowControllerMQTTHandler
