@@ -4,7 +4,7 @@
 #
 # 架构：
 #   - 容器内 mosquitto 监听 1883
-#   - Docker 端口映射: 主机 mqtt_port(默认1885) → 容器 1883
+#   - Docker 端口映射: 主机 2022 → 容器 2022
 #   - 本脚本用 127.0.0.1:1883 检测 broker 可达性（容器内部）
 #   - 告诉 HA MQTT 集成连接 172.30.32.1:{mqtt_port}（Docker 网桥网关 + 主机端口）
 # =============================================================================
@@ -15,8 +15,8 @@ set -e
 # bashio 默认启用 set -u（未定义变量报错），所以必须提供默认值
 USERNAME="${USERNAME:-huijian}"
 PASSWORD="${PASSWORD:-huijian2022}"
-MQTT_PORT="${MQTT_PORT:-1885}"
-INTERNAL_PORT="${INTERNAL_PORT:-1883}"
+MQTT_PORT="${MQTT_PORT:-2022}"
+INTERNAL_PORT="${INTERNAL_PORT:-2022}"
 
 # HA Supervisor API
 HA_API="http://supervisor/core/api"

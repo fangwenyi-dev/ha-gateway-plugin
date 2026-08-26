@@ -1,5 +1,5 @@
 name: 慧尖 LoRa 网关
-version: "1.1.5"
+version: "1.1.6"
 slug: huijian_mqtt_broker
 description: 慧尖开窗器 LoRa 网关一体化插件，内置 Mosquitto Broker + 网关集成，安装即用
 url: 'https://github.com/fangwenyi-dev/ha-gateway-plugin'
@@ -8,15 +8,15 @@ arch:
   - aarch64
 init: false
 startup: system
-watchdog: tcp://[HOST]:1885
+watchdog: tcp://[HOST]:2022
 ingress: true
 ingress_port: 8099
 panel_icon: mdi:remote
 panel_title: 慧尖网关
 ports:
-  1885/tcp: 1883
+  2022/tcp: 2022
 ports_description:
-  1885/tcp: 主机端口 1885 映射到容器内 1883（避免与 HA 官方 MQTT 1883 冲突）
+  2022/tcp: MQTT Broker 端口（主机 2022 → 容器 2022，不使用 1883 避免与 HA 官方 Mosquitto 冲突）
 map:
   - ssl
   - homeassistant_config:rw

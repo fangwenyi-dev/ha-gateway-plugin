@@ -110,7 +110,7 @@
     <div class="header">
         <div>
             <h1>慧尖 LoRa 网关</h1>
-            <span class="ver" id="addonVersion">v1.1.5</span>
+            <span class="ver" id="addonVersion">v1.1.6</span>
         </div>
         <div class="actions">
             <button class="btn btn-primary" onclick="checkForUpdates()">检查更新</button>
@@ -151,7 +151,7 @@
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
             <div>
                 <span style="font-size:12px;color:#888;">MQTT 地址</span><br>
-                <strong id="mqttAddr">HA IP:1885</strong>
+                <strong id="mqttAddr">HA IP:2022</strong>
             </div>
             <div>
                 <span style="font-size:12px;color:#888;">用户名/密码</span><br>
@@ -162,7 +162,7 @@
             <h3>💡 LoRa 网关配置</h3>
             <p>
                 Broker: <code>HA 的 IP 地址</code><br>
-                端口: <code>1885</code> | 用户名: <code>huijian</code> | 密码: <code>huijian2022</code>
+                端口: <code>2022</code> | 用户名: <code>huijian</code> | 密码: <code>huijian2022</code>
             </p>
         </div>
     </div>
@@ -173,13 +173,13 @@
     </div>
 
     <div class="footer">
-        <p>慧尖 LoRa 网关一体化插件 <span id="footerVersion">v1.1.5</span></p>
+        <p>慧尖 LoRa 网关一体化插件 <span id="footerVersion">v1.1.6</span></p>
     </div>
 
     <script>
         // ========== 全局变量 ==========
         // HA Ingress 模式下不需要前端 token，Nginx 代理已注入 SUPERVISOR_TOKEN
-        let CURRENT_VERSION = '1.1.5';
+        let CURRENT_VERSION = '1.1.6';
         const DOMAIN = 'window_controller_gateway';
 
         // ========== 初始化 ==========
