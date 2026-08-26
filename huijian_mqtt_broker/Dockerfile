@@ -1,5 +1,7 @@
 ARG BUILD_ARCH
-FROM ghcr.io/home-assistant/${BUILD_ARCH}-base:latest
+# 基础镜像固定在 Alpine 3.21（2026-08-26 经 GHCR tags API 验证：
+# ghcr.io/home-assistant/{amd64,aarch64}-base 均存在 3.21 标签，latest 指向可变标签）
+FROM ghcr.io/home-assistant/${BUILD_ARCH}-base:3.21
 
 # 安装依赖包
 # - mosquitto/mosquitto-clients: MQTT broker + 客户端工具
@@ -19,7 +21,6 @@ RUN apk add --no-cache \
 # 复制配置文件
 COPY mosquitto.conf /etc/mosquitto/mosquitto.conf
 COPY run.sh /run.sh
-COPY auto_setup_mqtt.sh /auto_setup_mqtt.sh
 
 # 复制慧尖网关集成代码
 # /data 在运行时被 HA 挂载的持久化卷覆盖，所以同时复制到 /usr/share 作为备份
@@ -49,7 +50,7 @@ RUN echo 'user nginx;' > /etc/nginx/nginx.conf && \
 # 创建持久化目录，设置权限
 RUN mkdir -p /data/mosquitto && \
     chmod 755 /data/mosquitto && \
-    chmod +x /run.sh /auto_setup_mqtt.sh && \
+    chmod +x /run.sh && \
     mkdir -p /run/nginx && \
     mkdir -p /run/dbus
 

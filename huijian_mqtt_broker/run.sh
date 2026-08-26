@@ -1,6 +1,6 @@
 #!/usr/bin/with-contenv bashio
 # =============================================================================
-# 慧尖 LoRa 网关一体化插件 — 启动脚本 v1.1.9
+# 慧尖 LoRa 网关一体化插件 — 启动脚本 v1.2.0
 #
 # 架构：
 #   - 容器内 mosquitto 固定监听 2022（不使用 1883，避免与 HA 官方 Mosquitto 冲突）
@@ -88,7 +88,7 @@ if [ -z "${HA_SUPERVISOR_TOKEN}" ]; then
 fi
 
 if [ -n "${HA_SUPERVISOR_TOKEN}" ]; then
-    echo "[Ingress] SUPERVISOR_TOKEN 已加载 (前缀: ${HA_SUPERVISOR_TOKEN:0:8}...)"
+    echo "[Ingress] SUPERVISOR_TOKEN 已加载"
 else
     echo "[Ingress] 错误: SUPERVISOR_TOKEN 仍为空，Web UI 状态检测将不可用"
 fi
@@ -105,7 +105,10 @@ cat > /etc/nginx/http.d/ingress.conf <<NGINXEOF
 server {
     listen 8099;
 
-    # Ingress 模式下请求来源 IP 不固定，不限制来源
+    # 安全: 仅允许 HA Core (172.30.32.2) 访问 Ingress 端口
+    allow 172.30.32.2;
+    deny all;
+
     location / {
         root /usr/share/nginx/html;
         index index.html;
@@ -295,28 +298,39 @@ echo "外部访问: HA_IP:${MQTT_PORT} (Docker 映射)"
 echo "Ingress Web UI: 8099 (侧边栏)"
 echo "MQTT 用户名: ${USERNAME}"
 echo ""
-echo "LoRa 网关配置:"
-echo "  Broker 地址: huijian.local (mDNS) 或 HA 的 IP 地址"
-echo "  端口: ${MQTT_PORT}"
-echo "  用户名: ${USERNAME}"
-echo "  密码: ${PASSWORD}"
-echo ""
 
-# ---------- 7. 自动配置 HA MQTT 集成（后台执行） ----------
-export MQTT_PORT="${MQTT_PORT}"
-export USERNAME="${USERNAME}"
-export PASSWORD="${PASSWORD}"
-export INTERNAL_PORT="${INTERNAL_PORT}"
+# ---------- 7. 自动写入 MQTT 引导标记（集成侧消费） ----------
+# 旧方案（v1.0-v1.1.9）通过 REST API 自动创建 HA MQTT 配置条目，但 HA Core
+# REST API 从未提供"创建配置条目"端点，导致所有版本的自动配置静默失败。
+# 新方案（v1.2.0+）：将连接信息写入标记文件，集成侧在 async_setup_entry 时
+# 读取并通过程序化 config flow 自动创建 MQTT 配置条目（详见 mqtt_bootstrap.py）。
+HA_CONFIG_DIR="/homeassistant"
+if [ ! -d "${HA_CONFIG_DIR}" ]; then
+    HA_CONFIG_DIR="/config"
+fi
 
 if [ "${AUTO_SETUP}" = "true" ]; then
-    echo "============================================"
-    echo "  自动配置 HA MQTT 集成..."
-    echo "============================================"
-    # 不传递 SUPERVISOR_TOKEN — auto_setup_mqtt.sh 的 with-contenv 会从
-    # /run/s6/container-env 自动加载最新有效的 token
-    # 显式传递旧 token 会覆盖 with-contenv 加载的新 token，导致 HTTP 401
-    /auto_setup_mqtt.sh &
-    echo ""
+    if [ -d "${HA_CONFIG_DIR}" ]; then
+        MARKER_PATH="${HA_CONFIG_DIR}/window_controller_gateway_mqtt_bootstrap.json"
+        # 使用 jq 构造 JSON，正确转义密码中的特殊字符
+        if jq -n \
+            --arg broker "172.30.32.1" \
+            --argjson port "${MQTT_PORT}" \
+            --arg username "${USERNAME}" \
+            --arg password "${PASSWORD}" \
+            '{broker:$broker, port:$port, username:$username, password:$password}' \
+            > "${MARKER_PATH}" 2>/dev/null; then
+            chmod 600 "${MARKER_PATH}" 2>/dev/null || true
+            echo "[自动配置] MQTT 引导标记已写入: ${MARKER_PATH}"
+        else
+            echo "[自动配置] 警告: 无法写入 MQTT 引导标记（jq 不可用或写入失败）"
+        fi
+    else
+        echo "[自动配置] 警告: HA 配置目录未找到，跳过 MQTT 引导标记"
+    fi
+else
+    # 自动配置已关闭：清理历史标记（含凭据），避免集成侧读到过期数据无限重试
+    rm -f "${HA_CONFIG_DIR}/window_controller_gateway_mqtt_bootstrap.json" 2>/dev/null || true
 fi
 
 # ---------- 8. exec 到前台 mosquitto ----------
