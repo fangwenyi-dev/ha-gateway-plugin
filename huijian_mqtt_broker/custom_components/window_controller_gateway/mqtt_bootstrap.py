@@ -187,6 +187,10 @@ async def ensure_mqtt_connection(hass: HomeAssistant) -> None:
             await _update_mqtt_entry(hass, first, broker, port, username, password)
             # 更新后触发重载，让 MQTT 集成重新连接
             await hass.config_entries.async_reload(first.entry_id)
+            # 等待 MQTT 客户端重连到新 broker
+            _LOGGER.info("等待 MQTT 客户端重连到内置 Broker...")
+            if not await _wait_for_mqtt_client(hass):
+                _LOGGER.warning("MQTT 客户端重连超时，但配置已更新，继续启动")
         else:
             _LOGGER.debug(
                 "MQTT 配置条目已指向内置 Broker %s:%s，无需更新",
