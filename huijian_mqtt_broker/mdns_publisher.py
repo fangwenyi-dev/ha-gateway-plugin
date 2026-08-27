@@ -15,7 +15,12 @@ import sys
 import time
 
 try:
-    from zeroconf import IPVersion, ServiceInfo, Zeroconf
+    from zeroconf import ServiceInfo, Zeroconf
+    # 尝试导入 IPVersion（不同版本 API 可能不同）
+    try:
+        from zeroconf import IPVersion
+    except ImportError:
+        IPVersion = None
 except ImportError:
     print("[mDNS] zeroconf 库未安装，mDNS 不可用", file=sys.stderr)
     sys.exit(1)
@@ -66,8 +71,9 @@ def main():
     print(f"[mDNS] 本机 IP: {local_ip}")
 
     # 创建 Zeroconf 实例
+    # 不显式指定 ip_version，使用默认值（自动选择），避免不同版本 API 差异
     try:
-        zeroconf = Zeroconf(ip_version=IPVersion.V4)
+        zeroconf = Zeroconf()
     except Exception as e:
         print(f"[mDNS] Zeroconf 初始化失败: {e}", file=sys.stderr)
         sys.exit(1)
