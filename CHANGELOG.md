@@ -5,6 +5,15 @@
 
 
 
+
+## [1.5.3] - 2026-08-27
+
+### 修复
+- **一键升级 400/403 根因修复**：Supervisor 安全设计（2025 年引入）禁止插件通过 API 自我更新——
+  `/addons/self/update` 与 `/store/addons/{slug}/update` 检查 REQUEST_FROM 返回 403，
+  `hassio.addon_update`（HA Core 服务）返回 400（add-on token 调服务 API 权限不足）。
+  将 Web UI「一键升级」改为跳转 Supervisor 加载项页面，以管理员身份点击「更新」（唯一可靠路径）
+- 版本号统一为 1.5.3（插件 + 集成）
 ## [1.5.2] - 2026-08-27
 
 ### 优化

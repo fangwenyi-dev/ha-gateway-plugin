@@ -261,7 +261,7 @@
     </div>
 
     <script>
-        let CURRENT_VERSION = '1.5.2';
+        let CURRENT_VERSION = '1.5.3';
         const DOMAIN = 'window_controller_gateway';
 
         // Ingress 下页面路径形如 /hassio/ingress/<token>/，直连插件端口时为 /
@@ -884,9 +884,12 @@
                     content.innerHTML = '<div class="update-box"><div class="update-info">' +
                         '<div class="update-title">发现新版本 v' + escapeHtml(latestVersion) + '</div>' +
                         '<div class="update-desc">当前版本 v' + CURRENT_VERSION + '</div></div>' +
-                        '<button class="btn btn-success" onclick="doUpgrade()">一键升级</button>' +
+                        '<button class="btn btn-success" onclick="doUpgrade()">去加载项页面更新</button>' +
                         '<a class="btn btn-primary" href="' + escapeHtml(latestRelease.html_url) + '" target="_blank">查看详情</a></div>' +
-                        '<div style="margin-top:10px;font-size:12px;color:var(--text-muted);white-space:pre-wrap;">' + escapeHtml(truncatedBody) + '</div>';
+                        '<div style="margin-top:10px;font-size:12px;color:var(--text-muted);white-space:pre-wrap;">' + escapeHtml(truncatedBody) + '</div>' +
+                        '<div style="margin-top:8px;font-size:12px;color:var(--text-muted);">' +
+                        '提示：Supervisor 安全设计禁止插件通过 API 自我更新（一键升级会返回 403/400）。' +
+                        '请使用上方按钮跳转到 Supervisor 加载项页面，以管理员身份点击「更新」。</div>';
                 } else {
                     content.innerHTML = '<div class="update-box" style="background:linear-gradient(135deg,var(--green-bg),#d1fae5);"><div class="update-info">' +
                         '<div class="update-title" style="color:#065f46;">已是最新版本 v' + CURRENT_VERSION + '</div>' +
@@ -899,63 +902,24 @@
             }
         }
 
-        // ========== 一键升级 ==========
+        // ========== 升级引导（跳转 Supervisor 加载项页面） ==========
+        // Supervisor 安全设计（2025 年引入）禁止 add-on 通过 API 更新自己：
+        //   - /addons/self/update 与 /store/addons/{slug}/update 均检查 REQUEST_FROM，
+        //     插件 token 调自己必然 403（"can't update itself"）；
+        //   - hassio.addon_update（HA Core 服务）实测返回 400 空响应（add-on token
+        //     调 HA Core 服务 API 权限不足，aiohttp HTTPBadRequest）。
+        // 因此"一键升级"在官方设计上不可行，唯一可靠路径是管理员在
+        // Supervisor 加载项页面点击「更新」（设置 → 加载项 → 慧尖 LoRa 网关）。
+        // 本函数直接跳转到该页面，不再发起注定失败的 API 调用。
         async function doUpgrade() {
-            if (!confirm('确定要一键升级插件吗？\n\n升级过程：\n1. 调用 HA 服务 hassio.addon_update 更新插件\n2. 更新完成后需重启插件\n3. 重启后自动安装最新集成代码\n\n升级期间插件会短暂不可用。')) return;
-            showToast('正在执行一键升级...', 'warn');
-            try {
-                // 方案：调用 HA Core 服务 hassio.addon_update。
-                // 为什么不能用 Supervisor API /addons/self/update：
-                // Supervisor 源码（supervisor/api/store.py）明确禁止插件自我更新——
-                // if addon == request.get(REQUEST_FROM): raise APIForbidden("can't update itself")
-                // 从插件发起的自我更新请求一律 403（安全设计，2025 年引入）。
-                // hassio.addon_update 由 HA Core 以非插件身份调用 Supervisor，
-                // REQUEST_FROM 不是插件本身，不受该限制。
-                const resp = await haApi('services/hassio/addon_update', 'POST', {
-                    addon: 'huijian_mqtt_broker'
-                });
-                // 详细错误：优先取 body 文本（400 时 aiohttp 空 body，但代理可能附加信息）
-                let msg = '';
-                const text = await resp.text().catch(() => '');
-                if (text) {
-                    try { msg = JSON.parse(text).message || ''; }
-                    catch (e) { msg = text; }
-                }
-                if (resp.ok) {
-                    showToast('升级完成，正在刷新…', 'ok');
-                    setTimeout(() => { window.location.reload(); }, 3000);
-                } else if (/already.*(latest|up.to.date)|nothing to do/i.test(msg)) {
-                    showToast('已是最新版本', 'warn');
-                } else if (/job.*running|in progress|another (update|job)/i.test(msg)) {
-                    showToast('已有任务进行中，请稍后再试', 'warn');
-                } else if (/abort/i.test(msg)) {
-                    showToast('升级已中止', 'warn');
-                } else {
-                    // 失败兜底：给出可诊断的错误信息 + 打开 Supervisor 加载项页面引导。
-                    // 400 空响应是 add-on token 调 HA Core 服务 API 被拒的典型特征
-                    // （hassio 集成未加载 / 权限不足），403 则是 Supervisor 自我更新限制。
-                    const detail = msg ? (' ' + msg) : (' HTTP ' + resp.status);
-                    const hint = resp.status === 403
-                        ? 'Supervisor 禁止插件自我更新（安全设计）。'
-                        : (resp.status === 400
-                            ? 'HA 拒绝了服务调用（hassio 集成可能未加载或权限不足）。'
-                            : '');
-                    showToast('升级失败:' + detail + '。请手动到 设置→加载项→慧尖 LoRa 网关 点击「更新」', 'err');
-                    // 弹出详细错误 + 打开 Supervisor 加载项页面的按钮（管理员可正常更新）
-                    const openAddon = confirm(
-                        '一键升级失败' + detail + '\n\n' +
-                        (hint ? hint + '\n\n' : '') +
-                        '最可靠的升级方式：在 Supervisor 加载项页面点击「更新」按钮\n' +
-                        '（以管理员身份操作，不受插件自我更新限制）。\n\n' +
-                        '现在为你打开加载项页面？'
-                    );
-                    if (openAddon) {
-                        // ingress iframe 的 origin 即 HA 前端 origin，可跳转到加载项详情页
-                        window.open(window.location.origin + '/hassio/addon/huijian_mqtt_broker', '_blank');
-                    }
-                }
-            } catch (e) {
-                showToast('升级请求失败: ' + e.message + '。请手动到 设置→加载项→慧尖 LoRa 网关 更新', 'err');
+            const openAddon = confirm(
+                'Supervisor 安全设计禁止插件通过 API 自我更新（一键升级会返回 403/400），\n' +
+                '请以管理员身份在 Supervisor 加载项页面点击「更新」。\n\n' +
+                '现在为你打开加载项页面？'
+            );
+            if (openAddon) {
+                // ingress iframe 的 origin 即 HA 前端 origin，可跳转到加载项详情页
+                window.open(window.location.origin + '/hassio/addon/huijian_mqtt_broker', '_blank');
             }
         }
 
