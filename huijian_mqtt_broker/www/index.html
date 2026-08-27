@@ -233,7 +233,7 @@
     </div>
 
     <script>
-        let CURRENT_VERSION = '1.3.3';
+        let CURRENT_VERSION = '1.3.5';
         const DOMAIN = 'window_controller_gateway';
 
         // Ingress 下页面路径形如 /hassio/ingress/<token>/，直连插件端口时为 /
@@ -825,9 +825,9 @@
             card.style.display = 'block';
             content.innerHTML = '<div class="loading"><div class="spinner"></div><p>正在检查更新...</p></div>';
             try {
-                // 使用 nginx 代理访问 GitHub API，避免 Ingress iframe CSP 拦截外部请求
-                const resp = await fetch(INGRESS_BASE + 'api/github/repos/fangwenyi-dev/ha-gateway-plugin/releases/latest');
-                if (!resp.ok) throw new Error('GitHub API 不可用 (HTTP ' + resp.status + ')');
+                // 使用 nginx 代理访问 Gitee API（默认更新源，无速率限制）
+                const resp = await fetch(INGRESS_BASE + 'api/gitee/repos/fangwenyi-dev/ha-gateway-plugin/releases/latest');
+                if (!resp.ok) throw new Error('Gitee API 不可用 (HTTP ' + resp.status + ')');
                 const release = await resp.json();
                 const latestVersion = release.tag_name.replace(/^v/, '');
                 const hasUpdate = compareVersions(latestVersion, CURRENT_VERSION) > 0;
@@ -843,7 +843,7 @@
                 } else {
                     content.innerHTML = '<div class="update-box" style="background:linear-gradient(135deg,var(--green-bg),#d1fae5);"><div class="update-info">' +
                         '<div class="update-title" style="color:#065f46;">已是最新版本 v' + CURRENT_VERSION + '</div>' +
-                        '<div class="update-desc">GitHub 最新版本: v' + escapeHtml(latestVersion) + '</div></div></div>';
+                        '<div class="update-desc">Gitee 最新版本: v' + escapeHtml(latestVersion) + '</div></div></div>';
                 }
             } catch (e) {
                 content.innerHTML = '<div class="update-box" style="background:var(--red-bg);"><div class="update-info">' +

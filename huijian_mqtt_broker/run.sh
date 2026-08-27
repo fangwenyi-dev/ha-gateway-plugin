@@ -210,6 +210,15 @@ server {
         proxy_read_timeout 15s;
         proxy_connect_timeout 10s;
     }
+
+    # 代理 Gitee API（默认更新源，无速率限制）
+    location /api/gitee/ {
+        proxy_pass https://gitee.com/api/v5/;
+        proxy_set_header Host gitee.com;
+        proxy_ssl_server_name on;
+        proxy_read_timeout 15s;
+        proxy_connect_timeout 10s;
+    }
 }
 NGINXEOF
 
