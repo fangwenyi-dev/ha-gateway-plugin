@@ -212,27 +212,41 @@ async def handle_set_position(hass: HomeAssistant, call: ServiceCall) -> None:
 async def handle_check_gateway_status(hass: HomeAssistant, call: ServiceCall) -> None:
     """处理检查网关状态服务调用"""
     device_id = call.data.get("device_id")
+    gateway_sn = call.data.get("gateway_sn")
 
-    if not device_id:
-        _LOGGER.error("检查网关状态服务调用失败：未指定设备ID")
+    if not device_id and not gateway_sn:
+        _LOGGER.error("检查网关状态服务调用失败：未指定设备ID或网关SN")
         return
 
-    _LOGGER.info("收到检查网关状态请求，设备ID: %s", device_id)
-    
-    gateway_data, gateway_sn = find_gateway_by_device_id(hass, device_id)
+    # 优先使用 device_id 查找，其次使用 gateway_sn
+    gateway_data = None
+    resolved_sn = None
+    if device_id:
+        gateway_data, resolved_sn = find_gateway_by_device_id(hass, device_id)
+    elif gateway_sn:
+        # 通过 gateway_sn 直接查找
+        for entry_id, data in hass.data.get(DOMAIN, {}).items():
+            if isinstance(data, dict) and data.get("gateway_sn", "").lower() == gateway_sn.lower():
+                gateway_data = data
+                resolved_sn = gateway_sn
+                break
+
     if not gateway_data:
-        _LOGGER.error("未找到设备ID %s 对应的网关", device_id)
+        target = device_id or gateway_sn
+        _LOGGER.error("未找到对应的网关: %s", target)
         return
 
+    _LOGGER.info("收到检查网关状态请求，网关SN: %s", resolved_sn)
+    
     try:
         is_connected = await gateway_data["mqtt_handler"].check_connection()
         gateway_info = gateway_data["device_manager"].get_gateway_info()
         _LOGGER.info("网关 %s 状态检查结果: 在线=%s, 信息=%s", 
                     gateway_info.get("name"), is_connected, gateway_info)
     except (ConnectionError, TimeoutError) as e:
-        _LOGGER.error("网关 %s 连接或超时错误: %s", gateway_sn, e)
+        _LOGGER.error("网关 %s 连接或超时错误: %s", resolved_sn, e)
     except (KeyError, AttributeError) as e:
-        _LOGGER.error("网关 %s 配置错误: %s", gateway_sn, e)
+        _LOGGER.error("网关 %s 配置错误: %s", resolved_sn, e)
     except Exception as e:
         _LOGGER.error("检查网关状态失败: %s", e)
 
@@ -565,7 +579,8 @@ def register_services(hass: HomeAssistant) -> bool:
             "check_gateway_status",
             lambda call: handle_check_gateway_status(hass, call),
             schema=vol.Schema({
-                vol.Required("device_id"): cv.string,
+                vol.Optional("device_id"): cv.string,
+                vol.Optional("gateway_sn"): cv.string,
             })
         )
 

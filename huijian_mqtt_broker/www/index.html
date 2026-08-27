@@ -662,7 +662,7 @@
         async function checkGatewayStatus(entryId, gatewaySn) {
             showToast('正在检查网关状态...', 'warn');
             try {
-                const resp = await haApi('/services/window_controller_gateway/check_gateway_status', 'POST', {});
+                const resp = await haApi('/services/window_controller_gateway/check_gateway_status', 'POST', { gateway_sn: gatewaySn });
                 if (!resp.ok) throw new Error('HA API ' + resp.status);
                 showToast('状态检查已发送', 'ok');
                 setTimeout(() => loadGatewayDevices(entryId, gatewaySn), 2000);
