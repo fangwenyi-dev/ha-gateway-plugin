@@ -6,11 +6,9 @@ import asyncio
 from typing import Any, Dict, Optional
 
 from homeassistant import config_entries
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.exceptions import ConfigEntryNotReady
-import homeassistant.helpers.config_validation as cv
-from homeassistant.components import mqtt
 
 from .const import (
     DOMAIN, 
@@ -21,6 +19,7 @@ from .const import (
 )
 from .mqtt_handler import WindowControllerMQTTHandler
 from .mqtt_bootstrap import ensure_mqtt_connection
+from .utils import is_mqtt_loaded
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -106,7 +105,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         except ConfigEntryNotReady:
                             errors["base"] = "mqtt_not_available"
 
-                        if not self.hass.data.get("mqtt"):
+                        if not is_mqtt_loaded(self.hass):
                             errors["base"] = "mqtt_not_available"
                         else:
                             connected = await self._test_gateway_connectivity(gateway_sn)
@@ -400,7 +399,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         mqtt_handler = None
         try:
             # Check if MQTT integration is available
-            if not self.hass.data.get("mqtt"):
+            if not is_mqtt_loaded(self.hass):
                 _LOGGER.error("MQTT integration not available")
                 return False
 
@@ -463,7 +462,6 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         # 从context中获取网关信息
         gateway_sn = self.context.get("gateway_sn")
         gateway_name = self.context.get("gateway_name", f"慧尖网关 {gateway_sn[-4:]}" if gateway_sn else "慧尖网关")
-        device_id = self.context.get("device_id")
         old_gateway_sn_from_context = self.context.get("old_gateway_sn")
         replace_mode = self.context.get("replace_mode", False)
 

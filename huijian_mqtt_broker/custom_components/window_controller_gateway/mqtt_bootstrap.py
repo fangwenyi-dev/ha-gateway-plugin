@@ -29,8 +29,6 @@ from typing import Any, Dict, Optional
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
 
-from .const import DOMAIN
-
 _LOGGER = logging.getLogger(__name__)
 
 BOOTSTRAP_FILENAME = "window_controller_gateway_mqtt_bootstrap.json"
@@ -89,27 +87,12 @@ async def _wait_for_mqtt_client(hass: HomeAssistant) -> bool:
             _LOGGER.debug("async_wait_for_mqtt_client 异常，视为未就绪", exc_info=True)
             return False
     # 兜底：极老版本无该辅助函数时轮询 hass.data（mqtt 集成 setup 完成即写入）
+    from .utils import is_mqtt_loaded
     for _ in range(30):
-        if hass.data.get("mqtt"):
+        if is_mqtt_loaded(hass):
             return True
         await asyncio.sleep(1)
-    return hass.data.get("mqtt") is not None
-
-
-def _ha_supports_broker_sections() -> bool:
-    """检测当前 HA 是否为要求 other_settings 段的新版本（2026.8+/dev）。
-
-    新版 mqtt config flow 的 broker 校验器直接索引 user_input[OTHER_SETTINGS]，
-    缺失该键会抛 KeyError 导致 setup 进入 SETUP_ERROR（无重试）。
-    """
-    try:
-        from homeassistant.const import __version__
-
-        parts = str(__version__).split(".")[:2]
-        major, minor = int(parts[0]), int(parts[1])
-        return (major, minor) >= (2026, 8)
-    except (ImportError, ValueError, IndexError):
-        return False
+    return is_mqtt_loaded(hass)
 
 
 async def _quietly_abort_flow(hass: HomeAssistant, flow_id: str) -> None:
@@ -284,23 +267,33 @@ async def ensure_mqtt_connection(hass: HomeAssistant) -> None:
         if password:
             user_input["password"] = password
 
-        # 新版（2026.8+/dev）要求 other_settings 段，缺失会在校验时抛 KeyError；
-        # 旧版 schema 不认识该键，按版本探测决定是否附带。
-        if _ha_supports_broker_sections():
-            user_input["other_settings"] = {
-                "set_ca_cert": "off",
-                "set_client_cert": False,
-                "transport": "tcp",
-            }
-
+        # 自适应兼容新旧 HA 的 mqtt broker 表单 schema：
+        # - 旧版：不认识 other_settings 键，按不含该键提交即可；
+        # - 新版（2026.8+/dev）：broker 校验器直接索引 user_input[OTHER_SETTINGS]，
+        #   缺失会抛 KeyError。捕获后补字段重试，无需硬编码版本号探测
+        #   （未来 schema 再变时以实际抛错信号为准，比版本探测更稳健）。
+        OTHER_SETTINGS = {
+            "set_ca_cert": "off",
+            "set_client_cert": False,
+            "transport": "tcp",
+        }
         try:
             result = await hass.config_entries.flow.async_configure(
                 flow_id, user_input=user_input
             )
+        except KeyError:
+            # 新版 HA 要求 other_settings 段：补字段后重试一次
+            if "other_settings" not in user_input:
+                user_input["other_settings"] = OTHER_SETTINGS
+                result = await hass.config_entries.flow.async_configure(
+                    flow_id, user_input=user_input
+                )
+            else:
+                raise
         except Exception as err:  # noqa: BLE001 — 校验器内部异常不能炸掉 setup
             await _quietly_abort_flow(hass, flow_id)
             _LOGGER.warning("提交 MQTT 配置流程失败: %s", err)
-            raise ConfigEntryNotReady(f"MQTT 配置流程提交失败，稍后重试") from err
+            raise ConfigEntryNotReady("MQTT 配置流程提交失败，稍后重试") from err
 
         result_type = result.get("type")
 

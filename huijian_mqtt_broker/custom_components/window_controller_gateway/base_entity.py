@@ -1,6 +1,5 @@
 """设备实体管理基类"""
 import logging
-from typing import Optional
 from homeassistant.core import HomeAssistant
 
 from .utils import get_device_gateway_mapping

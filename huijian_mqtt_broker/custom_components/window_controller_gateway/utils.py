@@ -8,6 +8,29 @@ from .const import DOMAIN
 _LOGGER = logging.getLogger(__name__)
 
 
+def is_mqtt_loaded(hass: HomeAssistant) -> bool:
+    """MQTT 集成是否已加载。
+
+    兼容新旧 HA：mqtt 集成 setup 完成会写入 ``hass.data["mqtt"]``，
+    这是长期稳定的契约（官方推荐的可用性判断方式之一）。
+    集中于此判断，未来 HA 若调整存储方式只需改此处。
+    """
+    return hass.data.get("mqtt") is not None
+
+
+def is_mqtt_connected(hass: HomeAssistant) -> bool:
+    """MQTT broker 是否已连接（官方 API，带兼容回退）。
+
+    ``homeassistant.components.mqtt.async_connected(hass)`` 是 2023.5+ 官方
+    辅助函数；旧版不存在时回退为"集成已加载即视为可用"。
+    """
+    try:
+        from homeassistant.components.mqtt import async_connected
+        return bool(async_connected(hass))
+    except (ImportError, AttributeError):
+        return is_mqtt_loaded(hass)
+
+
 def get_entity_registry(hass: HomeAssistant):
     """获取实体注册表
 

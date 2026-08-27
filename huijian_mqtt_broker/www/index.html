@@ -233,7 +233,7 @@
     </div>
 
     <script>
-        let CURRENT_VERSION = '1.4.8';
+        let CURRENT_VERSION = '1.4.9';
         const DOMAIN = 'window_controller_gateway';
 
         // Ingress 下页面路径形如 /hassio/ingress/<token>/，直连插件端口时为 /
@@ -825,12 +825,19 @@
             card.style.display = 'block';
             content.innerHTML = '<div class="loading"><div class="spinner"></div><p>正在检查更新...</p></div>';
             try {
-                // 使用 nginx 代理访问 Gitee API（默认更新源，无速率限制）
+                // 更新源：优先 Gitee（默认，无速率限制），失败时回退 GitHub。
                 // 不使用 /releases/latest 端点（Gitee 可能返回过期数据），
-                // 改为获取所有 releases 取版本号最大的
-                const resp = await fetch(INGRESS_BASE + 'api/gitee/repos/fangwenyi-dev/ha-gateway-plugin/releases?per_page=100');
-                if (!resp.ok) throw new Error('Gitee API 不可用 (HTTP ' + resp.status + ')');
-                const releases = await resp.json();
+                // 改为获取所有 releases 取版本号最大的。
+                let releases = null;
+                try {
+                    const giteeResp = await fetch(INGRESS_BASE + 'api/gitee/repos/fangwenyi-dev/ha-gateway-plugin/releases?per_page=100');
+                    if (giteeResp.ok) releases = await giteeResp.json();
+                } catch (e) { /* Gitee 网络异常，尝试 GitHub */ }
+                if (!releases) {
+                    const ghResp = await fetch(INGRESS_BASE + 'api/github/repos/fangwenyi-dev/ha-gateway-plugin/releases?per_page=100');
+                    if (!ghResp.ok) throw new Error('更新源不可用 (HTTP ' + ghResp.status + ')');
+                    releases = await ghResp.json();
+                }
                 // 找版本号最大的 release
                 let latestVersion = '0.0.0';
                 let latestRelease = null;

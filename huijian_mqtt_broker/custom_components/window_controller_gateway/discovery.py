@@ -1,11 +1,8 @@
 """Window Controller Gateway Discovery Platform"""
 import logging
 import time
-from typing import Any, Dict, Optional
 
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.discovery import async_load_platform
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 

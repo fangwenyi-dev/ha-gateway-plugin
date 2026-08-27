@@ -12,8 +12,6 @@ from .const import (
     DOMAIN,
     CONF_GATEWAY_SN,
     CONF_GATEWAY_NAME,
-    ATTR_DEVICE_SN,
-    ATTR_DEVICE_NAME,
     DEVICE_TYPE_WINDOW_OPENER,  # 使用开窗器类型
     MANUFACTURER,
     MODEL,
@@ -21,7 +19,6 @@ from .const import (
     GLOBAL_MANUALLY_REMOVED_DEVICES,
     DEVICE_SETPOINTS,
     DEVICE_STATUS_UNKNOWN,
-    DEVICE_STATUS_CONNECTED,
     DEVICE_STATUS_ERROR,
     GATEWAY_READY_DELAY,
     get_device_display_name,
@@ -168,9 +165,6 @@ class WindowControllerDeviceManager:
         start_time = time.time()
         _LOGGER.info("=== 设备管理器初始化: %s ===", self.gateway_sn)
         
-        # 标准化网关SN（转小写以进行匹配）
-        gateway_sn_lower = self.gateway_sn.lower()
-        
         processed_count = 0
         
         # 调试：检查映射表是否存在
@@ -259,8 +253,8 @@ class WindowControllerDeviceManager:
             if not config_entry:
                 return
             
-            # 快速创建设备注册
-            device = device_registry.async_get_or_create(
+            # 快速创建设备注册（返回值不需要：注册表按 identifiers 幂等）
+            device_registry.async_get_or_create(
                 config_entry_id=self.entry.entry_id,
                 identifiers={(DOMAIN, device_sn)},
                 name=device_name,

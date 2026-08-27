@@ -1,6 +1,5 @@
 """开窗器网关Cover平台 - 供LLM等使用Cover语义控制开窗器"""
 import logging
-from typing import Optional
 
 from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
@@ -11,14 +10,11 @@ from homeassistant.components.cover import (
     CoverEntityFeature,
     CoverDeviceClass,
 )
-from datetime import datetime, timedelta
 
 from .base_entity import WindowControllerBaseEntity
 from .const import (
     DOMAIN,
     CONF_GATEWAY_SN,
-    CONF_GATEWAY_NAME,
-    DEFAULT_GATEWAY_NAME,
     DEVICE_TYPE_WINDOW_OPENER,
     MANUFACTURER,
     COMMAND_OPEN,

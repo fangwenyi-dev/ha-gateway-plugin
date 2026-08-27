@@ -362,9 +362,6 @@ async def async_setup_entry(
             # 清理不支持内倒功能设备的多余按钮实体（升级兼容）
             await _cleanup_unsupported_buttons(hass, gateway_sn, device_sn)
             
-            # 生成删除按钮的唯一ID
-            remove_button_unique_id = f"{gateway_sn}_remove_{device_sn}"
-            
             # 启动循环无条件创建实体：
             # 实体注册表条目跨重启/重载持久保留，用注册表查重会导致重启后
             # 所有实体只有注册表条目、没有平台实例（不可用）。

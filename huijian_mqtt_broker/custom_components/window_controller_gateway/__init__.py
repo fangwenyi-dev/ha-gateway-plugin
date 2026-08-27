@@ -2,7 +2,7 @@
 import logging
 import asyncio
 from datetime import timedelta
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -17,25 +17,16 @@ from .const import (
     CONF_GATEWAY_SN, 
     CONF_GATEWAY_NAME,
     DEFAULT_GATEWAY_NAME,
-    SERVICE_START_PAIRING, 
-    SERVICE_REFRESH_DEVICES,
-    SERVICE_MIGRATE_DEVICES,
-    SERVICE_RENAME_DEVICE,
-    SERVICE_TRANSFER_DEVICE,
-    ATTR_NEW_NAME,
     SCAN_INTERVAL,
     DEVICE_TO_GATEWAY_MAPPING,
     GLOBAL_MANUALLY_REMOVED_DEVICES,
     DEVICE_SETPOINTS,
     RESTART_DELAY,
-    GATEWAY_PAIRING_TIMEOUT,
-    POSITION_MIN,
-    POSITION_MAX,
-    COMMAND_SET_POSITION
 )
 from .persist import load_persistent_data, save_persistent_data
 from .services import register_services
 from .api import async_setup_api
+from .utils import is_mqtt_loaded
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -149,7 +140,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 except Exception as e:
                     _LOGGER.debug("心跳监听器处理消息出错: %s", e)
 
-            if hass.data.get("mqtt"):
+            if is_mqtt_loaded(hass):
                 from homeassistant.components import mqtt as mqtt_comp
                 _unsub_heartbeat = await mqtt_comp.async_subscribe(
                     hass, TOPIC_GATEWAY_RSP, _heartbeat_listener, 1
@@ -224,7 +215,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # 获取配置选项
         options = entry.options
         discovery_interval = options.get("discovery_interval", SCAN_INTERVAL)
-        auto_discovery = options.get("auto_discovery", True)
         debug_logging = options.get("debug_logging", False)
         
         # P1 修复：启用/禁用调试日志时使用引用计数控制模块 logger 级别。

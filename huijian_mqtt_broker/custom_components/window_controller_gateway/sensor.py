@@ -1,8 +1,5 @@
 """开窗器网关传感器平台"""
-import asyncio
 import logging
-
-from typing import Optional
 
 from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
@@ -15,8 +12,6 @@ from datetime import datetime, timedelta
 from .const import (
     DOMAIN,
     CONF_GATEWAY_SN,
-    CONF_GATEWAY_NAME,
-    DEFAULT_GATEWAY_NAME,
     MANUFACTURER,
     SENSOR_TIMEOUT_MINUTES,
 )

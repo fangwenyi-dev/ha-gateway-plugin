@@ -13,19 +13,10 @@ from homeassistant.helpers.entity import DeviceInfo, EntityCategory
 
 from .const import (
     DOMAIN,
-    CONF_GATEWAY_SN,
-    CONF_GATEWAY_NAME,
-    DEFAULT_GATEWAY_NAME,
-    ENTITY_ONLINE_SENSOR_SUFFIX,
-    ENTITY_PAIRING_BUTTON_SUFFIX,
     MANUFACTURER,
     MODEL,
     GATEWAY_READY_DELAY,
-    MAX_COMMAND_ID,
     GATEWAY_PAIRING_TIMEOUT,
-    PAIRING_SN_PLACEHOLDER,
-    DEVICE_TYPE_CURTAIN_CTR,
-    PROTOCOL_HEAD
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -103,9 +94,12 @@ class GatewayOnlineSensor(BinarySensorEntity):
         # - 事件循环线程内 → async_write_ha_state（HA 2024.12+ 推荐，避免
         #   schedule_update_ha_state 的弃用告警与多余的线程池跳转）
         # - 线程池线程内 → schedule_update_ha_state（线程安全版本）
+        # P1 兼容：hass.loop_thread_id 是 2024.12+ 属性，低版本用 getattr 回退
+        # 到 schedule_update_ha_state（线程安全，行为正确，仅多一次线程池跳转）。
         try:
             if self.hass is not None:
-                if threading.get_ident() == self.hass.loop_thread_id:
+                loop_thread_id = getattr(self.hass, "loop_thread_id", None)
+                if loop_thread_id is not None and threading.get_ident() == loop_thread_id:
                     self.async_write_ha_state()
                 else:
                     self.schedule_update_ha_state()

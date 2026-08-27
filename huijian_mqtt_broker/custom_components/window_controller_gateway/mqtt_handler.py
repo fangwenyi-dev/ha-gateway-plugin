@@ -13,6 +13,8 @@ from typing import Dict, Any, Optional, Callable, Union
 from homeassistant.core import HomeAssistant
 from homeassistant.components import mqtt
 
+from .utils import is_mqtt_loaded, is_mqtt_connected
+
 from .const import (
     DOMAIN,
     CONF_GATEWAY_SN,
@@ -172,7 +174,7 @@ class WindowControllerMQTTHandler:
         _LOGGER.info("MQTT处理器初始化: %s", self.gateway_sn)
         
         # 检查MQTT集成是否可用
-        if not self.hass.data.get("mqtt"):
+        if not is_mqtt_loaded(self.hass):
             _LOGGER.error("MQTT集成未启用，请先在Home Assistant中启用MQTT集成")
             return False
             
@@ -896,7 +898,7 @@ class WindowControllerMQTTHandler:
         """
         try:
             # MQTT 集成未加载：网关必然无法通信
-            if not self.hass.data.get("mqtt"):
+            if not is_mqtt_loaded(self.hass):
                 _LOGGER.error("MQTT集成未启用，网关无法通信")
                 if self.connected:
                     self.connected = False
@@ -907,19 +909,15 @@ class WindowControllerMQTTHandler:
                 return False
 
             # broker 未连接：网关必然离线（兼容旧版 HA 无此 API 的情况）
-            try:
-                from homeassistant.components.mqtt import async_connected
-                if not async_connected(self.hass):
-                    _LOGGER.debug("MQTT broker 未连接，网关标记为离线")
-                    if self.connected:
-                        self.connected = False
-                        self._notify_status_change()
-                        self._schedule_async_task(
-                            self.device_manager.update_gateway_status("offline")
-                        )
-                    return False
-            except (ImportError, AttributeError):
-                pass  # 旧版 HA 无 async_connected API，回退为仅返回当前状态
+            if not is_mqtt_connected(self.hass):
+                _LOGGER.debug("MQTT broker 未连接，网关标记为离线")
+                if self.connected:
+                    self.connected = False
+                    self._notify_status_change()
+                    self._schedule_async_task(
+                        self.device_manager.update_gateway_status("offline")
+                    )
+                return False
 
             return self.connected
         except Exception as e:

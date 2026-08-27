@@ -124,6 +124,18 @@ https://github.com/fangwenyi-dev/ha-gateway-plugin
 
 ## 更新日志
 
+### v1.4.9 (2026-08-27)
+- **兼容性加固（HA 更新防护）**：
+  - 删除遗留 API `homeassistant.helpers.discovery` 死导入（未来 HA 移除该模块会导致集成崩溃）
+  - 清理全部 30+ 处死导入/未使用变量（pyflakes 全干净）
+  - `manifest.json` 最低版本声明修正为 `2024.12.0`（与实际使用的 API 匹配）
+  - `hass.loop_thread_id` 改 `getattr` 保护（低版本 HA 不退化）
+- **MQTT 就绪检查统一**：新增 `is_mqtt_loaded`/`is_mqtt_connected` 辅助函数，替换 7 处隐式 `hass.data.get("mqtt")` 判断
+- **MQTT 自动配置自适应**：删除硬编码版本探测，改为 KeyError 自适应补 `other_settings` 段（抗 HA schema 未来变化）
+- **Web UI 更新检查**：Gitee 失败自动回退 GitHub
+- **新增单元测试**：33 个测试用例（const/ACL 矩阵/persist 持久化/MQTT 就绪判断）
+- ⚠️ **需要重启 HA**（集成代码有更新）
+
 ### v1.4.8 (2026-08-27)
 - **修复**：Web UI「一键升级」400 错误 — 改用 Supervisor 免认证端点 `/addons/self/update`，升级超时放宽至 600s
 - **修复**：MQTT 重连成功后未标记 connected，导致命令发送误判失败
