@@ -176,10 +176,20 @@ async def ensure_mqtt_connection(hass: HomeAssistant) -> None:
         first = existing_entries[0]
         cur_broker = first.data.get("broker")
         cur_port = first.data.get("port")
+        cur_username = first.data.get("username")
 
-        if cur_broker == broker and str(cur_port) == str(port):
+        # Bug5 修复：仅当 broker/port/username 全部一致才视为已配置完成。
+        # 旧版插件把 ${USERNAME}（huijian）写入 bootstrap 标记，HA 集成用它连接；
+        # 新版分离出 ha_mqtt 用户（ACL 全权限）。升级后旧条目 username 与标记
+        # 不一致，必须走更新分支把用户名/密码刷成 ha_mqtt，否则 HA 集成继续用
+        # 被收紧 ACL 的 huijian 连接，MQTT discovery 收不到消息。
+        if (
+            cur_broker == broker
+            and str(cur_port) == str(port)
+            and cur_username == username
+        ):
             _LOGGER.debug(
-                "MQTT 配置条目已指向内置 Broker %s:%s，无需更新",
+                "MQTT 配置条目已指向内置 Broker %s:%s 且用户一致，无需更新",
                 broker, port,
             )
             await hass.async_add_executor_job(_remove_marker, marker_path)

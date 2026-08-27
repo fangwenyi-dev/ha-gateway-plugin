@@ -57,14 +57,23 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 class WindowControllerMQTTHandler:
-    """MQTT处理器类 - 使用HA内置MQTT"""
+    """MQTT处理器类 - 使用HA内置MQTT
+
+    状态语义（Bug4 澄清，避免混用）：
+    - ``self.connected``：**网关是否在线**。收到网关上报（001/002/005）置 True，
+      网关超时未上报（GATEWAY_TIMEOUT_SECONDS）置 False；重连（重新订阅）成功后
+      置 True 代表 MQTT 层就绪，网关真实在线状态由后续上报刷新。
+    - **MQTT broker 是否就绪**：用 ``homeassistant.components.mqtt.async_connected(hass)``
+      检查（见 check_connection），与 ``self.connected`` 是两回事。
+    - ``pairing_active``：网关是否处于配对模式（与 connected 无关）。
+    """
     
     def __init__(self, hass: HomeAssistant, gateway_sn: str, device_manager):
         """初始化MQTT处理器"""
         self.hass = hass
         self.gateway_sn = gateway_sn
         self.device_manager = device_manager
-        self.connected = False
+        self.connected = False  # 网关在线状态（见类 docstring）
         self.pairing_active = False
         self.last_gateway_report_time = None  # 最后收到网关002上报的时间
         self.command_id = DEFAULT_COMMAND_ID  # 命令ID初始值
@@ -429,7 +438,13 @@ class WindowControllerMQTTHandler:
                         self._check_task.cancel()
                         try:
                             await self._check_task
-                        except (asyncio.CancelledError, Exception):
+                        except asyncio.CancelledError:
+                            # Bug3 修复：主动 cancel 后 await，CancelledError 是预期
+                            # 结果（任务被取消），吞掉继续；与旧 (CancelledError, Exception)
+                            # 合并写法行为等价，但语义更清晰，不再把 CancelledError
+                            # 与普通异常混为一谈。
+                            pass
+                        except Exception:
                             pass
                 self._check_task = asyncio.create_task(
                     self._check_gateway_timeout(),
@@ -437,6 +452,14 @@ class WindowControllerMQTTHandler:
                 )
                 
                 _LOGGER.debug("MQTT重新连接成功")
+                # Bug1 修复：重连（重新订阅）成功后立即标记连接就绪。
+                # self.connected 语义 = 网关在线（收到上报为 True），但订阅成功
+                # 代表 MQTT broker 层已就绪；此处置 True 避免 send_command 的
+                # 重连等待分支误判失败。网关真实在线状态随后由上报刷新，
+                # 若网关离线，_check_gateway_timeout 会在超时窗口内纠正为 False。
+                if not self.connected:
+                    self.connected = True
+                    self._notify_status_change()
                 return
             except Exception as e:
                 retry_count += 1
@@ -519,7 +542,10 @@ class WindowControllerMQTTHandler:
                         if self._reconnect_task:
                             try:
                                 await self._reconnect_task
-                            except (asyncio.CancelledError, Exception):
+                            except asyncio.CancelledError:
+                                # Bug3 修复：重连任务被取消（如卸载时），按失败处理
+                                pass
+                            except Exception:
                                 pass
                         if not self.connected:
                             _LOGGER.debug("MQTT重连失败，无法发送命令")

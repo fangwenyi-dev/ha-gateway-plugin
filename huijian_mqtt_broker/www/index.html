@@ -233,7 +233,7 @@
     </div>
 
     <script>
-        let CURRENT_VERSION = '1.4.7';
+        let CURRENT_VERSION = '1.4.8';
         const DOMAIN = 'window_controller_gateway';
 
         // Ingress 下页面路径形如 /hassio/ingress/<token>/，直连插件端口时为 /
@@ -866,18 +866,21 @@
 
         // ========== 一键升级 ==========
         async function doUpgrade() {
-            if (!confirm('确定要一键升级插件吗？\n\n升级过程：\n1. 调用 HA 服务 hassio.addon_update 更新插件\n2. 更新完成后需重启插件\n3. 重启后自动安装最新集成代码\n\n升级期间插件会短暂不可用。')) return;
+            if (!confirm('确定要一键升级插件吗？\n\n升级过程：\n1. 调用 Supervisor 更新插件\n2. 更新完成后需重启插件\n3. 重启后自动安装最新集成代码\n\n升级期间插件会短暂不可用。')) return;
             showToast('正在执行一键升级...', 'warn');
             try {
-                // 方案：通过 HA Core 服务 hassio.addon_update 触发 Supervisor 更新
-                // 原因：Supervisor API POST /addons/{slug}/update 需要 admin 角色，
-                // add-on token 非 admin 返回 403。
-                // HA Core 服务调用以用户身份（admin）执行，绕过 Supervisor 的 token 权限限制。
-                const resp = await haApi('services/hassio/addon_update', 'POST', {
-                    addon: 'huijian_mqtt_broker'
+                // 方案：直接调用 Supervisor API POST /addons/self/update（插件更新自身，免认证）。
+                // 历史问题：旧实现走 HA Core 服务 hassio.addon_update（/api/ha/services/...），
+                // add-on token 调用 HA Core REST API 服务端点会被拒绝返回 400（空响应），
+                // Web UI 显示"升级失败: HTTP 400"。
+                // Supervisor 路由是 /addons/{slug}/...，nginx /api/supervisor/ 代理会剥离前缀。
+                const resp = await fetch(INGRESS_BASE + 'api/supervisor/addons/self/update', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({})
                 });
                 const data = await resp.json().catch(() => ({}));
-                const msg = data.message || '';
+                const msg = data.message || data.result || '';
                 if (resp.ok) {
                     showToast('升级完成，正在刷新…', 'ok');
                     setTimeout(() => { window.location.reload(); }, 3000);

@@ -124,6 +124,61 @@ https://github.com/fangwenyi-dev/ha-gateway-plugin
 
 ## 更新日志
 
+### v1.4.8 (2026-08-27)
+- **修复**：Web UI「一键升级」400 错误 — 改用 Supervisor 免认证端点 `/addons/self/update`，升级超时放宽至 600s
+- **修复**：MQTT 重连成功后未标记 connected，导致命令发送误判失败
+- **安全加固**：ACL 分离用户 — 新增 `ha_mqtt` 用户（HA MQTT 集成专用，homeassistant/# 全权限），网关用户 `huijian` 收紧为网关协议主题（防伪造 HA 发现消息）
+- **修复**：mosquitto 崩溃无限重启 — 连续 5 次重启失败后退出保留现场
+- **修复**：`_reconnect_mqtt` 重连成功后立即标记连接就绪（Bug1）
+- **修复**：CancelledError 规范捕获处理（不再与普通异常混为一谈）
+- ⚠️ **需要重启 HA**（集成代码有更新）
+
+### v1.4.7 (2026-08-27)
+- **安全**：移除 full_access 权限，提升安全评分（zeroconf 不需要设备级权限）
+
+### v1.4.6 (2026-08-27)
+- **修复**：mDNS BadTypeInNameException — zeroconf 0.132.0 要求 type_ 和 name 以 `.local.` 结尾
+
+### v1.4.5 (2026-08-27)
+- **修复**：mDNS IPVersion.V4 错误
+
+### v1.4.4 (2026-08-27)
+- **修复**：插件无法安装 — base 镜像改用 latest tag + pip install 兼容性修复
+
+### v1.4.3 (2026-08-27)
+- **修复**：Web UI 检查更新不显示 v1.4.2（Gitee /releases/latest 返回过期数据）
+
+### v1.4.2 (2026-08-27)
+- **重构**：用 Python zeroconf 替代 avahi 体系，彻底修复 mDNS（不依赖 D-Bus / avahi-daemon）
+- **修复**：Gitee Release 乱码
+
+### v1.4.1 (2026-08-27)
+- **修复**：mDNS crash loop
+- **优化**：自动更新日志、升级流程
+
+### v1.4.0 (2026-08-27)
+- **修复**：mDNS huijian.local A record
+- **修复**：hassio MQTT entry fallback
+
+### v1.3.9 (2026-08-27)
+- **修复**：mosquitto 退出时 trap 清理逻辑 — 用循环重启替代 exec 替换
+- **修复**：mDNS — 添加 avahi-tools + nginx 安全收紧 + 进程生命周期管理
+
+### v1.3.8 (2026-08-27)
+- **回退**：host_network（v1.3.7 的改动回退）
+
+### v1.3.7 (2026-08-27)
+- **尝试**：host_network mDNS fix
+
+### v1.3.6 (2026-08-26)
+- **chore**：版本号更新
+
+### v1.3.5 (2026-08-26)
+- **修复**：服务注册协程未 await + mDNS 添加 _mqtt._tcp 服务
+
+### v1.3.4 (2026-08-26)
+- **修复**：更新检查改用 Gitee API（无速率限制）
+
 ### v1.3.3 (2026-08-27)
 - **修复**：mqtt_bootstrap `ConfigEntry.hass` AttributeError（HA 新版本兼容性）
 - ⚠️ **需要重启 HA**（集成代码有更新）

@@ -67,6 +67,38 @@ if [ ! -s "${PASSWD_FILE}" ]; then
     exit 1
 fi
 
+# ---------- 1a. 创建 ha_mqtt 用户（HA MQTT 集成专用） ----------
+# Bug5 修复：分离用户收紧权限。
+# - ${USERNAME}（huijian）：LoRa 网关 / 客户端使用，ACL 仅授权网关协议主题，
+#   不能读写 homeassistant/#（防凭据泄露后被用来伪造 HA 发现消息）。
+# - ha_mqtt：HA MQTT 集成使用，ACL 授权 homeassistant/#（MQTT discovery 必需）。
+# 密码与 ${PASSWORD} 相同（均来自插件配置），权限隔离按用户名由 ACL 保证。
+HA_MQTT_USERNAME="ha_mqtt"
+HA_MQTT_USER_CREATED=false
+if command -v mosquitto_passwd >/dev/null 2>&1; then
+    if mosquitto_passwd -b "${PASSWD_FILE}" "${HA_MQTT_USERNAME}" "${PASSWORD}" 2>/dev/null; then
+        HA_MQTT_USER_CREATED=true
+        echo "[OK] HA MQTT 用户已创建: ${HA_MQTT_USERNAME}"
+    else
+        echo "[警告] 创建 HA MQTT 用户失败（降级：HA 集成将使用 ${USERNAME} 连接）"
+    fi
+else
+    # 兜底：手动用 openssl 追加哈希（mosquitto_passwd 不可用场景）
+    HA_SALT=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n' | head -c 16)
+    printf "${PASSWORD}\n${PASSWORD}\n" | openssl passwd -6 -salt "${HA_SALT}" -stdin 2>/dev/null | {
+        read -r HASH
+        if [ -n "${HASH}" ]; then
+            printf "${HA_MQTT_USERNAME}:${HASH}\n" >> "${PASSWD_FILE}" 2>/dev/null && HA_MQTT_USER_CREATED=true
+        fi
+    }
+fi
+
+# bootstrap 标记使用哪个用户：ha_mqtt 创建成功才用，否则回退 ${USERNAME}
+BOOTSTRAP_USERNAME="${USERNAME}"
+if [ "${HA_MQTT_USER_CREATED}" = "true" ]; then
+    BOOTSTRAP_USERNAME="${HA_MQTT_USERNAME}"
+fi
+
 chmod 600 "${PASSWD_FILE}"
 chown mosquitto:mosquitto "${PASSWD_FILE}" 2>/dev/null || true
 echo "[OK] 密码文件权限已设置 (600, mosquitto:mosquitto)"
@@ -77,9 +109,33 @@ head -1 "${PASSWD_FILE}" 2>/dev/null | sed 's/\(.\{20\}\).*/\1.../' || true
 
 # ---------- 1b. 动态生成 ACL 文件 ----------
 ACL_FILE="/etc/mosquitto/acl"
-cat > "${ACL_FILE}" <<EOF
-# 动态生成 — 用户: ${USERNAME}
+{
+    cat <<EOF
+# 动态生成 — 按用户隔离权限
+#
+# ${USERNAME}（LoRa 网关 / 调试客户端）：
+#   仅网关协议主题 + 状态心跳，不能读写 homeassistant/#（防伪造 HA 发现）
 user ${USERNAME}
+
+# 慧尖网关协议主题
+topic readwrite gateway/+
+topic readwrite gateway/+/req
+topic readwrite gateway/rpt_rsp
+
+# 网关 birth/will 与 HA 状态心跳
+topic readwrite homeassistant/status
+
+# 健康检查主题
+topic readwrite test/#
+
+# \$SYS 主题（只读）
+topic read \$SYS/#
+EOF
+    if [ "${HA_MQTT_USER_CREATED}" = "true" ]; then
+        cat <<EOF
+
+# ${HA_MQTT_USERNAME}（HA MQTT 集成）：MQTT discovery 需要 homeassistant/# 全权限
+user ${HA_MQTT_USERNAME}
 
 # HA MQTT 集成 discovery 主题
 topic readwrite homeassistant/#
@@ -89,15 +145,20 @@ topic readwrite gateway/+
 topic readwrite gateway/+/req
 topic readwrite gateway/rpt_rsp
 
-# 健康检查主题
-topic readwrite test/#
-
-# \$SYS 主题
+# \$SYS 主题（只读）
 topic read \$SYS/#
 EOF
+    else
+        cat <<EOF
+
+# 回退：${HA_MQTT_USERNAME} 创建失败，${USERNAME} 保留 HA discovery 权限（旧行为）
+topic readwrite homeassistant/#
+EOF
+    fi
+} > "${ACL_FILE}"
 chmod 600 "${ACL_FILE}"
 chown mosquitto:mosquitto "${ACL_FILE}" 2>/dev/null || true
-echo "[OK] ACL 文件已生成 (用户: ${USERNAME})"
+echo "[OK] ACL 文件已生成 (用户: ${USERNAME} + ${HA_MQTT_USERNAME})"
 
 # ---------- 2. 创建持久化目录 ----------
 mkdir -p /data/mosquitto
@@ -170,7 +231,9 @@ server {
         proxy_set_header Authorization "Bearer ${HA_SUPERVISOR_TOKEN}";
         proxy_set_header Content-Type "application/json";
         proxy_set_header Accept "application/json";
-        proxy_read_timeout 120s;
+        # 一键升级（/addons/self/update）需要下载新镜像，可能耗时数分钟；
+        # 120s 会超时中断升级（Supervisor 后台继续但前端显示失败）
+        proxy_read_timeout 600s;
         proxy_connect_timeout 5s;
         proxy_ssl_verify off;
     }
@@ -402,10 +465,11 @@ if [ "${AUTO_SETUP}" = "true" ]; then
     if [ -d "${HA_CONFIG_DIR}" ]; then
         MARKER_PATH="${HA_CONFIG_DIR}/window_controller_gateway_mqtt_bootstrap.json"
         # 使用 jq 构造 JSON，正确转义密码中的特殊字符
+        # Bug5 修复：写入 ha_mqtt 用户（ACL 全权限），HA 集成用其连接
         if jq -n \
             --arg broker "127.0.0.1" \
             --argjson port "${MQTT_PORT}" \
-            --arg username "${USERNAME}" \
+            --arg username "${BOOTSTRAP_USERNAME}" \
             --arg password "${PASSWORD}" \
             '{broker:$broker, port:$port, username:$username, password:$password}' \
             > "${MARKER_PATH}" 2>/dev/null; then
@@ -483,10 +547,21 @@ fi
 # wait 阻塞等待 mosquitto 退出；mosquitto 退出后 trap cleanup_mdns 自动清理 avahi-publish。
 # 如果 mosquitto 异常退出（wait 返回非零），重启 mosquitto 而非 exec 替换，
 # 确保当前 shell 保持存活以执行 trap 清理逻辑。
+# Bug2 修复：限制连续重启次数。mosquitto 因配置损坏（passwd/acl 格式错误等）
+# 反复崩溃时，无限重启会刷屏且无助于恢复；连续 MAX_MOSQUITTO_RESTARTS 次
+# 崩溃后退出并保留现场（日志/配置），便于排查。
+MAX_MOSQUITTO_RESTARTS=5
+MOSQUITTO_RESTART_COUNT=0
 while true; do
     wait "${MOSQUITTO_PID}" 2>/dev/null
     EXIT_CODE=$?
-    echo "[运行] Mosquitto 已退出 (exit code: ${EXIT_CODE})，5 秒后重启..."
+    MOSQUITTO_RESTART_COUNT=$((MOSQUITTO_RESTART_COUNT + 1))
+    if [ "${MOSQUITTO_RESTART_COUNT}" -gt "${MAX_MOSQUITTO_RESTARTS}" ]; then
+        echo "[错误] Mosquitto 连续退出 ${MAX_MOSQUITTO_RESTARTS} 次（最近 exit code: ${EXIT_CODE}），停止重启"
+        echo "[诊断] 请检查 /etc/mosquitto/mosquitto.conf、passwd、acl 配置后手动重启插件"
+        exit 1
+    fi
+    echo "[运行] Mosquitto 已退出 (exit code: ${EXIT_CODE})，5 秒后重启 (${MOSQUITTO_RESTART_COUNT}/${MAX_MOSQUITTO_RESTARTS})..."
     sleep 5
     mosquitto -c /etc/mosquitto/mosquitto.conf &
     MOSQUITTO_PID=$!
