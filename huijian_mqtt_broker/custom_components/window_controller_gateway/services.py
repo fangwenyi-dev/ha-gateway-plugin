@@ -539,12 +539,34 @@ async def handle_transfer_device(hass: HomeAssistant, call: ServiceCall) -> None
 
 def register_services(hass: HomeAssistant) -> bool:
     """注册服务"""
+    # P0 修复：所有服务处理器均为 async def，必须用 async 包装器传入
+    # async_register。lambda call: async_fn(hass, call) 返回协程对象但不
+    # await 它 → HA 的 SyncWorker 调度时协程被丢弃，"coroutine was never awaited"。
+
+    async def _start_pairing(call: ServiceCall) -> None:
+        await handle_start_pairing(hass, call)
+
+    async def _refresh_devices(call: ServiceCall) -> None:
+        await handle_refresh_devices(hass, call)
+
+    async def _set_position(call: ServiceCall) -> None:
+        await handle_set_position(hass, call)
+
+    async def _check_gateway_status(call: ServiceCall) -> None:
+        await handle_check_gateway_status(hass, call)
+
+    async def _rename_device(call: ServiceCall) -> None:
+        await handle_rename_device(hass, call)
+
+    async def _transfer_device(call: ServiceCall) -> None:
+        await handle_transfer_device(hass, call)
+
     # 注册服务
     try:
         hass.services.async_register(
             DOMAIN,
             SERVICE_START_PAIRING,
-            lambda call: handle_start_pairing(hass, call),
+            _start_pairing,
             schema=vol.Schema({
                 vol.Required("device_id"): cv.string,
                 vol.Optional("duration", default=GATEWAY_PAIRING_TIMEOUT): cv.positive_int,
@@ -554,7 +576,7 @@ def register_services(hass: HomeAssistant) -> bool:
         hass.services.async_register(
             DOMAIN,
             SERVICE_REFRESH_DEVICES,
-            lambda call: handle_refresh_devices(hass, call),
+            _refresh_devices,
             schema=vol.Schema({
                 vol.Required("device_id"): cv.string,
             })
@@ -563,7 +585,7 @@ def register_services(hass: HomeAssistant) -> bool:
         hass.services.async_register(
             DOMAIN,
             COMMAND_SET_POSITION,
-            lambda call: handle_set_position(hass, call),
+            _set_position,
             schema=vol.Schema({
                 vol.Required("device_id"): cv.string,
                 vol.Required("position"): vol.All(
@@ -577,7 +599,7 @@ def register_services(hass: HomeAssistant) -> bool:
         hass.services.async_register(
             DOMAIN,
             "check_gateway_status",
-            lambda call: handle_check_gateway_status(hass, call),
+            _check_gateway_status,
             schema=vol.Schema({
                 vol.Optional("device_id"): cv.string,
                 vol.Optional("gateway_sn"): cv.string,
@@ -587,10 +609,12 @@ def register_services(hass: HomeAssistant) -> bool:
         # ============ 迁移服务（migrate_devices）暂禁用 ============
         # 设备迁移功能先不使用：协议/迁移逻辑待后续版本完善后再启用。
         # 若需重新启用，取消下面 async_register 的注释即可。
+        # async def _migrate_devices(call: ServiceCall) -> None:
+        #     await handle_migrate_devices(hass, call)
         # hass.services.async_register(
         #     DOMAIN,
         #     SERVICE_MIGRATE_DEVICES,
-        #     lambda call: handle_migrate_devices(hass, call),
+        #     _migrate_devices,
         #     schema=vol.Schema({
         #         vol.Required("old_gateway_sn"): cv.string,
         #         vol.Required("new_gateway_sn"): cv.string,
@@ -601,7 +625,7 @@ def register_services(hass: HomeAssistant) -> bool:
         hass.services.async_register(
             DOMAIN,
             SERVICE_RENAME_DEVICE,
-            lambda call: handle_rename_device(hass, call),
+            _rename_device,
             schema=vol.Schema({
                 vol.Required("device_id"): cv.string,
                 vol.Required(ATTR_NEW_NAME): cv.string,
@@ -611,7 +635,7 @@ def register_services(hass: HomeAssistant) -> bool:
         hass.services.async_register(
             DOMAIN,
             SERVICE_TRANSFER_DEVICE,
-            lambda call: handle_transfer_device(hass, call),
+            _transfer_device,
             schema=vol.Schema({
                 vol.Required("device_id"): cv.string,
                 vol.Required("new_gateway_sn"): cv.string,

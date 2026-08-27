@@ -261,9 +261,29 @@ dbus-daemon --system 2>/dev/null || {
 # 等待 dbus 就绪
 sleep 1
 
+# 注册 _mqtt._tcp 服务（LoRa 网关通过 mDNS 服务发现找到 broker）
+# matter-broker 固件使用 espressif/mdns 注册相同服务类型，网关已适配此发现机制
+mkdir -p /etc/avahi/services
+cat > /etc/avahi/services/mqtt.service <<SVC_EOF
+<?xml version="1.0" standalone='no'?>
+<!DOCTYPE service-group SYSTEM "avahi-service.dtd">
+<service-group>
+  <name replace-wildcards="yes">huijian-mqtt on %h</name>
+  <service>
+    <type>_mqtt._tcp</type>
+    <port>${MQTT_PORT}</port>
+  </service>
+</service-group>
+SVC_EOF
+echo "[mDNS] _mqtt._tcp 服务文件已创建 (port ${MQTT_PORT})"
+
 # 启动 avahi-daemon
 if avahi-daemon -D 2>/dev/null; then
     echo "[mDNS] avahi-daemon 已启动，LoRa 网关可通过 huijian.local 发现本机"
+    # 验证服务注册
+    if command -v avahi-browse >/dev/null 2>&1; then
+        avahi-browse -t _mqtt._tcp 2>/dev/null | head -5 || true
+    fi
 else
     echo "[mDNS] avahi-daemon 启动失败，huijian.local 可能不可用"
     echo "[mDNS] LoRa 网关可改用 HA 的 IP 地址连接"
