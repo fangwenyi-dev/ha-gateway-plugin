@@ -8,6 +8,7 @@ FROM ghcr.io/home-assistant/${BUILD_ARCH}-base:3.21
 # - curl/jq: HA API 调用
 # - nginx: Ingress Web UI
 # - avahi/dbus: mDNS 广播，让 LoRa 网关通过 huijian.local 发现
+# - avahi-tools: avahi-publish/avahi-browse 客户端工具（不属于 avahi 主包）
 RUN apk add --no-cache \
     mosquitto \
     mosquitto-clients \
@@ -15,6 +16,7 @@ RUN apk add --no-cache \
     jq \
     nginx \
     avahi \
+    avahi-tools \
     avahi-compat-libdns_sd \
     dbus
 

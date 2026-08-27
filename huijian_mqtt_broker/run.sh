@@ -1,13 +1,11 @@
 #!/usr/bin/with-contenv bashio
 # =============================================================================
-# 慧尖 LoRa 网关一体化插件 — 启动脚本 v1.3.2
+# 慧尖 LoRa 网关一体化插件 — 启动脚本 v1.3.9
 #
-# 架构：
-#   - host_network 模式：容器直接使用主机网络
-#   - mosquitto 监听主机 2022 端口（不使用 1883，避免与 HA 官方 Mosquitto 冲突）
-#   - mDNS 广播 huijian.local，LoRa 网关自动发现
-#   - auto_setup 用 127.0.0.1:2022 检测 broker
-#   - HA Core 用 127.0.0.1:2022 连接 broker
+# 架构（host_network 模式）：
+#   - 容器直接使用主机网络，mosquitto 监听主机 2022 端口
+#   - mDNS 用 avahi-publish 注册 _mqtt._tcp 服务，LoRa 网关自动发现 huijian.local
+#   - auto_setup 和 HA Core 都用 127.0.0.1:2022 连接 broker
 # =============================================================================
 
 set -e
@@ -17,8 +15,7 @@ PASSWORD=$(bashio::config 'password')
 AUTO_SETUP=$(bashio::config 'auto_setup_ha_mqtt')
 INSTALL_INTEGRATION=$(bashio::config 'install_integration')
 
-# Docker 端口映射在 config.yaml 中固定为 2022:2022
-# 容器内 mosquitto 固定监听 2022，主机映射固定 2022
+# host_network 模式：mosquitto 直接监听主机 2022 端口，无需 Docker 端口映射
 MQTT_PORT=2022
 INTERNAL_PORT=2022
 
@@ -142,12 +139,9 @@ cat > /etc/nginx/http.d/ingress.conf <<NGINXEOF
 server {
     listen 8099;
 
-    # host_network 模式：允许所有本地连接（宿主 IP、127.0.0.1）
+    # host_network 模式：允许 Supervisor/HA Core (172.30.32.x) 和本地回环
     allow 127.0.0.1;
     allow 172.30.32.0/24;
-    allow 10.0.0.0/8;
-    allow 172.16.0.0/12;
-    allow 192.168.0.0/16;
     deny all;
 
     location / {
@@ -233,7 +227,7 @@ nginx 2>/dev/null || {
     nginx -t 2>&1 || true
 }
 
-# ---------- 3b. 配置并启动 avahi mDNS ----------
+# ---------- 3b. 配置并启动 mDNS 广播 ----------
 echo "[mDNS] 配置 mDNS 广播..."
 
 # 设置 huijian.local 主机名
@@ -242,41 +236,55 @@ hostname huijian 2>/dev/null || true
 # 创建 dbus 运行目录
 mkdir -p /run/dbus
 
-# 方案：用 avahi-publish 发布 mDNS 服务（不启动 avahi-daemon，避免与宿主冲突）
-# avahi-publish 是客户端工具，不需要绑定 UDP 5353，可以与宿主 avahi 共存
+# 清理函数：mosquitto 退出时同时清理 avahi-publish 后台进程
+MDNS_PIDS=""
+cleanup_mdns() {
+    for pid in ${MDNS_PIDS}; do
+        kill "${pid}" 2>/dev/null || true
+    done
+}
+trap cleanup_mdns EXIT INT TERM
 
-# 先检测是否有 avahi-daemon 在运行（用于 browse 验证）
-AVahi_DAEMON_RUNNING=false
+# host_network 模式下，HAOS 宿主自带 avahi-daemon（已在物理网卡上广播 mDNS）。
+# 用 avahi-publish 借用宿主 avahi-daemon 注册 _mqtt._tcp 服务，不绑定 5353 端口。
+#
+# 非 HAOS 环境（如 HA Supervised on Debian）宿主可能无 avahi-daemon，
+# 此时启动容器内 dbus + avahi-daemon 兜底。
+
+AVAHI_DAEMON_RUNNING=false
 if pgrep -x avahi-daemon >/dev/null 2>&1; then
-    AVahi_DAEMON_RUNNING=true
-    echo "[mDNS] 检测到 avahi-daemon 已运行，将使用 avahi-publish 注册服务"
+    AVAHI_DAEMON_RUNNING=true
+    echo "[mDNS] 检测到宿主 avahi-daemon 已运行，使用 avahi-publish 注册服务"
 else
-    # 启动 dbus 和 avahi-daemon（如果没有在运行）
-    echo "[mDNS] 未检测到 avahi-daemon，启动中..."
+    echo "[mDNS] 未检测到 avahi-daemon，启动容器内 dbus + avahi-daemon..."
     dbus-daemon --system 2>/dev/null || true
     sleep 1
+    # 启动容器内 avahi-daemon（host_network 下直接在宿主网卡广播）
     if avahi-daemon -D 2>/dev/null; then
-        AVahi_DAEMON_RUNNING=true
-        echo "[mDNS] avahi-daemon 已启动"
+        AVAHI_DAEMON_RUNNING=true
+        echo "[mDNS] 容器内 avahi-daemon 已启动"
     else
-        echo "[mDNS] avahi-daemon 启动失败，尝试仅用 avahi-publish"
+        echo "[mDNS] avahi-daemon 启动失败"
     fi
 fi
 
 # 用 avahi-publish 注册 _mqtt._tcp 服务（后台持续运行）
+# avahi-publish 通过 D-Bus 向 avahi-daemon 注册服务，自身不绑定 5353 端口
 # --no-reverse: 不注册反向 DNS
-# --no-fail: 如果 avahi-daemon 不可用，不退出
+# --no-fail: avahi-daemon 不可用时不退出
+AVAHI_PUBLISH_PID=""
 if command -v avahi-publish >/dev/null 2>&1; then
     avahi-publish -R -s "huijian-mqtt" _mqtt._tcp "${MQTT_PORT}" \
         --no-reverse --no-fail &
-    AVahi_PUBLISH_PID=$!
-    echo "[mDNS] avahi-publish 已启动 (PID: ${AVahi_PUBLISH_PID})"
+    AVAHI_PUBLISH_PID=$!
+    MDNS_PIDS="${AVAHI_PUBLISH_PID}"
+    echo "[mDNS] avahi-publish 已启动 (PID: ${AVAHI_PUBLISH_PID})"
     sleep 2
-    
+
     # 验证服务是否注册成功
     if command -v avahi-browse >/dev/null 2>&1; then
         if timeout 3 avahi-browse -t _mqtt._tcp 2>/dev/null | grep -q "huijian"; then
-            echo "[mDNS] mDNS 服务验证通过，LoRa 网关可通过 huijian.local 发现本机"
+            echo "[mDNS] ✅ mDNS 服务验证通过，LoRa 网关可通过 huijian.local 发现本机"
         else
             echo "[mDNS] mDNS 服务已注册，广播中（验证可能需要几秒钟）"
         fi
@@ -284,15 +292,9 @@ if command -v avahi-publish >/dev/null 2>&1; then
         echo "[mDNS] mDNS 服务已注册，广播中"
     fi
 else
-    echo "[mDNS] avahi-publish 不可用，尝试启动完整 avahi-daemon..."
-    # 兜底：启动 avahi-daemon
-    if [ "${AVahi_DAEMON_RUNNING}" = "false" ]; then
-        avahi-daemon -D 2>/dev/null && {
-            echo "[mDNS] avahi-daemon 已启动"
-        } || {
-            echo "[mDNS] avahi-daemon 启动失败，huijian.local 可能不可用"
-            echo "[mDNS] LoRa 网关可改用 HA 的 IP 地址连接"
-        }
+    echo "[mDNS] ⚠ avahi-publish 不可用（Dockerfile 缺少 avahi-tools 包？）"
+    if [ "${AVAHI_DAEMON_RUNNING}" = "false" ]; then
+        echo "[mDNS] ⚠ mDNS 不可用，LoRa 网关需手动填写 HA IP 地址连接"
     fi
 fi
 
@@ -494,5 +496,5 @@ if command -v mosquitto_pub >/dev/null 2>&1; then
     fi
 fi
 
-# 将后台 mosquitto 转为前台（exec 替换当前 shell，容器不会退出）
+# 将后台 mosquitto 转为前台（wait 阻塞，mosquitto 退出后 trap 自动清理 avahi-publish）
 wait "${MOSQUITTO_PID}" 2>/dev/null || exec mosquitto -c /etc/mosquitto/mosquitto.conf
