@@ -58,7 +58,7 @@ jobs:
           VERSION=$(grep '^version:' huijian_mqtt_broker/config.yaml | head -1 | awk -F'"' '{print $2}')
           echo "config.yaml 版本: $VERSION"
           # 检查 index.html 版本一致
-          HTML_VER=$(grep -oP "CURRENT_VERSION = '\K[^']+" huijian_mqtt_broker/www/index.html)
+          HTML_VER=$(grep "CURRENT_VERSION = '" huijian_mqtt_broker/www/index.html | sed "s/.*CURRENT_VERSION = '\([^']*\)'.*/\1/")
           echo "index.html 版本: $HTML_VER"
           [ "$VERSION" = "$HTML_VER" ] || { echo "❌ 版本不一致"; exit 1; }
           # 检查 version.json 版本一致
@@ -88,28 +88,31 @@ jobs:
       - name: Generate changelog
         id: changelog
         run: |
-          CHANGELOG=""
+          # 将 changelog 写入临时文件，避免 echo -e 破坏中文编码（Gitee 乱码根因）
+          CHANGELOG_FILE="/tmp/changelog.md"
+          
           if [ -f CHANGELOG.md ]; then
-            CHANGELOG=$(awk -v ver="${{ steps.version.outputs.version }}" '
+            awk -v ver="${{ steps.version.outputs.version }}" '
               /^## \[/{ found=0 }
               $0 ~ "^## \\["ver"]" { found=1; next }
               /^## \[/{ if(found) exit }
               found { print }
-            ' CHANGELOG.md | head -50)
+            ' CHANGELOG.md | head -50 > "$CHANGELOG_FILE"
           fi
-          if [ -z "$CHANGELOG" ]; then
+          
+          if [ ! -s "$CHANGELOG_FILE" ]; then
             # 从 git log 自动生成 changelog（最近 10 条提交）
-            CHANGELOG="## v${{ steps.version.outputs.version }}\n\n"
-            while IFS= read -r line; do
-              # 提取 commit hash (前7位) 和 commit message
-              HASH=$(echo "$line" | awk '{print $1}')
-              MSG=$(echo "$line" | cut -d' ' -f2-)
-              CHANGELOG="${CHANGELOG}- ${HASH}: ${MSG}\n"
-            done < <(git log --oneline -10)
+            {
+              echo "## v${{ steps.version.outputs.version }}"
+              echo ""
+              git log --oneline -10 --format='- %h: %s'
+            } > "$CHANGELOG_FILE"
           fi
+          
+          # 用文件内容设置输出（避免 echo -e 破坏 UTF-8 中文）
           EOF=$(dd if=/dev/urandom bs=15 count=1 status=none | base64)
           echo "changelog<<$EOF" >> $GITHUB_OUTPUT
-          echo -e "$CHANGELOG" >> $GITHUB_OUTPUT
+          cat "$CHANGELOG_FILE" >> $GITHUB_OUTPUT
           echo "$EOF" >> $GITHUB_OUTPUT
 
   # ========== 2. 构建 Docker 镜像 ==========

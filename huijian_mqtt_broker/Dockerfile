@@ -7,18 +7,24 @@ FROM ghcr.io/home-assistant/${BUILD_ARCH}-base:3.21
 # - mosquitto/mosquitto-clients: MQTT broker + 客户端工具
 # - curl/jq: HA API 调用
 # - nginx: Ingress Web UI
-# - avahi/dbus: mDNS 广播，让 LoRa 网关通过 huijian.local 发现
-# - avahi-tools: avahi-publish/avahi-browse 客户端工具（不属于 avahi 主包）
+# - python3/py3-pip: 运行 zeroconf mDNS 广播脚本
+# - zeroconf: 纯 Python mDNS 库，不依赖 D-Bus/avahi-daemon，避免 HAOS 端口冲突
+# 先复制 requirements.txt（pip install 需要用）
+COPY requirements.txt /tmp/requirements.txt
+
 RUN apk add --no-cache \
     mosquitto \
     mosquitto-clients \
     curl \
     jq \
     nginx \
-    avahi \
-    avahi-tools \
-    avahi-compat-libdns_sd \
-    dbus
+    python3 \
+    py3-pip \
+    && pip3 install --no-cache-dir --break-system-packages -r /tmp/requirements.txt
+
+# 复制 mDNS 广播脚本（纯 Python zeroconf，不依赖 avahi/D-Bus）
+COPY mdns_publisher.py /usr/bin/mdns_publisher.py
+RUN chmod +x /usr/bin/mdns_publisher.py
 
 # 复制配置文件
 COPY mosquitto.conf /etc/mosquitto/mosquitto.conf
@@ -53,7 +59,6 @@ RUN echo 'user nginx;' > /etc/nginx/nginx.conf && \
 RUN mkdir -p /data/mosquitto && \
     chmod 755 /data/mosquitto && \
     chmod +x /run.sh && \
-    mkdir -p /run/nginx && \
-    mkdir -p /run/dbus
+    mkdir -p /run/nginx
 
 CMD ["/run.sh"]
