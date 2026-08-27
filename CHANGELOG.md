@@ -3,6 +3,17 @@
 所有版本变更记录在此文件中。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+
+## [1.5.1] - 2026-08-27
+
+### 修复
+- **一键升级失败诊断增强（Bug A）**：区分 400（hassio 集成未加载/权限不足）与 403（Supervisor 自我更新限制），新增打开加载项页面引导
+- **run.sh 密码兜底格式无效（Bug B）**：`openssl dgst -sha256` 拼 `$6$` 前缀为无效格式，改用 `openssl passwd -6`（SHA-512 crypt）
+- **静默接管 MQTT 配置（Bug C）**：删除 hassio 源 MQTT 条目前发送持久化通知告知用户
+- **设备编号竞态（Bug D）**：新增原子自增计数器 `allocate_device_number()`，批量添加编号不再重复
+- **无 SN 模式平台注册（Bug E）**：不再 forward 空平台，消除平台 setup 错误日志
+- **墙钟超时误判（Bug F）**：网关/传感器超时改用 `time.monotonic()` 单调时钟
+- 版本号统一为 1.5.1（插件 + 集成）
 ## [1.2.9] - 2026-08-26
 
 ### 修复

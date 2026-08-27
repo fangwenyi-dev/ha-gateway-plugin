@@ -196,6 +196,29 @@ async def ensure_mqtt_connection(hass: HomeAssistant) -> None:
                 "删除后创建新的 USER 源条目指向内置 Broker。",
                 first.entry_id,
             )
+            # 破坏性操作提示：删除用户已有的 MQTT 配置条目前，
+            # 通过持久化通知明确告知用户，避免静默切断其现有 MQTT 连接
+            # （如官方 Mosquitto 插件 / EMQX / 其他依赖该条目的集成）。
+            try:
+                await hass.services.async_call(
+                    "persistent_notification",
+                    "create",
+                    {
+                        "title": "慧尖插件正在接管 MQTT 配置",
+                        "message": (
+                            "检测到已有 MQTT 配置条目（由 Supervisor 管理，"
+                            f"broker: {cur_broker}:{cur_port}）。\n\n"
+                            "慧尖一体化插件将删除该条目并创建指向内置 Broker "
+                            f"({broker}:{port}) 的新条目，以确保 LoRa 网关数据可达。\n\n"
+                            "若您有其他设备/集成依赖原 MQTT broker，请知悉："
+                            "它们的连接将被切换到慧尖内置 broker。"
+                        ),
+                        "notification_id": "huijian_mqtt_takeover",
+                    },
+                    blocking=False,
+                )
+            except Exception as err:  # noqa: BLE001 — 通知失败不影响主流程
+                _LOGGER.debug("发送 MQTT 接管通知失败（可忽略）: %s", err)
             try:
                 await hass.config_entries.async_remove(first.entry_id)
             except Exception as err:  # noqa: BLE001

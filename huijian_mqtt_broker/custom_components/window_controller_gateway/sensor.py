@@ -1,13 +1,12 @@
 """开窗器网关传感器平台"""
 import logging
+import time
 
 from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.components.sensor import SensorEntity, SensorDeviceClass, SensorStateClass
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.entity import DeviceInfo, EntityCategory
-
-from datetime import datetime, timedelta
 
 from .const import (
     DOMAIN,
@@ -82,11 +81,11 @@ class WindowControllerBatterySensor(WindowControllerBaseEntity, SensorEntity):
             voltage = attributes.get("voltage")
             if voltage is not None:
                 self._attr_native_value = voltage
-                self.last_update_time = datetime.now()
+                self.last_update_time = time.monotonic()  # 单调时钟，不受系统时间调整影响
                 _LOGGER.debug("设备 %s 电池电压更新: %.1fV", self.device_sn, voltage)
         
-        # 检查是否超过设定时间没有更新
-        if self.last_update_time and (datetime.now() - self.last_update_time) > timedelta(minutes=SENSOR_TIMEOUT_MINUTES):
+        # 检查是否超过设定时间没有更新（单调时钟）
+        if self.last_update_time and (time.monotonic() - self.last_update_time) > SENSOR_TIMEOUT_MINUTES * 60:
             self._attr_native_value = None
             _LOGGER.debug("设备 %s 电池电压数据超时", self.device_sn)
     
@@ -152,7 +151,7 @@ class WindowControllerStatusSensor(WindowControllerBaseEntity, SensorEntity):
             status = device.get("status")
             if status in ["closed", "open"]:
                 self._attr_native_value = status
-                self.last_update_time = datetime.now()
+                self.last_update_time = time.monotonic()  # 单调时钟
                 _LOGGER.debug("设备 %s 状态更新为: %s", self.device_sn, status)
             else:
                 # 如果没有状态，使用r_travel判断
@@ -161,11 +160,11 @@ class WindowControllerStatusSensor(WindowControllerBaseEntity, SensorEntity):
                 if r_travel is not None:
                     new_status = "closed" if r_travel == 0 else "open"
                     self._attr_native_value = new_status
-                    self.last_update_time = datetime.now()
+                    self.last_update_time = time.monotonic()  # 单调时钟
                     _LOGGER.debug("设备 %s 状态根据r_travel更新为: %s", self.device_sn, new_status)
         
-        # 检查是否超过设定时间没有更新
-        if self.last_update_time and (datetime.now() - self.last_update_time) > timedelta(minutes=SENSOR_TIMEOUT_MINUTES):
+        # 检查是否超过设定时间没有更新（单调时钟）
+        if self.last_update_time and (time.monotonic() - self.last_update_time) > SENSOR_TIMEOUT_MINUTES * 60:
             self._attr_native_value = None
 
     async def async_update(self) -> None:

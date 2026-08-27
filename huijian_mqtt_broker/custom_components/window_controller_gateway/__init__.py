@@ -99,10 +99,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.data[DOMAIN].setdefault(entry.entry_id, {})
         hass.data[DOMAIN][entry.entry_id]["gateway_sn"] = ""
         hass.data[DOMAIN][entry.entry_id]["_awaiting_gateway"] = True
-        # 注册空平台，让 HA 知道这个集成已加载（避免 UI 报错）
-        await hass.config_entries.async_forward_entry_setups(entry, [
-            Platform.SENSOR, Platform.COVER, Platform.BUTTON, Platform.NUMBER
-        ])
+        # 无网关 SN：不 forward 任何平台实体。
+        # 历史实现 forward 了 4 个空平台，但各平台 async_setup_entry 在
+        # device_manager 缺失时会打 error 日志（"设备管理器未找到"），
+        # 且与完整 PLATFORMS 的卸载集合不一致。config entry 的加载状态
+        # 由 async_setup_entry 返回值决定，与是否 forward 平台无关，
+        # 因此 forward 空列表即可（卸载时 PLATFORMS 对未加载平台是安全 no-op）。
 
         # 轻量级心跳监听器：订阅 gateway/rpt_rsp，发现新网关时自动触发发现流程
         # 这让"先装集成、后上电网关"的自动发现流程成为可能

@@ -52,6 +52,12 @@ class WindowControllerDeviceManager:
         self._migration_lock = asyncio.Lock()
         self._manually_removed_devices = self._load_manually_removed_devices()
         self._background_tasks = []
+        # 设备显示编号计数器（用于 "开窗器 XX-XX (#NN)" 的 NN）。
+        # 必须用显式计数器而非 len(devices)+1：批量/并发添加时
+        # len(devices) 的读取与 add_device 的写入之间存在 await 间隙，
+        # 两个协程可能读到相同数量 → 编号重复。计数器自增在事件循环内
+        # 原子完成（同步方法、无 await 间隙），编号唯一。
+        self._next_device_number = 1
     
     def _load_manually_removed_devices(self) -> set:
         """从持久化存储中加载手动删除的设备SN列表"""
@@ -211,6 +217,11 @@ class WindowControllerDeviceManager:
             _LOGGER.info("当前网关 %s 共加载 %d 个设备", self.gateway_sn, processed_count)
         else:
             _LOGGER.info("设备到网关映射表不存在")
+        
+        # 加载完成后初始化编号计数器：新添加的设备从已有设备数 +1 开始编号。
+        # 必须在所有设备同步加入 self.devices 之后调用（否则编号与已有设备重叠）。
+        self._next_device_number = len(self.devices) + 1
+        _LOGGER.debug("设备编号计数器初始化: 从 #%d 开始", self._next_device_number)
         
         if processed_count > 0:
             _LOGGER.info("已加载 %d 个设备", processed_count)
@@ -779,6 +790,17 @@ class WindowControllerDeviceManager:
                 copy["attributes"] = dict(copy["attributes"])
             result.append(copy)
         return result
+
+    def allocate_device_number(self) -> int:
+        """分配设备显示编号（#NN），线程/协程安全的原子自增。
+
+        替代 ``len(get_all_devices()) + 1``：批量添加（_batch_process_tasks
+        并发 gather）时后者会因 await 间隙导致编号重复。本方法是同步的、
+        不含 await 点，在事件循环内按调用顺序唯一递增。
+        """
+        number = self._next_device_number
+        self._next_device_number += 1
+        return number
 
     async def rename_device(self, device_sn: str, new_name: str) -> bool:
         """重命名子设备并同步到HA注册表"""

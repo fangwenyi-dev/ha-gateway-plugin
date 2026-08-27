@@ -1,6 +1,6 @@
 # 慧尖 LoRa 网关一体化插件
 
-[![版本](https://img.shields.io/badge/version-1.3.7-blue)]()
+[![版本](https://img.shields.io/badge/version-1.5.1-blue)]()
 [![HA Add-on](https://img.shields.io/badge/HA-Add--on-green)]()
 
 慧尖开窗器 LoRa 网关的 Home Assistant 一体化插件。**内置 Mosquitto Broker + 网关集成，安装一个插件即可获得全部能力**。
@@ -123,6 +123,17 @@ https://github.com/fangwenyi-dev/ha-gateway-plugin
 > **备份数据**：卸载或重新安装插件会清除 `/data` 目录。网关集成持久化数据存储在 HA 配置目录的 `window_controller_gateway_data.json` 中，升级集成时会自动备份恢复。建议定期备份 HA 配置目录。
 
 ## 更新日志
+
+### v1.5.1 (2026-08-27)
+- **修复（Bug A）**：一键升级失败时区分 400（hassio 集成未加载/权限不足）与 403（Supervisor 自我更新限制），
+  并新增「打开 Supervisor 加载项页面」引导（管理员可在该页面正常更新，不受自我更新限制）
+- **修复（Bug B）**：`run.sh` 密码兜底格式无效 — `openssl dgst -sha256` 生成的 `$6$` 前缀不是 Mosquitto 可验证格式，
+  统一改用 `openssl passwd -6`（SHA-512 crypt），避免兜底路径导致全部客户端认证失败
+- **修复（Bug C）**：接管用户已有 MQTT 配置（删除 hassio 源条目）前发送持久化通知告知用户，不再静默切断
+- **修复（Bug D）**：设备显示编号（#NN）竞态 — 新增原子自增计数器，批量/并发添加时编号不再重复
+- **修复（Bug E）**：无 SN 等待模式不再 forward 空平台（消除平台 setup 错误日志），与卸载平台集合统一
+- **修复（Bug F）**：网关超时/传感器超时改用 `time.monotonic()` 单调时钟（NTP 校时不再误判离线）
+- ⚠️ **需要重启插件**（Web UI 代码更新）
 
 ### v1.4.10 (2026-08-27)
 - **修复**：一键升级 403 — 根因是 Supervisor 硬性禁止插件自我更新（`/addons/self/update` 返回 `can't update itself`），改回 `hassio.addon_update`（HA Core 以非插件身份调用，不受限制）

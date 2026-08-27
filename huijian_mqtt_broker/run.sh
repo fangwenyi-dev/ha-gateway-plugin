@@ -39,25 +39,24 @@ if mosquitto_passwd -c -b "${PASSWD_FILE}" "${USERNAME}" "${PASSWORD}"; then
     echo "[OK] 密码文件已生成"
 else
     # 兜底：手动用 printf 写入密码哈希（适用于 mosquitto_passwd 不可用的场景）
-    # Mosquitto 要求格式: user:$6$salt$hash  或  user:{bcrypt}hash
-    # 这里用 $6$ 格式（SHA-256 with salt）
-    echo "[警告] mosquitto_passwd 失败，尝试手动创建密码文件"
+    # Mosquitto 2.x 密码文件支持格式：
+    #   $7$（PBKDF2，mosquitto_passwd 默认）、$6$（SHA-512 crypt）、
+    #   {SHA}/{SSHA}/{BCRYPT} 前缀。
+    # openssl passwd -6 生成 $6$（SHA-512 crypt）格式，Mosquitto 可直接验证。
+    # 注意：不能用 openssl dgst -sha256 手动拼 $6$ 前缀——那是无效格式，
+    # 会导致所有客户端认证失败（此前的历史 bug，已修复）。
+    echo "[警告] mosquitto_passwd 失败，尝试用 openssl passwd 创建密码文件"
     SALT=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n' | head -c 16)
-    PASSWD_HASH=$(printf "%s" "${PASSWORD}" | openssl dgst -sha256 -salt -binary 2>/dev/null | od -An -tx1 | tr -d ' \n')
-    if [ -n "${PASSWD_HASH}" ]; then
-        printf "${USERNAME}:\$6\$${SALT}\$${PASSWD_HASH}\n" > "${PASSWD_FILE}" 2>/dev/null || {
+    HASH=$(printf "%s\n" "${PASSWORD}" | openssl passwd -6 -salt "${SALT}" -stdin 2>/dev/null)
+    if [ -n "${HASH}" ]; then
+        printf "${USERNAME}:${HASH}\n" > "${PASSWD_FILE}" 2>/dev/null || {
             echo "[错误] 无法创建密码文件"
             exit 1
         }
+        echo "[OK] 已用 openssl passwd 生成密码文件（$6$ SHA-512 crypt 格式）"
     else
-        # 最终兜底：直接用 openssl 生成完整的 Mosquitto 密码行
-        printf "${PASSWORD}\n${PASSWORD}\n" | openssl passwd -6 -salt "${SALT}" -stdin 2>/dev/null | {
-            read -r HASH
-            printf "${USERNAME}:${HASH}\n" > "${PASSWD_FILE}" 2>/dev/null || {
-                echo "[错误] 无法创建密码文件"
-                exit 1
-            }
-        }
+        echo "[错误] openssl passwd 不可用，无法创建密码文件"
+        exit 1
     fi
 fi
 
@@ -84,13 +83,12 @@ if command -v mosquitto_passwd >/dev/null 2>&1; then
     fi
 else
     # 兜底：手动用 openssl 追加哈希（mosquitto_passwd 不可用场景）
+    # openssl passwd -6 生成 $6$（SHA-512 crypt），Mosquitto 2.x 可验证
     HA_SALT=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n' | head -c 16)
-    printf "${PASSWORD}\n${PASSWORD}\n" | openssl passwd -6 -salt "${HA_SALT}" -stdin 2>/dev/null | {
-        read -r HASH
-        if [ -n "${HASH}" ]; then
-            printf "${HA_MQTT_USERNAME}:${HASH}\n" >> "${PASSWD_FILE}" 2>/dev/null && HA_MQTT_USER_CREATED=true
-        fi
-    }
+    HASH=$(printf "%s\n" "${PASSWORD}" | openssl passwd -6 -salt "${HA_SALT}" -stdin 2>/dev/null)
+    if [ -n "${HASH}" ]; then
+        printf "${HA_MQTT_USERNAME}:${HASH}\n" >> "${PASSWD_FILE}" 2>/dev/null && HA_MQTT_USER_CREATED=true
+    fi
 fi
 
 # bootstrap 标记使用哪个用户：ha_mqtt 创建成功才用，否则回退 ${USERNAME}

@@ -233,7 +233,7 @@
     </div>
 
     <script>
-        let CURRENT_VERSION = '1.4.10';
+        let CURRENT_VERSION = '1.5.1';
         const DOMAIN = 'window_controller_gateway';
 
         // Ingress 下页面路径形如 /hassio/ingress/<token>/，直连插件端口时为 /
@@ -903,11 +903,28 @@
                 } else if (/abort/i.test(msg)) {
                     showToast('升级已中止', 'warn');
                 } else {
-                    // 兜底：提示手动更新路径（Supervisor 的加载项页面以 admin 用户操作，无 self-update 限制）
+                    // 失败兜底：给出可诊断的错误信息 + 打开 Supervisor 加载项页面引导。
+                    // 400 空响应是 add-on token 调 HA Core 服务 API 被拒的典型特征
+                    // （hassio 集成未加载 / 权限不足），403 则是 Supervisor 自我更新限制。
                     const detail = msg ? (' ' + msg) : (' HTTP ' + resp.status);
+                    const hint = resp.status === 403
+                        ? 'Supervisor 禁止插件自我更新（安全设计）。'
+                        : (resp.status === 400
+                            ? 'HA 拒绝了服务调用（hassio 集成可能未加载或权限不足）。'
+                            : '');
                     showToast('升级失败:' + detail + '。请手动到 设置→加载项→慧尖 LoRa 网关 点击「更新」', 'err');
-                    // 弹出更详细的错误（便于排查）
-                    alert('一键升级失败' + detail + '\n\n请手动更新：设置 → 加载项 → 慧尖 LoRa 网关 → 更新');
+                    // 弹出详细错误 + 打开 Supervisor 加载项页面的按钮（管理员可正常更新）
+                    const openAddon = confirm(
+                        '一键升级失败' + detail + '\n\n' +
+                        (hint ? hint + '\n\n' : '') +
+                        '最可靠的升级方式：在 Supervisor 加载项页面点击「更新」按钮\n' +
+                        '（以管理员身份操作，不受插件自我更新限制）。\n\n' +
+                        '现在为你打开加载项页面？'
+                    );
+                    if (openAddon) {
+                        // ingress iframe 的 origin 即 HA 前端 origin，可跳转到加载项详情页
+                        window.open(window.location.origin + '/hassio/addon/huijian_mqtt_broker', '_blank');
+                    }
                 }
             } catch (e) {
                 showToast('升级请求失败: ' + e.message + '。请手动到 设置→加载项→慧尖 LoRa 网关 更新', 'err');

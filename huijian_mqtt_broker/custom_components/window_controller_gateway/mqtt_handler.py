@@ -7,7 +7,6 @@ import uuid
 import weakref
 import time
 import re
-from datetime import datetime
 from typing import Dict, Any, Optional, Callable, Union
 
 from homeassistant.core import HomeAssistant
@@ -77,7 +76,7 @@ class WindowControllerMQTTHandler:
         self.device_manager = device_manager
         self.connected = False  # 网关在线状态（见类 docstring）
         self.pairing_active = False
-        self.last_gateway_report_time = None  # 最后收到网关002上报的时间
+        self.last_gateway_report_time = None  # 最后收到网关上报的时间（time.monotonic() 单调时钟）
         self.command_id = DEFAULT_COMMAND_ID  # 命令ID初始值
         self._check_task = None  # 后台任务引用
         self._reconnect_task = None  # MQTT 重连任务引用（去重 + cleanup 可取消）
@@ -199,9 +198,12 @@ class WindowControllerMQTTHandler:
                     reason = ""
 
                     if self.last_gateway_report_time:
-                        # 有上报记录：检查是否超时
-                        time_diff = datetime.now() - self.last_gateway_report_time
-                        if time_diff.total_seconds() > GATEWAY_TIMEOUT_SECONDS:
+                        # 有上报记录：检查是否超时。
+                        # 使用 time.monotonic()（单调时钟）：墙钟 datetime.now() 在
+                        # NTP 校时/用户改时间/时区切换时会发生跳变，导致误判离线或
+                        # 无限延长超时窗口；单调时钟不受系统时间调整影响。
+                        time_diff = time.monotonic() - self.last_gateway_report_time
+                        if time_diff > GATEWAY_TIMEOUT_SECONDS:
                             should_go_offline = True
                             reason = f"超过{GATEWAY_TIMEOUT_SECONDS}秒未上报"
                     else:
@@ -301,8 +303,8 @@ class WindowControllerMQTTHandler:
                             _LOGGER.error("触发未配置网关发现失败: %s", e)
                         return
                     
-                    # 更新最后上报时间 - 只要收到网关消息就认为在线
-                    self.last_gateway_report_time = datetime.now()
+                    # 更新最后上报时间 - 只要收到网关消息就认为在线（单调时钟）
+                    self.last_gateway_report_time = time.monotonic()
                     
                     # 只要收到网关消息就认为在线，更新connected状态
                     if not self.connected:
@@ -1243,8 +1245,8 @@ class WindowControllerMQTTHandler:
 
     async def _quick_add_device(self, device_sn, device_info):
         """快速添加设备 - 自动发现"""
-        # 与手动配对（_handle_ctype_003）一致，按当前设备数分配 #NN 编号
-        device_number = len(self.device_manager.get_all_devices()) + 1
+        # 与手动配对（_handle_ctype_003）一致，用设备管理器的原子计数器分配 #NN 编号
+        device_number = self.device_manager.allocate_device_number()
         device_name = get_device_display_name(self.gateway_sn, device_sn, device_number)
         
         # 直接调用设备管理器的添加方法（自动发现，不使用手动配对标记）
@@ -1341,8 +1343,7 @@ class WindowControllerMQTTHandler:
                     )
                     return
                 # 绑定成功，添加设备
-                device_count = len(self.device_manager.get_all_devices())
-                device_number = device_count + 1
+                device_number = self.device_manager.allocate_device_number()
                 device_name = get_device_display_name(self.gateway_sn, device_sn, device_number)
                 # 手动配对时使用 is_manual_pairing=True，跳过手动删除列表检查
                 await self.device_manager.add_device(device_sn, device_name, DEVICE_TYPE_WINDOW_OPENER, is_manual_pairing=True)
