@@ -206,7 +206,17 @@ async def ensure_mqtt_connection(hass: HomeAssistant) -> None:
             try:
                 await hass.config_entries.async_remove(first.entry_id)
             except Exception as err:  # noqa: BLE001
-                _LOGGER.warning("删除 hassio MQTT 条目失败: %s", err)
+                _LOGGER.warning(
+                    "删除 hassio MQTT 条目失败: %s，降级为直接更新条目数据", err,
+                )
+                # 降级方案：虽然 Supervisor 可能会在 reload 时覆盖回原 broker，
+                # 但至少在当前会话中让 MQTT 客户端连上内置 broker。
+                # 保留标记以便下次启动时重试删除 + 创建新条目。
+                await _update_mqtt_entry(hass, first, broker, port, username, password)
+                await hass.config_entries.async_reload(first.entry_id)
+                _LOGGER.info("等待 MQTT 客户端重连到内置 Broker（降级模式）...")
+                if not await _wait_for_mqtt_client(hass):
+                    _LOGGER.warning("MQTT 客户端重连超时，但配置已更新（降级模式）")
                 await hass.async_add_executor_job(_remove_marker, marker_path)
                 return
             # 不删标记——让后续 create_new_entry 路径接管

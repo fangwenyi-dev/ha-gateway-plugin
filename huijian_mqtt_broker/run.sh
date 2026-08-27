@@ -1,6 +1,6 @@
 #!/usr/bin/with-contenv bashio
 # =============================================================================
-# 慧尖 LoRa 网关一体化插件 — 启动脚本 v1.3.9
+# 慧尖 LoRa 网关一体化插件 — 启动脚本 v1.4.0
 #
 # 架构（host_network 模式）：
 #   - 容器直接使用主机网络，mosquitto 监听主机 2022 端口
@@ -268,29 +268,63 @@ else
     fi
 fi
 
-# 用 avahi-publish 注册 _mqtt._tcp 服务（后台持续运行）
-# avahi-publish 通过 D-Bus 向 avahi-daemon 注册服务，自身不绑定 5353 端口
+# 用 avahi-publish 注册：
+# 1. _mqtt._tcp 服务（让网关能通过服务浏览发现 MQTT broker）
+# 2. huijian.local 主机名 A 记录（让网关能通过 huijian.local 解析到 HA IP）
+# avahi-publish 通过 D-Bus 向 avahi-daemon 注册，自身不绑定 5353 端口
 # --no-reverse: 不注册反向 DNS
 # --no-fail: avahi-daemon 不可用时不退出
 AVAHI_PUBLISH_PID=""
+AVAHI_HOST_PID=""
 if command -v avahi-publish >/dev/null 2>&1; then
-    avahi-publish -R -s "huijian-mqtt" _mqtt._tcp "${MQTT_PORT}" \
-        --no-reverse --no-fail &
+    # 获取本机 IP（host_network 模式下就是 HA 主机 IP）
+    LOCAL_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+    if [ -z "${LOCAL_IP}" ]; then
+        # 兜底：用 ip 命令获取第一个非 loopback 的 IPv4 地址
+        LOCAL_IP=$(ip -4 addr show 2>/dev/null | grep -oP 'inet \K[\d.]+' | grep -v '127.0.0.1' | head -1)
+    fi
+    echo "[mDNS] 本机 IP: ${LOCAL_IP:-未知}"
+
+    # 注册 _mqtt._tcp 服务
+    # -R = --no-reverse, --no-fail = avahi-daemon 不可用时不退出
+    avahi-publish -s -R --no-fail "huijian-mqtt" _mqtt._tcp "${MQTT_PORT}" &
     AVAHI_PUBLISH_PID=$!
     MDNS_PIDS="${AVAHI_PUBLISH_PID}"
-    echo "[mDNS] avahi-publish 已启动 (PID: ${AVAHI_PUBLISH_PID})"
+    echo "[mDNS] avahi-publish 服务注册已启动 (PID: ${AVAHI_PUBLISH_PID})"
+
+    # 注册 huijian.local 主机名 → 本机 IP（A 记录）
+    # 网关固件通过 huijian.local 解析 HA IP，必须注册 A 记录
+    # -a = 发布地址记录, -R = --no-reverse
+    if [ -n "${LOCAL_IP}" ]; then
+        avahi-publish -a -R --no-fail "huijian.local" "${LOCAL_IP}" &
+        AVAHI_HOST_PID=$!
+        MDNS_PIDS="${MDNS_PIDS} ${AVAHI_HOST_PID}"
+        echo "[mDNS] avahi-publish 主机名注册已启动 (PID: ${AVAHI_HOST_PID}, huijian.local → ${LOCAL_IP})"
+    else
+        echo "[mDNS] ⚠ 无法获取本机 IP，huijian.local 主机名未注册"
+    fi
+
     sleep 2
 
     # 验证服务是否注册成功
     if command -v avahi-browse >/dev/null 2>&1; then
         if timeout 3 avahi-browse -t _mqtt._tcp 2>/dev/null | grep -q "huijian"; then
-            echo "[mDNS] ✅ mDNS 服务验证通过，LoRa 网关可通过 huijian.local 发现本机"
+            echo "[mDNS] ✅ mDNS 服务验证通过"
         else
             echo "[mDNS] mDNS 服务已注册，广播中（验证可能需要几秒钟）"
         fi
-    else
-        echo "[mDNS] mDNS 服务已注册，广播中"
     fi
+
+    # 验证 huijian.local 是否可解析
+    if command -v avahi-resolve >/dev/null 2>&1; then
+        RESOLVED_IP=$(timeout 3 avahi-resolve -4 -n "huijian.local" 2>/dev/null | awk '{print $2}')
+        if [ -n "${RESOLVED_IP}" ]; then
+            echo "[mDNS] ✅ huijian.local 解析成功: ${RESOLVED_IP}"
+        else
+            echo "[mDNS] huijian.local 解析中（可能需要几秒钟）"
+        fi
+    fi
+    echo "[mDNS] LoRa 网关可通过 huijian.local:${MQTT_PORT} 连接"
 else
     echo "[mDNS] ⚠ avahi-publish 不可用（Dockerfile 缺少 avahi-tools 包？）"
     if [ "${AVAHI_DAEMON_RUNNING}" = "false" ]; then
