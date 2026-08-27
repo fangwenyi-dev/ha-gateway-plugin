@@ -177,28 +177,42 @@ async def ensure_mqtt_connection(hass: HomeAssistant) -> None:
         cur_broker = first.data.get("broker")
         cur_port = first.data.get("port")
 
-        if cur_broker != broker or str(cur_port) != str(port):
-            # broker 地址不一致：自动更新为内置 Broker
-            _LOGGER.warning(
-                "MQTT 集成已连接到 %s:%s，但本插件内置 Broker 为 %s:%s；"
-                "正在自动更新 MQTT 配置条目以使用内置 Broker。",
-                cur_broker, cur_port, broker, port,
-            )
-            await _update_mqtt_entry(hass, first, broker, port, username, password)
-            # 更新后触发重载，让 MQTT 集成重新连接
-            await hass.config_entries.async_reload(first.entry_id)
-            # 等待 MQTT 客户端重连到新 broker
-            _LOGGER.info("等待 MQTT 客户端重连到内置 Broker...")
-            if not await _wait_for_mqtt_client(hass):
-                _LOGGER.warning("MQTT 客户端重连超时，但配置已更新，继续启动")
-        else:
+        if cur_broker == broker and str(cur_port) == str(port):
             _LOGGER.debug(
                 "MQTT 配置条目已指向内置 Broker %s:%s，无需更新",
                 broker, port,
             )
+            await hass.async_add_executor_job(_remove_marker, marker_path)
+            return
 
-        await hass.async_add_executor_job(_remove_marker, marker_path)
-        return
+        # broker 地址不一致，需要更新
+        _LOGGER.warning(
+            "MQTT 集成已连接到 %s:%s，但本插件内置 Broker 为 %s:%s；"
+            "正在自动更新 MQTT 配置条目以使用内置 Broker。",
+            cur_broker, cur_port, broker, port,
+        )
+
+        # source=hassio 条目由 Supervisor 管理，async_update_entry 的数据
+        # 会在 reload 时被 Supervisor 覆盖回原 broker 地址。解决方案：
+        # 禁用 hassio 条目 → 走下方 create_new_entry 路径创建 USER 源条目。
+        if getattr(first, "source", None) == "hassio":
+            _LOGGER.warning(
+                "MQTT 条目 %s 由 Supervisor 管理 (source=hassio)，"
+                "禁用后创建新的 USER 源条目指向内置 Broker。",
+                first.entry_id,
+            )
+            hass.config_entries.async_update_entry(first, disabled_by="integration")
+            await hass.config_entries.async_reload(first.entry_id)
+            # 不删标记——让后续 create_new_entry 路径接管
+        else:
+            # 非 hassio 条目（用户手动创建等）：直接更新数据
+            await _update_mqtt_entry(hass, first, broker, port, username, password)
+            await hass.config_entries.async_reload(first.entry_id)
+            _LOGGER.info("等待 MQTT 客户端重连到内置 Broker...")
+            if not await _wait_for_mqtt_client(hass):
+                _LOGGER.warning("MQTT 客户端重连超时，但配置已更新，继续启动")
+            await hass.async_add_executor_job(_remove_marker, marker_path)
+            return
 
     if not broker:
         _LOGGER.warning("MQTT 引导标记缺少 broker 字段，跳过自动配置")
@@ -206,8 +220,13 @@ async def ensure_mqtt_connection(hass: HomeAssistant) -> None:
         return
 
     async with _get_lock():
-        # 双重检查：等待锁期间可能已被并发触发的流程创建
-        if hass.config_entries.async_entries("mqtt"):
+        # 双重检查：等待锁期间可能已被并发触发的流程创建。
+        # 过滤 disabled 条目——上一步禁用的 hassio 条目不应阻止创建新条目。
+        active_mqtt = [
+            e for e in hass.config_entries.async_entries("mqtt")
+            if not e.disabled_by
+        ]
+        if active_mqtt:
             await hass.async_add_executor_job(_remove_marker, marker_path)
             return
 
