@@ -1,12 +1,12 @@
 #!/usr/bin/with-contenv bashio
 # =============================================================================
-# 慧尖 LoRa 网关一体化插件 — 启动脚本 v1.3.1
+# 慧尖 LoRa 网关一体化插件 — 启动脚本 v1.3.7
 #
-# 架构：
-#   - 容器内 mosquitto 固定监听 2022（不使用 1883，避免与 HA 官方 Mosquitto 冲突）
-#   - Docker 端口映射: 主机 2022 → 容器 2022
-#   - 容器内 auto_setup 用 127.0.0.1:2022 检测 broker
-#   - HA Core 用 172.30.32.1:2022 连接 broker
+# 架构（host_network 模式）：
+#   - 容器与宿主机共享网络命名空间
+#   - mosquitto 直接监听宿主机 0.0.0.0:2022
+#   - avahi-daemon 在宿主网卡上广播 huijian.local + _mqtt._tcp 服务
+#   - LoRa 网关通过 mDNS 发现 broker 并连接
 # =============================================================================
 
 set -e
@@ -229,13 +229,33 @@ nginx 2>/dev/null || {
 }
 
 # ---------- 3b. 配置并启动 avahi mDNS ----------
-echo "[mDNS] 配置 avahi-daemon..."
-# 移除默认的 avahi 服务配置（避免冲突）
+# host_network 模式：容器与宿主机共享网络，avahi-daemon 在宿主网卡上广播 mDNS
+echo "[mDNS] 配置 avahi-daemon (host_network 模式)..."
+
+# 检测并停止宿主机上已运行的 avahi-daemon（HAOS 默认运行，广播 homeassistant.local）
+# host_network 下容器可看到宿主进程，用 kill 停止避免 5353 端口冲突
+EXISTING_AVahi=$(pgrep -x avahi-daemon 2>/dev/null || true)
+if [ -n "${EXISTING_AVahi}" ]; then
+    echo "[mDNS] 检测到宿主 avahi-daemon (PID: ${EXISTING_AVahi})，停止以避免端口冲突..."
+    kill "${EXISTING_AVahi}" 2>/dev/null || true
+    sleep 1
+    # 确认已停止
+    if kill -0 "${EXISTING_AVahi}" 2>/dev/null; then
+        echo "[mDNS] 宿主 avahi-daemon 未响应 SIGTERM，发送 SIGKILL..."
+        kill -9 "${EXISTING_AVahi}" 2>/dev/null || true
+        sleep 1
+    fi
+    echo "[mDNS] 宿主 avahi-daemon 已停止"
+fi
+
+# 配置 avahi-daemon：广播 huijian.local + _mqtt._tcp 服务
 cat > /etc/avahi/avahi-daemon.conf <<AVAHI_EOF
 [server]
+hostname=huijian
 use-ipv4=yes
 use-ipv6=no
 enable-dbus=yes
+allow-interfaces=eth0,wlan0
 
 [publish]
 publish-addresses=yes
@@ -250,10 +270,10 @@ AVAHI_EOF
 # 设置 huijian.local 主机名
 hostname huijian 2>/dev/null || true
 
-# 创建 dbus 运行目录（容器中可能不存在）
+# 创建 dbus 运行目录
 mkdir -p /run/dbus
 
-# 启动 dbus 和 avahi-daemon
+# 启动 dbus（容器内独立实例，不与宿主 dbus 冲突）
 dbus-daemon --system 2>/dev/null || {
     echo "[mDNS] dbus-daemon 启动失败"
 }
@@ -282,11 +302,15 @@ if avahi-daemon -D 2>/dev/null; then
     echo "[mDNS] avahi-daemon 已启动，LoRa 网关可通过 huijian.local 发现本机"
     # 验证服务注册
     if command -v avahi-browse >/dev/null 2>&1; then
+        echo "[mDNS] 验证 mDNS 服务注册:"
         avahi-browse -t _mqtt._tcp 2>/dev/null | head -5 || true
+        avahi-browse -t -p _mqtt._tcp 2>/dev/null | head -3 || true
     fi
 else
     echo "[mDNS] avahi-daemon 启动失败，huijian.local 可能不可用"
     echo "[mDNS] LoRa 网关可改用 HA 的 IP 地址连接"
+    echo "[mDNS] 诊断: 检查 5353 端口是否被占用"
+    netstat -ulnp 2>/dev/null | grep 5353 || true
 fi
 
 # ---------- 4. 自动安装慧尖网关集成 ----------
@@ -411,8 +435,9 @@ if [ "${AUTO_SETUP}" = "true" ]; then
     if [ -d "${HA_CONFIG_DIR}" ]; then
         MARKER_PATH="${HA_CONFIG_DIR}/window_controller_gateway_mqtt_bootstrap.json"
         # 使用 jq 构造 JSON，正确转义密码中的特殊字符
+        # host_network 模式：broker 在 127.0.0.1（宿主机本地），非 Docker bridge IP
         if jq -n \
-            --arg broker "172.30.32.1" \
+            --arg broker "127.0.0.1" \
             --argjson port "${MQTT_PORT}" \
             --arg username "${USERNAME}" \
             --arg password "${PASSWORD}" \

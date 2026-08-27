@@ -1,6 +1,6 @@
 # 慧尖 LoRa 网关一体化插件
 
-[![版本](https://img.shields.io/badge/version-1.3.3-blue)]()
+[![版本](https://img.shields.io/badge/version-1.3.7-blue)]()
 [![HA Add-on](https://img.shields.io/badge/HA-Add--on-green)]()
 
 慧尖开窗器 LoRa 网关的 Home Assistant 一体化插件。**内置 Mosquitto Broker + 网关集成，安装一个插件即可获得全部能力**。
@@ -8,16 +8,21 @@
 ## 工作原理
 
 ```
-LoRa 网关 (MQTT 客户端)
+LoRa 网关 (MQTT 客户器)
     │
-    │ MQTT TCP → HA_IP:2022 (Docker 端口映射)
+    │ MQTT TCP → huijian.local:2022 (mDNS 自动发现)
     ▼
 ┌───────────────────────────────────────────────┐
-│ 慧尖 LoRa 网关一体化插件 (Docker 容器)          │
+│ 慧尖 LoRa 网关一体化插件 (Docker 容器, host_network) │
+│                                               │
+│  ┌──────────────────────────────────────┐    │
+│  │ Avahi mDNS                          │    │
+│  │ 广播 huijian.local + _mqtt._tcp     │    │
+│  └──────────────────────────────────────┘    │
 │                                               │
 │  ┌──────────────────────────────────────┐    │
 │  │ Mosquitto Broker                     │    │
-│  │ 监听 0.0.0.0:2022 (映射到主机 2022) │    │
+│  │ 监听 0.0.0.0:2022 (直接暴露在主机)   │    │
 │  │ 预设用户名/密码                      │    │
 │  │ ACL: gateway/+/req, gateway/rpt_rsp │    │
 │  └──────────────────────────────────────┘    │
@@ -30,12 +35,12 @@ LoRa 网关 (MQTT 客户端)
 │                                               │
 │  ┌──────────────────────────────────────┐    │
 │  │ 自动配置 HA MQTT 集成                 │    │
-│  │ → 通过 Supervisor API 创建配置条目    │    │
-│  │ → 连接 172.30.32.1:2022             │    │
+│  │ → 连接 127.0.0.1:2022               │    │
+│  │ → 预设凭据，无需手动填写             │    │
 │  └──────────────────────────────────────┘    │
 └───────────────────────────────────────────────┘
     │
-    │ HA MQTT 集成 (172.30.32.1:2022，自动配置)
+    │ HA MQTT 集成 (127.0.0.1:2022，自动配置)
     ▼
 慧尖网关集成 (custom_components/window_controller_gateway)
     └→ 通过 HA MQTT API 订阅 gateway/rpt_rsp, 发布 gateway/{sn}/req
@@ -70,9 +75,10 @@ https://github.com/fangwenyi-dev/ha-gateway-plugin
 点击「启动」按钮。
 
 **启动后自动完成：**
-- ✅ Mosquitto broker 启动，容器内监听 2022，主机映射 2022
+- ✅ Mosquitto broker 启动，监听 2022（host_network 模式直接暴露在主机）
+- ✅ avahi-daemon 广播 `huijian.local` + `_mqtt._tcp` 服务（mDNS 自动发现）
 - ✅ 密码文件自动生成（使用预设用户名密码）
-- ✅ HA MQTT 集成自动配置（连接到 172.30.32.1:2022）
+- ✅ HA MQTT 集成自动配置（连接到 127.0.0.1:2022）
 - ✅ 慧尖网关集成自动安装到 `custom_components`
 
 ### 4. 重启 HA
@@ -110,7 +116,7 @@ https://github.com/fangwenyi-dev/ha-gateway-plugin
 | `auto_setup_ha_mqtt` | `true` | 启动时自动配置 HA MQTT 集成 |
 | `install_integration` | `true` | 启动时自动安装慧尖网关集成到 HA custom_components |
 
-> **注意**：MQTT 端口固定为 `2022`（主机 2022 → 容器 2022），在 `config.yaml` 的 `ports` 中定义，不可在插件配置中修改。这样避免与 HA 官方 Mosquitto broker 的 1883 端口冲突，两个 broker 可以共存。
+> **注意**：MQTT 端口固定为 `2022`（host_network 模式直接暴露在主机），在 `config.yaml` 中定义，不可在插件配置中修改。这样避免与 HA 官方 Mosquitto broker 的 1883 端口冲突，两个 broker 可以共存。
 
 > **⚠️ 安全提醒**：默认密码 `huijian2022` 仅供初次测试使用。**请在生产环境中务必修改默认密码**，在插件「配置」标签页中修改 `username` 和 `password` 后重启插件生效。
 
