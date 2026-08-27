@@ -496,5 +496,16 @@ if command -v mosquitto_pub >/dev/null 2>&1; then
     fi
 fi
 
-# 将后台 mosquitto 转为前台（wait 阻塞，mosquitto 退出后 trap 自动清理 avahi-publish）
-wait "${MOSQUITTO_PID}" 2>/dev/null || exec mosquitto -c /etc/mosquitto/mosquitto.conf
+# 将后台 mosquitto 转为前台运行：
+# wait 阻塞等待 mosquitto 退出；mosquitto 退出后 trap cleanup_mdns 自动清理 avahi-publish。
+# 如果 mosquitto 异常退出（wait 返回非零），重启 mosquitto 而非 exec 替换，
+# 确保当前 shell 保持存活以执行 trap 清理逻辑。
+while true; do
+    wait "${MOSQUITTO_PID}" 2>/dev/null
+    EXIT_CODE=$?
+    echo "[运行] Mosquitto 已退出 (exit code: ${EXIT_CODE})，5 秒后重启..."
+    sleep 5
+    mosquitto -c /etc/mosquitto/mosquitto.conf &
+    MOSQUITTO_PID=$!
+    echo "[运行] Mosquitto 已重启 (PID: ${MOSQUITTO_PID})"
+done
