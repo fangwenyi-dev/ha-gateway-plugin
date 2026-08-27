@@ -25,3 +25,5 @@ Thumbs.db
 .omo/
 .vibe-loop.json
 .vibe-loop-agents/
+
+.gitee_token

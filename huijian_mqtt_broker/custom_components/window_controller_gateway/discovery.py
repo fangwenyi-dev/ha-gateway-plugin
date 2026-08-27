@@ -170,7 +170,7 @@ async def async_ignore_gateway(hass: HomeAssistant, gateway_sn: str):
     prefix = f"{gateway_sn.lower()}_"
     for entity in list(entity_registry.entities.values()):
         if entity.platform == DOMAIN and entity.unique_id and entity.unique_id.lower().startswith(prefix):
-            entity_registry.async_remove(entity.entity_id)
+            await entity_registry.async_remove(entity.entity_id)
             _LOGGER.debug("删除网关 %s 的实体: %s", gateway_sn, entity.entity_id)
 
 async def async_unignore_gateway(hass: HomeAssistant, gateway_sn: str):

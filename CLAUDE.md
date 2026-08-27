@@ -34,6 +34,27 @@ gh run view <run-id> --repo fangwenyi-dev/ha-gateway-plugin --log-failed
 
 ---
 
+### Gitee Token 配置
+**Gitee 推送使用 OAuth2 token 认证：**
+
+```bash
+# Token 存储位置
+C:\Users\fangwenyi\.gitee_token
+
+# 配置 Gitee 远程 URL（包含 token）
+$token = Get-Content "C:\Users\fangwenyi\.gitee_token" -Raw
+$giteeUrl = "https://oauth2:${token}@gitee.com/fangwenyi-dev/ha-gateway-plugin.git"
+git remote set-url gitee $giteeUrl
+```
+
+**验证配置：**
+```bash
+git remote -v  # 应显示包含 token 的 URL
+git push gitee main  # 测试推送
+```
+
+---
+
 ## 项目架构
 
 ### 一体化插件

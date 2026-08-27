@@ -680,7 +680,7 @@ class WindowControllerDeviceManager:
                     identifiers={(DOMAIN, device_sn)}
                 )
                 if device:
-                    device_registry.async_remove_device(device.id)
+                    await device_registry.async_remove_device(device.id)
                     _LOGGER.info("设备已从 Home Assistant 设备注册表中删除: %s", device_sn)
                 else:
                     _LOGGER.debug("设备在注册表中未找到: %s", device_sn)
@@ -829,7 +829,7 @@ class WindowControllerDeviceManager:
             unique_id = f"{self.gateway_sn}_{device_sn}_{button_type}"
             entity_id = entity_registry.async_get_entity_id("button", DOMAIN, unique_id)
             if entity_id:
-                entity_registry.async_update_entity(
+                await entity_registry.async_update_entity(
                     entity_id,
                     aliases={f"{new_name} {button_name}"}
                 )
@@ -979,7 +979,7 @@ class WindowControllerDeviceManager:
                     continue
                 if (entity_entry.unique_id.startswith(f"{old_gateway_sn}_{device_sn}_")
                         or entity_entry.unique_id == f"{old_gateway_sn}_remove_{device_sn}"):
-                    entity_registry.async_remove(entity_id)
+                    await entity_registry.async_remove(entity_id)
                     _LOGGER.info("转移时删除旧前缀实体: %s", entity_id)
         except Exception as e:
             _LOGGER.error("删除旧前缀实体失败: %s", e)
@@ -1216,7 +1216,7 @@ class WindowControllerDeviceManager:
             for device_sn in device_sns:
                 if (entity_entry.unique_id.startswith(f"{old_gateway_sn}_{device_sn}_")
                         or entity_entry.unique_id == f"{old_gateway_sn}_remove_{device_sn}"):
-                    entity_registry.async_remove(entity_id)
+                    await entity_registry.async_remove(entity_id)
                     _LOGGER.info("迁移时删除旧前缀实体: %s", entity_id)
                     break
 
@@ -1231,7 +1231,7 @@ class WindowControllerDeviceManager:
                                 identifiers={(DOMAIN, device_sn)}
                             )
                             if new_device and entity_entry.config_entry_id != self.entry.entry_id:
-                                entity_registry.async_get_or_create(
+                                await entity_registry.async_get_or_create(
                                     domain=entity_entry.domain,
                                     platform=DOMAIN,
                                     unique_id=entity_entry.unique_id,

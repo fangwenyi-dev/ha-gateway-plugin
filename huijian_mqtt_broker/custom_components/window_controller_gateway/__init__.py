@@ -213,6 +213,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _LOGGER.error("加载设备失败: %s", e)
             import traceback
             _LOGGER.error("堆栈跟踪: %s", traceback.format_exc())
+            # P1 修复：抛出 ConfigEntryNotReady 让 HA 知道 setup 失败并自动重试，
+            # 而不是静默继续（集成"看似在线实则无设备"，永不重试）
+            raise ConfigEntryNotReady(f"设备加载失败: {e}") from e
         
         # 检查设备加载结果
         devices = device_manager.get_all_devices()
@@ -275,7 +278,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         and entity_entry.config_entry_id == entry.entry_id
                         and entity_entry.disabled_by is not None
                         and entity_entry.disabled_by != "user"):
-                    entity_registry.async_update_entity(
+                    await entity_registry.async_update_entity(
                         entity_entry.entity_id, disabled_by=None
                     )
                     restored_count += 1
@@ -532,9 +535,9 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
                 entity_registry = er.async_get(hass)
                 for entity_entry in list(entity_registry.entities.values()):
                     if entity_entry.device_id == gateway_device.id:
-                        entity_registry.async_remove(entity_entry.entity_id)
+                        await entity_registry.async_remove(entity_entry.entity_id)
                 # 再删除网关设备条目本身
-                device_registry.async_remove_device(gateway_device.id)
+                await device_registry.async_remove_device(gateway_device.id)
                 _LOGGER.info("已删除网关 %s 的设备注册表条目（含其下实体）", gateway_sn)
     except Exception as e:
         _LOGGER.error("删除网关 %s 的设备注册表条目失败: %s", gateway_sn, e)
@@ -552,8 +555,8 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
                 for entity_entry in list(entity_registry.entities.values()):
                     if (entity_entry.device_id == device.id
                             and entity_entry.config_entry_id == entry.entry_id):
-                        entity_registry.async_remove(entity_entry.entity_id)
-                device_registry.async_remove_device(device.id)
+                        await entity_registry.async_remove(entity_entry.entity_id)
+                await device_registry.async_remove_device(device.id)
                 _LOGGER.info("已删除网关 %s 的子设备注册表条目: %s", gateway_sn, device.id)
     except Exception as e:
         _LOGGER.error("删除网关 %s 的子设备注册表条目失败: %s", gateway_sn, e)

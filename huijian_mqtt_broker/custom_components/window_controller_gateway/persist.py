@@ -28,42 +28,62 @@ _save_pending = False
 
 async def load_persistent_data(hass: HomeAssistant) -> None:
     """加载持久化的设备映射和手动删除列表"""
+    config_dir = hass.config.config_dir
+    data_file = os.path.join(config_dir, PERSISTENT_DATA_FILE)
+    bak_file = data_file + ".bak"
+
+    if not os.path.exists(data_file):
+        return
+
+    # 尝试读取主文件
+    data = None
     try:
-        config_dir = hass.config.config_dir
-        data_file = os.path.join(config_dir, PERSISTENT_DATA_FILE)
-
-        if os.path.exists(data_file):
-            def _read_file():
-                with open(data_file, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-
-            data = await hass.async_add_executor_job(_read_file)
-
-            version = data.get("schema_version", 0)
-            if version > SCHEMA_VERSION:
-                _LOGGER.warning(
-                    "持久化数据版本(%d)高于当前支持版本(%d)，可能不兼容",
-                    version, SCHEMA_VERSION
-                )
-
-            if 'device_to_gateway_mapping' in data:
-                mapping = data['device_to_gateway_mapping']
-                hass.data[DOMAIN][DEVICE_TO_GATEWAY_MAPPING] = mapping
-                _LOGGER.info("已加载设备到网关映射表，共 %d 个设备", len(mapping))
-
-            if 'manually_removed_devices' in data:
-                removed_set = set(data['manually_removed_devices'])
-                hass.data[DOMAIN][GLOBAL_MANUALLY_REMOVED_DEVICES] = removed_set
-                _LOGGER.info("已加载手动删除设备列表，共 %d 个设备", len(removed_set))
-
-            # 设备参数设定值（速度/力度等），旧版文件无此字段时保持空表
-            hass.data[DOMAIN].setdefault(DEVICE_SETPOINTS, {})
-            if 'device_setpoints' in data and isinstance(data['device_setpoints'], dict):
-                hass.data[DOMAIN][DEVICE_SETPOINTS] = data['device_setpoints']
-                _LOGGER.info("已加载设备参数设定值，共 %d 个设备", len(data['device_setpoints']))
-
+        def _read_file():
+            with open(data_file, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        data = await hass.async_add_executor_job(_read_file)
     except Exception as e:
-        _LOGGER.info("加载持久化数据失败: %s", e)
+        _LOGGER.error("加载持久化数据失败（主文件损坏）: %s", e)
+
+    # 主文件读取失败，尝试 .bak 恢复
+    if data is None and os.path.exists(bak_file):
+        _LOGGER.warning("主文件损坏，尝试从 .bak 恢复")
+        try:
+            def _read_bak():
+                with open(bak_file, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            data = await hass.async_add_executor_job(_read_bak)
+            _LOGGER.info("从 .bak 恢复成功")
+        except Exception as e:
+            _LOGGER.error("从 .bak 恢复也失败: %s", e)
+
+    if data is None:
+        _LOGGER.error("持久化数据完全不可用，使用空数据继续运行")
+        hass.data[DOMAIN].setdefault(DEVICE_SETPOINTS, {})
+        return
+
+    version = data.get("schema_version", 0)
+    if version > SCHEMA_VERSION:
+        _LOGGER.warning(
+            "持久化数据版本(%d)高于当前支持版本(%d)，可能不兼容",
+            version, SCHEMA_VERSION
+        )
+
+    if 'device_to_gateway_mapping' in data:
+        mapping = data['device_to_gateway_mapping']
+        hass.data[DOMAIN][DEVICE_TO_GATEWAY_MAPPING] = mapping
+        _LOGGER.info("已加载设备到网关映射表，共 %d 个设备", len(mapping))
+
+    if 'manually_removed_devices' in data:
+        removed_set = set(data['manually_removed_devices'])
+        hass.data[DOMAIN][GLOBAL_MANUALLY_REMOVED_DEVICES] = removed_set
+        _LOGGER.info("已加载手动删除设备列表，共 %d 个设备", len(removed_set))
+
+    # 设备参数设定值（速度/力度等），旧版文件无此字段时保持空表
+    hass.data[DOMAIN].setdefault(DEVICE_SETPOINTS, {})
+    if 'device_setpoints' in data and isinstance(data['device_setpoints'], dict):
+        hass.data[DOMAIN][DEVICE_SETPOINTS] = data['device_setpoints']
+        _LOGGER.info("已加载设备参数设定值，共 %d 个设备", len(data['device_setpoints']))
 
 
 async def save_persistent_data(hass: HomeAssistant) -> None:
@@ -114,6 +134,13 @@ async def _do_save(hass: HomeAssistant) -> None:
         def _write_file():
             tmp_file = data_file + ".tmp"
             try:
+                # 写入前备份旧文件为 .bak（用于损坏恢复）
+                if os.path.exists(data_file):
+                    try:
+                        import shutil
+                        shutil.copy2(data_file, bak_file)
+                    except OSError:
+                        pass  # 备份失败不阻塞写入
                 with open(tmp_file, 'w', encoding='utf-8') as f:
                     json.dump(data, f, indent=2, ensure_ascii=False)
                 os.replace(tmp_file, data_file)

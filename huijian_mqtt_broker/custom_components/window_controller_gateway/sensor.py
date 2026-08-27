@@ -320,13 +320,13 @@ async def async_setup_entry(
                 if "battery" in sensors:
                     battery_entity = sensors["battery"]
                     if battery_entity.entity_id:
-                        entity_registry.async_remove(battery_entity.entity_id)
+                        await entity_registry.async_remove(battery_entity.entity_id)
                         _LOGGER.info("已从实体注册表中删除设备 %s 的电池传感器", device_name)
                 # 删除状态传感器
                 if "status" in sensors:
                     status_entity = sensors["status"]
                     if status_entity.entity_id:
-                        entity_registry.async_remove(status_entity.entity_id)
+                        await entity_registry.async_remove(status_entity.entity_id)
                         _LOGGER.info("已从实体注册表中删除设备 %s 的状态传感器", device_name)
             except Exception as e:
                 _LOGGER.error("从实体注册表中删除设备 %s 的传感器失败: %s", device_name, e)

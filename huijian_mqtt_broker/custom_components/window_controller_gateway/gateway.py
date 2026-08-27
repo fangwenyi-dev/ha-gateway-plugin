@@ -278,7 +278,7 @@ class GatewayDeviceRemoveButton(ButtonEntity):
 
             entity_id = entity_registry.async_get_entity_id("button", DOMAIN, self._attr_unique_id)
             if entity_id:
-                entity_registry.async_remove(entity_id)
+                await entity_registry.async_remove(entity_id)
                 _LOGGER.info("已从实体注册表中删除删除按钮: %s", entity_id)
             else:
                 _LOGGER.debug("删除按钮实体未找到，可能已经被删除: %s", self._attr_unique_id)

@@ -243,7 +243,7 @@ def _create_wind_lock_buttons(hass, device_manager, mqtt_handler, gateway_sn, de
     return entities
 
 
-def _fix_entity_categories(hass, gateway_sn, device_sn):
+async def _fix_entity_categories(hass, gateway_sn, device_sn):
     """强制更新实体注册表中的 entity_category
     
     HA 实体注册表会缓存 entity_category，代码中修改 _attr_entity_category 
@@ -264,11 +264,11 @@ def _fix_entity_categories(hass, gateway_sn, device_sn):
         if entity_id:
             entity_entry = entity_registry.entities.get(entity_id)
             if entity_entry and entity_entry.entity_category != EntityCategory.CONFIG:
-                entity_registry.async_update_entity(entity_id, entity_category=EntityCategory.CONFIG)
+                await entity_registry.async_update_entity(entity_id, entity_category=EntityCategory.CONFIG)
                 _LOGGER.info("修正配置按钮 entity_category → CONFIG: %s", entity_id)
 
 
-def _cleanup_unsupported_buttons(hass, gateway_sn, device_sn):
+async def _cleanup_unsupported_buttons(hass, gateway_sn, device_sn):
     """清理不支持内倒功能设备的多余按钮实体（④内倒、⑤平开模式、⑥内倒模式）
     
     升级前可能已为 5001/5002/5003 等设备创建了内倒/风锁按钮，
@@ -287,7 +287,7 @@ def _cleanup_unsupported_buttons(hass, gateway_sn, device_sn):
         unique_id = f"{gateway_sn}_{device_sn}_{button_type}"
         entity_id = entity_registry.async_get_entity_id("button", DOMAIN, unique_id)
         if entity_id:
-            entity_registry.async_remove(entity_id)
+            await entity_registry.async_remove(entity_id)
             _LOGGER.info("清理不支持内倒功能设备 %s 的多余按钮: %s (类型: %s)", device_sn, entity_id, button_type)
 
 
@@ -357,10 +357,10 @@ async def async_setup_entry(
             device_name = device["name"]
             
             # 强制修正已有实体的 entity_category（解决注册表缓存旧值的问题）
-            _fix_entity_categories(hass, gateway_sn, device_sn)
+            await _fix_entity_categories(hass, gateway_sn, device_sn)
 
             # 清理不支持内倒功能设备的多余按钮实体（升级兼容）
-            _cleanup_unsupported_buttons(hass, gateway_sn, device_sn)
+            await _cleanup_unsupported_buttons(hass, gateway_sn, device_sn)
             
             # 生成删除按钮的唯一ID
             remove_button_unique_id = f"{gateway_sn}_remove_{device_sn}"
@@ -404,10 +404,10 @@ async def async_setup_entry(
             entities_to_add = []
             
             # 强制修正已有实体的 entity_category
-            _fix_entity_categories(hass, gateway_sn, device_sn)
+            await _fix_entity_categories(hass, gateway_sn, device_sn)
 
             # 清理不支持内倒功能设备的多余按钮实体（升级兼容）
-            _cleanup_unsupported_buttons(hass, gateway_sn, device_sn)
+            await _cleanup_unsupported_buttons(hass, gateway_sn, device_sn)
             
             # 检查删除按钮是否已存在
             remove_unique_id = f"{gateway_sn}_remove_{device_sn}"
@@ -467,7 +467,7 @@ async def async_setup_entry(
                     entity_registry = async_get(hass)
                     # 删除删除按钮
                     if remove_button.entity_id:
-                        entity_registry.async_remove(remove_button.entity_id)
+                        await entity_registry.async_remove(remove_button.entity_id)
                         _LOGGER.info("已从实体注册表中删除设备 %s 的删除按钮", device_name)
                     
                     # 生成并删除其他按钮实体ID
@@ -477,7 +477,7 @@ async def async_setup_entry(
                         # 查找并删除实体
                         entity_entry = entity_registry.async_get_entity_id("button", DOMAIN, button_unique_id)
                         if entity_entry:
-                            entity_registry.async_remove(entity_entry)
+                            await entity_registry.async_remove(entity_entry)
                             _LOGGER.info("已从实体注册表中删除设备 %s 的%s按钮", device_name, button_type)
                 except Exception as e:
                     _LOGGER.error("从实体注册表中删除设备 %s 的按钮失败: %s", device_name, e)
