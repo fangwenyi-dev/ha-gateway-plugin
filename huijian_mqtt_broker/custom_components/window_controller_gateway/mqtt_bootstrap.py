@@ -121,7 +121,7 @@ async def _quietly_abort_flow(hass: HomeAssistant, flow_id: str) -> None:
 
 
 async def _update_mqtt_entry(
-    entry: Any, broker: str, port: int,
+    hass: HomeAssistant, entry: Any, broker: str, port: int,
     username: Optional[str], password: Optional[str],
 ) -> None:
     """更新已有 MQTT 配置条目的 broker 连接信息。
@@ -137,7 +137,7 @@ async def _update_mqtt_entry(
         new_data["username"] = username
     if password is not None:
         new_data["password"] = password
-    entry.hass.config_entries.async_update_entry(entry, data=new_data)
+    hass.config_entries.async_update_entry(entry, data=new_data)
     _LOGGER.info(
         "已将 MQTT 配置条目 %s 更新为内置 Broker %s:%s",
         entry.entry_id, broker, port,
@@ -184,7 +184,7 @@ async def ensure_mqtt_connection(hass: HomeAssistant) -> None:
                 "正在自动更新 MQTT 配置条目以使用内置 Broker。",
                 cur_broker, cur_port, broker, port,
             )
-            await _update_mqtt_entry(first, broker, port, username, password)
+            await _update_mqtt_entry(hass, first, broker, port, username, password)
             # 更新后触发重载，让 MQTT 集成重新连接
             await hass.config_entries.async_reload(first.entry_id)
         else:
