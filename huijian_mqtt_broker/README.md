@@ -1,6 +1,6 @@
 # 慧尖 LoRa 网关一体化插件
 
-[![版本](https://img.shields.io/badge/version-1.5.1-blue)]()
+[![版本](https://img.shields.io/badge/version-1.5.2-blue)]()
 [![HA Add-on](https://img.shields.io/badge/HA-Add--on-green)]()
 
 慧尖开窗器 LoRa 网关的 Home Assistant 一体化插件。**内置 Mosquitto Broker + mDNS 自动发现 + 网关集成，安装一个插件即可获得全部能力**。
@@ -145,6 +145,11 @@ https://github.com/fangwenyi-dev/ha-gateway-plugin
 不会。持久化数据存储在 HA 配置目录，升级时自动备份恢复。v1.3.2 起增加了 `.bak` 备份机制，JSON 损坏时可自动恢复。
 
 ## 更新日志
+
+### v1.5.2 (2026-08-27)
+- **Web UI 视觉体验优化**：精简布局、优化控件样式与交互细节
+- **README 精简优化**：文档结构整理，更清晰易读
+- ⚠️ **需要重启插件**（Web UI 代码更新）
 
 ### v1.5.1 (2026-08-27)
 - **修复**：一键升级失败时区分 400/403 错误，新增「打开 Supervisor 加载项页面」引导
