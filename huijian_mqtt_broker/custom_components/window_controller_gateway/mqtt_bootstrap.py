@@ -193,16 +193,22 @@ async def ensure_mqtt_connection(hass: HomeAssistant) -> None:
         )
 
         # source=hassio 条目由 Supervisor 管理，async_update_entry 的数据
-        # 会在 reload 时被 Supervisor 覆盖回原 broker 地址。解决方案：
-        # 禁用 hassio 条目 → 走下方 create_new_entry 路径创建 USER 源条目。
+        # 会在 reload 时被 Supervisor 覆盖回原 broker 地址。
+        # 禁用（disabled_by）也不行——MQTT config flow 的 _async_current_entries()
+        # 仍会返回 disabled 条目，触发 single_instance_allowed 中止。
+        # 唯一方案：删除 hassio 条目 → 走下方 create_new_entry 路径。
         if getattr(first, "source", None) == "hassio":
             _LOGGER.warning(
                 "MQTT 条目 %s 由 Supervisor 管理 (source=hassio)，"
-                "禁用后创建新的 USER 源条目指向内置 Broker。",
+                "删除后创建新的 USER 源条目指向内置 Broker。",
                 first.entry_id,
             )
-            hass.config_entries.async_update_entry(first, disabled_by="integration")
-            await hass.config_entries.async_reload(first.entry_id)
+            try:
+                await hass.config_entries.async_remove(first.entry_id)
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.warning("删除 hassio MQTT 条目失败: %s", err)
+                await hass.async_add_executor_job(_remove_marker, marker_path)
+                return
             # 不删标记——让后续 create_new_entry 路径接管
         else:
             # 非 hassio 条目（用户手动创建等）：直接更新数据
@@ -221,12 +227,8 @@ async def ensure_mqtt_connection(hass: HomeAssistant) -> None:
 
     async with _get_lock():
         # 双重检查：等待锁期间可能已被并发触发的流程创建。
-        # 过滤 disabled 条目——上一步禁用的 hassio 条目不应阻止创建新条目。
-        active_mqtt = [
-            e for e in hass.config_entries.async_entries("mqtt")
-            if not e.disabled_by
-        ]
-        if active_mqtt:
+        # hassio 条目已在上方被删除（async_remove），此处只检查是否还有其他活跃条目。
+        if hass.config_entries.async_entries("mqtt"):
             await hass.async_add_executor_job(_remove_marker, marker_path)
             return
 
