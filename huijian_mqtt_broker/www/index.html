@@ -233,7 +233,7 @@
     </div>
 
     <script>
-        let CURRENT_VERSION = '1.4.2';
+        let CURRENT_VERSION = '1.4.3';
         const DOMAIN = 'window_controller_gateway';
 
         // Ingress 下页面路径形如 /hassio/ingress/<token>/，直连插件端口时为 /
@@ -826,19 +826,31 @@
             content.innerHTML = '<div class="loading"><div class="spinner"></div><p>正在检查更新...</p></div>';
             try {
                 // 使用 nginx 代理访问 Gitee API（默认更新源，无速率限制）
-                const resp = await fetch(INGRESS_BASE + 'api/gitee/repos/fangwenyi-dev/ha-gateway-plugin/releases/latest');
+                // 不使用 /releases/latest 端点（Gitee 可能返回过期数据），
+                // 改为获取所有 releases 取版本号最大的
+                const resp = await fetch(INGRESS_BASE + 'api/gitee/repos/fangwenyi-dev/ha-gateway-plugin/releases?per_page=100');
                 if (!resp.ok) throw new Error('Gitee API 不可用 (HTTP ' + resp.status + ')');
-                const release = await resp.json();
-                const latestVersion = release.tag_name.replace(/^v/, '');
+                const releases = await resp.json();
+                // 找版本号最大的 release
+                let latestVersion = '0.0.0';
+                let latestRelease = null;
+                for (const r of releases) {
+                    const ver = (r.tag_name || '').replace(/^v/, '');
+                    if (ver && compareVersions(ver, latestVersion) > 0) {
+                        latestVersion = ver;
+                        latestRelease = r;
+                    }
+                }
+                if (!latestRelease) throw new Error('未找到任何 Release');
                 const hasUpdate = compareVersions(latestVersion, CURRENT_VERSION) > 0;
                 if (hasUpdate) {
-                    const body = release.body || '暂无变更日志';
+                    const body = latestRelease.body || '暂无变更日志';
                     const truncatedBody = body.length > 800 ? body.substring(0, 800) + '...' : body;
                     content.innerHTML = '<div class="update-box"><div class="update-info">' +
                         '<div class="update-title">发现新版本 v' + escapeHtml(latestVersion) + '</div>' +
                         '<div class="update-desc">当前版本 v' + CURRENT_VERSION + '</div></div>' +
                         '<button class="btn btn-success" onclick="doUpgrade()">一键升级</button>' +
-                        '<a class="btn btn-primary" href="' + escapeHtml(release.html_url) + '" target="_blank">查看详情</a></div>' +
+                        '<a class="btn btn-primary" href="' + escapeHtml(latestRelease.html_url) + '" target="_blank">查看详情</a></div>' +
                         '<div style="margin-top:10px;font-size:12px;color:var(--text-muted);white-space:pre-wrap;">' + escapeHtml(truncatedBody) + '</div>';
                 } else {
                     content.innerHTML = '<div class="update-box" style="background:linear-gradient(135deg,var(--green-bg),#d1fae5);"><div class="update-info">' +
