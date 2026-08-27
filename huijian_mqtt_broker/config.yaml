@@ -13,9 +13,9 @@ ingress: true
 ingress_port: 8099
 panel_icon: mdi:remote
 panel_title: 慧尖网关
-# avahi-daemon + dbus 需要 full_access 才能正常运行 mDNS 广播
-# host_network 不可用：HAOS 宿主 avahi-daemon 抢占 UDP 5353 导致冲突
-# mDNS 在 Docker bridge 网络下无法到达物理 LAN，网关需用 IP 地址连接
+# host_network: 容器直接使用主机网络，mosquitto 监听主机 2022 端口
+# mDNS (avahi-publish) 广播可到达物理 LAN，LoRa 网关通过 huijian.local 自动发现
+# 使用 avahi-publish 而非 avahi-daemon，避免与 HAOS 宿主 avahi 冲突
 full_access: true
 # 允许通过 Supervisor /core/api/ 代理访问 HA Core REST API（设备、状态、服务等）
 # Web UI 的 haApi() 调用依赖此权限，否则返回 401
@@ -24,10 +24,7 @@ homeassistant_api: true
 # Web UI「一键升级」POST /api/supervisor/addons/self/update 依赖此权限，
 # 缺失时 Supervisor 拒绝访问并返回 403 Forbidden
 hassio_api: true
-ports:
-  2022/tcp: 2022
-ports_description:
-  2022/tcp: MQTT Broker 端口（主机 2022 → 容器 2022，不使用 1883 避免与 HA 官方 Mosquitto 冲突）
+host_network: true
 map:
   - ssl
   - homeassistant_config:rw

@@ -1,12 +1,13 @@
 #!/usr/bin/with-contenv bashio
 # =============================================================================
-# 慧尖 LoRa 网关一体化插件 — 启动脚本 v1.3.1
+# 慧尖 LoRa 网关一体化插件 — 启动脚本 v1.3.2
 #
 # 架构：
-#   - 容器内 mosquitto 固定监听 2022（不使用 1883，避免与 HA 官方 Mosquitto 冲突）
-#   - Docker 端口映射: 主机 2022 → 容器 2022
-#   - 容器内 auto_setup 用 127.0.0.1:2022 检测 broker
-#   - HA Core 用 172.30.32.1:2022 连接 broker
+#   - host_network 模式：容器直接使用主机网络
+#   - mosquitto 监听主机 2022 端口（不使用 1883，避免与 HA 官方 Mosquitto 冲突）
+#   - mDNS 广播 huijian.local，LoRa 网关自动发现
+#   - auto_setup 用 127.0.0.1:2022 检测 broker
+#   - HA Core 用 127.0.0.1:2022 连接 broker
 # =============================================================================
 
 set -e
@@ -25,7 +26,7 @@ echo "============================================"
 echo "  慧尖 LoRa 网关一体化插件启动中..."
 echo "============================================"
 echo "[配置] MQTT 用户名: ${USERNAME}"
-echo "[配置] MQTT 主机端口: ${MQTT_PORT} (映射到容器内 ${INTERNAL_PORT})"
+echo "[配置] MQTT 端口: ${MQTT_PORT} (host_network 模式)"
 echo "[配置] 自动配置 HA MQTT 集成: ${AUTO_SETUP}"
 echo "[配置] 自动安装网关集成: ${INSTALL_INTEGRATION}"
 echo ""
@@ -141,8 +142,12 @@ cat > /etc/nginx/http.d/ingress.conf <<NGINXEOF
 server {
     listen 8099;
 
-    # 安全: 仅允许 HA Core (172.30.32.2) 访问 Ingress 端口
-    allow 172.30.32.2;
+    # host_network 模式：允许所有本地连接（宿主 IP、127.0.0.1）
+    allow 127.0.0.1;
+    allow 172.30.32.0/24;
+    allow 10.0.0.0/8;
+    allow 172.16.0.0/12;
+    allow 192.168.0.0/16;
     deny all;
 
     location / {
@@ -229,64 +234,66 @@ nginx 2>/dev/null || {
 }
 
 # ---------- 3b. 配置并启动 avahi mDNS ----------
-echo "[mDNS] 配置 avahi-daemon..."
-# 移除默认的 avahi 服务配置（避免冲突）
-cat > /etc/avahi/avahi-daemon.conf <<AVAHI_EOF
-[server]
-use-ipv4=yes
-use-ipv6=no
-enable-dbus=yes
-
-[publish]
-publish-addresses=yes
-publish-hinfo=yes
-publish-workstation=no
-publish-domain=yes
-
-[reflector]
-enable-reflector=yes
-AVAHI_EOF
+echo "[mDNS] 配置 mDNS 广播..."
 
 # 设置 huijian.local 主机名
 hostname huijian 2>/dev/null || true
 
-# 创建 dbus 运行目录（容器中可能不存在）
+# 创建 dbus 运行目录
 mkdir -p /run/dbus
 
-# 启动 dbus 和 avahi-daemon
-dbus-daemon --system 2>/dev/null || {
-    echo "[mDNS] dbus-daemon 启动失败"
-}
+# 方案：用 avahi-publish 发布 mDNS 服务（不启动 avahi-daemon，避免与宿主冲突）
+# avahi-publish 是客户端工具，不需要绑定 UDP 5353，可以与宿主 avahi 共存
 
-# 等待 dbus 就绪
-sleep 1
+# 先检测是否有 avahi-daemon 在运行（用于 browse 验证）
+AVahi_DAEMON_RUNNING=false
+if pgrep -x avahi-daemon >/dev/null 2>&1; then
+    AVahi_DAEMON_RUNNING=true
+    echo "[mDNS] 检测到 avahi-daemon 已运行，将使用 avahi-publish 注册服务"
+else
+    # 启动 dbus 和 avahi-daemon（如果没有在运行）
+    echo "[mDNS] 未检测到 avahi-daemon，启动中..."
+    dbus-daemon --system 2>/dev/null || true
+    sleep 1
+    if avahi-daemon -D 2>/dev/null; then
+        AVahi_DAEMON_RUNNING=true
+        echo "[mDNS] avahi-daemon 已启动"
+    else
+        echo "[mDNS] avahi-daemon 启动失败，尝试仅用 avahi-publish"
+    fi
+fi
 
-# 注册 _mqtt._tcp 服务（LoRa 网关通过 mDNS 服务发现找到 broker）
-# matter-broker 固件使用 espressif/mdns 注册相同服务类型，网关已适配此发现机制
-mkdir -p /etc/avahi/services
-cat > /etc/avahi/services/mqtt.service <<SVC_EOF
-<?xml version="1.0" standalone='no'?>
-<!DOCTYPE service-group SYSTEM "avahi-service.dtd">
-<service-group>
-  <name replace-wildcards="yes">huijian-mqtt on %h</name>
-  <service>
-    <type>_mqtt._tcp</type>
-    <port>${MQTT_PORT}</port>
-  </service>
-</service-group>
-SVC_EOF
-echo "[mDNS] _mqtt._tcp 服务文件已创建 (port ${MQTT_PORT})"
-
-# 启动 avahi-daemon
-if avahi-daemon -D 2>/dev/null; then
-    echo "[mDNS] avahi-daemon 已启动，LoRa 网关可通过 huijian.local 发现本机"
-    # 验证服务注册
+# 用 avahi-publish 注册 _mqtt._tcp 服务（后台持续运行）
+# --no-reverse: 不注册反向 DNS
+# --no-fail: 如果 avahi-daemon 不可用，不退出
+if command -v avahi-publish >/dev/null 2>&1; then
+    avahi-publish -R -s "huijian-mqtt" _mqtt._tcp "${MQTT_PORT}" \
+        --no-reverse --no-fail &
+    AVahi_PUBLISH_PID=$!
+    echo "[mDNS] avahi-publish 已启动 (PID: ${AVahi_PUBLISH_PID})"
+    sleep 2
+    
+    # 验证服务是否注册成功
     if command -v avahi-browse >/dev/null 2>&1; then
-        avahi-browse -t _mqtt._tcp 2>/dev/null | head -5 || true
+        if timeout 3 avahi-browse -t _mqtt._tcp 2>/dev/null | grep -q "huijian"; then
+            echo "[mDNS] mDNS 服务验证通过，LoRa 网关可通过 huijian.local 发现本机"
+        else
+            echo "[mDNS] mDNS 服务已注册，广播中（验证可能需要几秒钟）"
+        fi
+    else
+        echo "[mDNS] mDNS 服务已注册，广播中"
     fi
 else
-    echo "[mDNS] avahi-daemon 启动失败，huijian.local 可能不可用"
-    echo "[mDNS] LoRa 网关可改用 HA 的 IP 地址连接"
+    echo "[mDNS] avahi-publish 不可用，尝试启动完整 avahi-daemon..."
+    # 兜底：启动 avahi-daemon
+    if [ "${AVahi_DAEMON_RUNNING}" = "false" ]; then
+        avahi-daemon -D 2>/dev/null && {
+            echo "[mDNS] avahi-daemon 已启动"
+        } || {
+            echo "[mDNS] avahi-daemon 启动失败，huijian.local 可能不可用"
+            echo "[mDNS] LoRa 网关可改用 HA 的 IP 地址连接"
+        }
+    fi
 fi
 
 # ---------- 4. 自动安装慧尖网关集成 ----------
@@ -384,15 +391,14 @@ chmod 700 /etc/mosquitto/acl 2>/dev/null || true
 
 # ---------- 6. 启动信息 ----------
 echo "[启动] 启动 mosquitto broker（前台模式）..."
-echo "[启动] 容器内监听: 0.0.0.0:${INTERNAL_PORT} → 主机映射: ${MQTT_PORT}"
+echo "[启动] 监听: 0.0.0.0:${INTERNAL_PORT} (host_network 模式，直接暴露在主机)"
 
 echo ""
 echo "============================================"
 echo "  慧尖 LoRa 网关一体化插件已就绪"
 echo "============================================"
 echo ""
-echo "MQTT Broker: 0.0.0.0:${INTERNAL_PORT} (容器内)"
-echo "外部访问: HA_IP:${MQTT_PORT} (Docker 映射)"
+echo "MQTT Broker: 0.0.0.0:${INTERNAL_PORT} (host_network)"
 echo "Ingress Web UI: 8099 (侧边栏)"
 echo "MQTT 用户名: ${USERNAME}"
 echo ""
@@ -412,7 +418,7 @@ if [ "${AUTO_SETUP}" = "true" ]; then
         MARKER_PATH="${HA_CONFIG_DIR}/window_controller_gateway_mqtt_bootstrap.json"
         # 使用 jq 构造 JSON，正确转义密码中的特殊字符
         if jq -n \
-            --arg broker "172.30.32.1" \
+            --arg broker "127.0.0.1" \
             --argjson port "${MQTT_PORT}" \
             --arg username "${USERNAME}" \
             --arg password "${PASSWORD}" \
