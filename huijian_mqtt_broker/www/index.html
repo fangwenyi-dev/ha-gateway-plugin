@@ -233,7 +233,7 @@
     </div>
 
     <script>
-        let CURRENT_VERSION = '1.4.0';
+        let CURRENT_VERSION = '1.4.1';
         const DOMAIN = 'window_controller_gateway';
 
         // Ingress 下页面路径形如 /hassio/ingress/<token>/，直连插件端口时为 /
@@ -854,21 +854,21 @@
 
         // ========== 一键升级 ==========
         async function doUpgrade() {
-            if (!confirm('确定要一键升级插件吗？\n\n升级过程：\n1. 调用 HA Supervisor 更新插件\n2. 更新完成后需重启插件\n3. 重启后自动安装最新集成代码\n\n升级期间插件会短暂不可用。')) return;
+            if (!confirm('确定要一键升级插件吗？\n\n升级过程：\n1. 调用 HA 服务 hassio.addon_update 更新插件\n2. 更新完成后需重启插件\n3. 重启后自动安装最新集成代码\n\n升级期间插件会短暂不可用。')) return;
             showToast('正在执行一键升级...', 'warn');
             try {
-                // 使用 /addons/self/update（免 admin 权限路径，Supervisor 自动识别调用者）
-                // 原用 /addons/{slug}/update 需要 hassio_api: true + admin 角色，addon token 无权限返回 403
-                const resp = await fetch(INGRESS_BASE + 'api/supervisor/addons/self/update', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ backup: false })
+                // 方案：通过 HA Core 服务 hassio.addon_update 触发 Supervisor 更新
+                // 原因：Supervisor API POST /addons/{slug}/update 需要 admin 角色，
+                // add-on token 非 admin 返回 403。
+                // HA Core 服务调用以用户身份（admin）执行，绕过 Supervisor 的 token 权限限制。
+                const resp = await haApi('services/hassio/addon_update', 'POST', {
+                    addon: 'huijian_mqtt_broker'
                 });
                 const data = await resp.json().catch(() => ({}));
                 const msg = data.message || '';
-                if (resp.ok && data.result === 'ok') {
+                if (resp.ok) {
                     showToast('升级完成，正在刷新…', 'ok');
-                    setTimeout(() => { window.location.reload(); }, 1500);
+                    setTimeout(() => { window.location.reload(); }, 3000);
                 } else if (/already.*(latest|up.to.date)|nothing to do/i.test(msg)) {
                     showToast('已是最新版本', 'warn');
                 } else if (/job.*running|in progress|another (update|job)/i.test(msg)) {

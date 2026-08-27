@@ -98,15 +98,18 @@ jobs:
             ' CHANGELOG.md | head -50)
           fi
           if [ -z "$CHANGELOG" ]; then
-            CHANGELOG="## v${{ steps.version.outputs.version }}
-
-          - 修复 Mosquitto 启动崩溃问题
-          - Web UI 新增网关配对、子设备控制、状态显示
-          - Web UI 新增版本检查/更新功能"
+            # 从 git log 自动生成 changelog（最近 10 条提交）
+            CHANGELOG="## v${{ steps.version.outputs.version }}\n\n"
+            while IFS= read -r line; do
+              # 提取 commit hash (前7位) 和 commit message
+              HASH=$(echo "$line" | awk '{print $1}')
+              MSG=$(echo "$line" | cut -d' ' -f2-)
+              CHANGELOG="${CHANGELOG}- ${HASH}: ${MSG}\n"
+            done < <(git log --oneline -10)
           fi
           EOF=$(dd if=/dev/urandom bs=15 count=1 status=none | base64)
           echo "changelog<<$EOF" >> $GITHUB_OUTPUT
-          echo "$CHANGELOG" >> $GITHUB_OUTPUT
+          echo -e "$CHANGELOG" >> $GITHUB_OUTPUT
           echo "$EOF" >> $GITHUB_OUTPUT
 
   # ========== 2. 构建 Docker 镜像 ==========
