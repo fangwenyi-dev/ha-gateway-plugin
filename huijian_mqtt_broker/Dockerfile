@@ -1,7 +1,6 @@
 ARG BUILD_ARCH
-# 基础镜像固定在 Alpine 3.21（2026-08-26 经 GHCR tags API 验证：
-# ghcr.io/home-assistant/{amd64,aarch64}-base 均存在 3.21 标签，latest 指向可变标签）
-FROM ghcr.io/home-assistant/${BUILD_ARCH}-base:3.21
+# 基础镜像使用 HA 官方 base 镜像（不固定 Alpine 版本号，避免 tag 不存在导致安装失败）
+FROM ghcr.io/home-assistant/${BUILD_ARCH}-base:latest
 
 # 安装依赖包
 # - mosquitto/mosquitto-clients: MQTT broker + 客户端工具
@@ -20,7 +19,8 @@ RUN apk add --no-cache \
     nginx \
     python3 \
     py3-pip \
-    && pip3 install --no-cache-dir --break-system-packages -r /tmp/requirements.txt
+    && pip3 install --no-cache-dir -r /tmp/requirements.txt \
+    || pip3 install --no-cache-dir --break-system-packages -r /tmp/requirements.txt
 
 # 复制 mDNS 广播脚本（纯 Python zeroconf，不依赖 avahi/D-Bus）
 COPY mdns_publisher.py /usr/bin/mdns_publisher.py
