@@ -124,6 +124,11 @@ https://github.com/fangwenyi-dev/ha-gateway-plugin
 
 ## 更新日志
 
+### v1.4.10 (2026-08-27)
+- **修复**：一键升级 403 — 根因是 Supervisor 硬性禁止插件自我更新（`/addons/self/update` 返回 `can't update itself`），改回 `hassio.addon_update`（HA Core 以非插件身份调用，不受限制）
+- **优化**：升级失败时显示详细错误（响应 body）并提示手动更新路径（设置→加载项→慧尖→更新）
+- ⚠️ **需要重启插件**（Web UI 代码更新）
+
 ### v1.4.9 (2026-08-27)
 - **兼容性加固（HA 更新防护）**：
   - 删除遗留 API `homeassistant.helpers.discovery` 死导入（未来 HA 移除该模块会导致集成崩溃）

@@ -233,7 +233,7 @@
     </div>
 
     <script>
-        let CURRENT_VERSION = '1.4.9';
+        let CURRENT_VERSION = '1.4.10';
         const DOMAIN = 'window_controller_gateway';
 
         // Ingress 下页面路径形如 /hassio/ingress/<token>/，直连插件端口时为 /
@@ -873,21 +873,26 @@
 
         // ========== 一键升级 ==========
         async function doUpgrade() {
-            if (!confirm('确定要一键升级插件吗？\n\n升级过程：\n1. 调用 Supervisor 更新插件\n2. 更新完成后需重启插件\n3. 重启后自动安装最新集成代码\n\n升级期间插件会短暂不可用。')) return;
+            if (!confirm('确定要一键升级插件吗？\n\n升级过程：\n1. 调用 HA 服务 hassio.addon_update 更新插件\n2. 更新完成后需重启插件\n3. 重启后自动安装最新集成代码\n\n升级期间插件会短暂不可用。')) return;
             showToast('正在执行一键升级...', 'warn');
             try {
-                // 方案：直接调用 Supervisor API POST /addons/self/update（插件更新自身，免认证）。
-                // 历史问题：旧实现走 HA Core 服务 hassio.addon_update（/api/ha/services/...），
-                // add-on token 调用 HA Core REST API 服务端点会被拒绝返回 400（空响应），
-                // Web UI 显示"升级失败: HTTP 400"。
-                // Supervisor 路由是 /addons/{slug}/...，nginx /api/supervisor/ 代理会剥离前缀。
-                const resp = await fetch(INGRESS_BASE + 'api/supervisor/addons/self/update', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({})
+                // 方案：调用 HA Core 服务 hassio.addon_update。
+                // 为什么不能用 Supervisor API /addons/self/update：
+                // Supervisor 源码（supervisor/api/store.py）明确禁止插件自我更新——
+                // if addon == request.get(REQUEST_FROM): raise APIForbidden("can't update itself")
+                // 从插件发起的自我更新请求一律 403（安全设计，2025 年引入）。
+                // hassio.addon_update 由 HA Core 以非插件身份调用 Supervisor，
+                // REQUEST_FROM 不是插件本身，不受该限制。
+                const resp = await haApi('services/hassio/addon_update', 'POST', {
+                    addon: 'huijian_mqtt_broker'
                 });
-                const data = await resp.json().catch(() => ({}));
-                const msg = data.message || data.result || '';
+                // 详细错误：优先取 body 文本（400 时 aiohttp 空 body，但代理可能附加信息）
+                let msg = '';
+                const text = await resp.text().catch(() => '');
+                if (text) {
+                    try { msg = JSON.parse(text).message || ''; }
+                    catch (e) { msg = text; }
+                }
                 if (resp.ok) {
                     showToast('升级完成，正在刷新…', 'ok');
                     setTimeout(() => { window.location.reload(); }, 3000);
@@ -898,10 +903,14 @@
                 } else if (/abort/i.test(msg)) {
                     showToast('升级已中止', 'warn');
                 } else {
-                    showToast('升级失败: ' + (msg || 'HTTP ' + resp.status), 'err');
+                    // 兜底：提示手动更新路径（Supervisor 的加载项页面以 admin 用户操作，无 self-update 限制）
+                    const detail = msg ? (' ' + msg) : (' HTTP ' + resp.status);
+                    showToast('升级失败:' + detail + '。请手动到 设置→加载项→慧尖 LoRa 网关 点击「更新」', 'err');
+                    // 弹出更详细的错误（便于排查）
+                    alert('一键升级失败' + detail + '\n\n请手动更新：设置 → 加载项 → 慧尖 LoRa 网关 → 更新');
                 }
             } catch (e) {
-                showToast('升级请求失败: ' + e.message, 'err');
+                showToast('升级请求失败: ' + e.message + '。请手动到 设置→加载项→慧尖 LoRa 网关 更新', 'err');
             }
         }
 
