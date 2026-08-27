@@ -133,6 +133,7 @@ async def _do_save(hass: HomeAssistant) -> None:
 
         def _write_file():
             tmp_file = data_file + ".tmp"
+            bak_file = data_file + ".bak"
             try:
                 # 写入前备份旧文件为 .bak（用于损坏恢复）
                 if os.path.exists(data_file):
