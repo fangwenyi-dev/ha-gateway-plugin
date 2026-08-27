@@ -77,7 +77,16 @@ https://github.com/fangwenyi-dev/ha-gateway-plugin
 
 ### 4. 重启 HA
 
-重启 Home Assistant，让自动安装的网关集成生效。
+**首次安装必须重启 HA**，让自动安装的网关集成生效。后续插件更新时：
+
+| 场景 | 需要重启 HA？ | 说明 |
+|------|-------------|------|
+| 首次安装插件 | ✅ 必须 | 集成代码首次部署，HA 需要重启加载 |
+| 插件更新（集成代码有变更） | ✅ 必须 | 新版本集成代码需要重启 HA 才能生效 |
+| 插件更新（仅 addon 代码变更） | ❌ 不需要 | 重启插件即可 |
+| 插件重启 | ❌ 不需要 | MQTT broker 重启，集成保持运行 |
+
+> **简单判断**：如果 `custom_components/window_controller_gateway/` 下的 Python 文件有更新，就需要重启 HA。
 
 ### 5. 配置 LoRa 网关
 
@@ -107,6 +116,29 @@ https://github.com/fangwenyi-dev/ha-gateway-plugin
 
 > **备份数据**：卸载或重新安装插件会清除 `/data` 目录。网关集成持久化数据存储在 HA 配置目录的 `window_controller_gateway_data.json` 中，升级集成时会自动备份恢复。建议定期备份 HA 配置目录。
 
+## 更新日志
+
+### v1.3.2 (2026-08-27)
+- **P1 修复**：18 处 async 操作补全 await，修复删除设备/重命名/转移后实体残留
+- **P1 修复**：persist.py 添加 .bak 备份恢复，JSON 损坏时自动恢复
+- **P1 修复**：device_manager.setup() 异常不再吞掉，改为 raise ConfigEntryNotReady
+- **修复**：button.py _fix_entity_categories / _cleanup_unsupported_buttons 改为 async
+- ⚠️ **需要重启 HA**（集成代码有更新）
+
+### v1.3.1 (2026-08-27)
+- 修复 Mosquitto 启动崩溃问题
+- Web UI 新增网关配对、子设备控制、状态显示
+- Web UI 新增版本检查/更新功能
+- MQTT broker 自动配置修复
+- ⚠️ **需要重启 HA**（集成代码有更新）
+
+### v1.3.0 (2026-08-26)
+- 一体化插件架构：内置 Mosquitto Broker + 网关集成
+- mDNS 广播 `huijian.local`
+- HA MQTT 集成自动配置
+- Web UI 全面升级
+- ⚠️ **需要重启 HA**（首次安装或集成代码有更新）
+
 ## 常见问题
 
 ### Q: 启动后日志显示"Address in use"？
@@ -120,3 +152,11 @@ https://github.com/fangwenyi-dev/ha-gateway-plugin
 ### Q: 可以和 HA 官方 Mosquitto broker 附加组件共存吗？
 
 可以共存。本插件使用主机端口 2022（容器内 2022），不会与 HA 官方 Mosquitto broker 的 1883 冲突。
+
+### Q: 如何升级插件？
+
+在 HA 的 **设置 → 加载项 → 慧尖 LoRa 网关** 中点击「更新」。升级后需要重启插件和 HA。
+
+### Q: 升级后数据会丢失吗？
+
+不会。网关持久化数据存储在 HA 配置目录的 `window_controller_gateway_data.json` 中，升级集成时会自动备份恢复。v1.3.2 起增加了 .bak 备份机制，JSON 损坏时可自动恢复。

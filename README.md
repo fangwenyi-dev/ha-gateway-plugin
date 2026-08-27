@@ -4,9 +4,9 @@
 
 ## 可用插件
 
-| 插件 | 说明 |
-|------|------|
-| [慧尖 LoRa 网关](./huijian_mqtt_broker/) | 内置 Mosquitto Broker + mDNS 广播 + 网关集成，安装即用 |
+| 插件 | 版本 | 说明 |
+|------|------|------|
+| [慧尖 LoRa 网关](./huijian_mqtt_broker/) | v1.3.2 | 内置 Mosquitto Broker + mDNS 广播 + 网关集成，安装即用 |
 
 ## 安装方法
 
@@ -19,8 +19,20 @@
    - ✅ 密码文件自动生成（使用预设用户名密码）
    - ✅ HA MQTT 集成自动配置（连接到 172.30.32.1:2022）
    - ✅ 慧尖网关集成自动安装到 custom_components
-5. **重启 HA**（让自动安装的集成生效）
+5. **重启 HA**（首次安装必须，让自动安装的集成生效）
 6. 重启后在 **设置 → 设备与服务 → 添加集成 → 搜索「慧尖」** 添加网关
+
+### 什么时候需要重启 HA？
+
+| 场景 | 需要重启 HA？ | 说明 |
+|------|-------------|------|
+| 首次安装插件 | ✅ 必须 | 集成代码首次部署到 custom_components，HA 需要重启加载 |
+| 插件版本更新（集成代码有变更） | ✅ 必须 | 新版本集成代码需要重启 HA 才能生效 |
+| 插件版本更新（仅 addon 代码变更） | ❌ 不需要 | 重启插件即可，集成代码未变 |
+| 插件重启 | ❌ 不需要 | MQTT broker 重启，集成保持运行 |
+| HA 重启后 | ❌ 不需要 | 集成代码已在 custom_components 中，HA 启动时自动加载 |
+
+> **简单判断**：如果 `custom_components/window_controller_gateway/` 下的 Python 文件有更新，就需要重启 HA。如果是 `run.sh`、`mosquitto.conf` 等 addon 文件更新，只需重启插件。
 
 ## 一体化架构
 
@@ -71,6 +83,29 @@ LoRa 网关 (MQTT 客户端)
 | 网关集成 | 需通过 HACS 安装 | ✅ 自动安装 |
 | 左侧导航栏 | 无（只有加载项页面） | ✅ 有设备实体入口 |
 | 可视化配置 | 仅 broker 配置 | ✅ broker + 集成 config_flow |
+
+## 更新日志
+
+### v1.3.2 (2026-08-27)
+- **P1 修复**：18 处 async 操作补全 await，修复删除设备/重命名/转移后实体残留
+- **P1 修复**：persist.py 添加 .bak 备份恢复，JSON 损坏时自动恢复
+- **P1 修复**：device_manager.setup() 异常不再吞掉，改为 raise ConfigEntryNotReady
+- **修复**：button.py _fix_entity_categories / _cleanup_unsupported_buttons 改为 async
+- ⚠️ **需要重启 HA**（集成代码有更新）
+
+### v1.3.1 (2026-08-27)
+- 修复 Mosquitto 启动崩溃问题
+- Web UI 新增网关配对、子设备控制、状态显示
+- Web UI 新增版本检查/更新功能
+- MQTT broker 自动配置修复
+- ⚠️ **需要重启 HA**（集成代码有更新）
+
+### v1.3.0 (2026-08-26)
+- 一体化插件架构：内置 Mosquitto Broker + 网关集成
+- mDNS 广播 `huijian.local`
+- HA MQTT 集成自动配置
+- Web UI 全面升级
+- ⚠️ **需要重启 HA**（首次安装或集成代码有更新）
 
 ## ⚠️ 安全提醒
 
