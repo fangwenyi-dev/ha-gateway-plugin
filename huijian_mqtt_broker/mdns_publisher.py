@@ -79,9 +79,10 @@ def main():
         sys.exit(1)
 
     # 注册 _mqtt._tcp 服务
+    # zeroconf 0.132.0 要求 type_ 和 name 都以 .local. 结尾
     service_info = ServiceInfo(
-        type_="_mqtt._tcp.",
-        name="huijian-mqtt._mqtt._tcp.",
+        type_="_mqtt._tcp.local.",
+        name="huijian-mqtt._mqtt._tcp.local.",
         addresses=[socket.inet_aton(local_ip)],
         port=mqtt_port,
         properties={},
@@ -94,7 +95,7 @@ def main():
 
     try:
         zeroconf.register_service(service_info)
-        print(f"[mDNS] _mqtt._tcp 服务已注册: huijian-mqtt._mqtt._tcp. @ {local_ip}:{mqtt_port}")
+        print(f"[mDNS] _mqtt._tcp 服务已注册: huijian-mqtt._mqtt._tcp.local. @ {local_ip}:{mqtt_port}")
         print(f"[mDNS] huijian.local → {local_ip}")
         print(f"[mDNS] mDNS 广播中，LoRa 网关可通过 huijian.local:{mqtt_port} 连接")
 
