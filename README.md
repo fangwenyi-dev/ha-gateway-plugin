@@ -86,6 +86,10 @@ LoRa 网关 (MQTT 客户端)
 
 ## 更新日志
 
+### v1.3.3 (2026-08-27)
+- **修复**：mqtt_bootstrap `ConfigEntry.hass` AttributeError（HA 新版本兼容性）
+- ⚠️ **需要重启 HA**（集成代码有更新）
+
 ### v1.3.2 (2026-08-27)
 - **P1 修复**：18 处 async 操作补全 await，修复删除设备/重命名/转移后实体残留
 - **P1 修复**：persist.py 添加 .bak 备份恢复，JSON 损坏时自动恢复
