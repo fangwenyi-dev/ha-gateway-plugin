@@ -120,11 +120,36 @@ async def _quietly_abort_flow(hass: HomeAssistant, flow_id: str) -> None:
         _LOGGER.debug("中止 MQTT 配置流程 %s 失败（可能已结束）", flow_id)
 
 
+async def _update_mqtt_entry(
+    entry: Any, broker: str, port: int,
+    username: Optional[str], password: Optional[str],
+) -> None:
+    """更新已有 MQTT 配置条目的 broker 连接信息。
+
+    一体化插件场景：用户安装插件后，可能已有其他 broker 的 MQTT 条目
+    （如官方 Mosquitto 插件、EMQX 等）。本函数将该条目更新为指向
+    插件内置 broker，确保 HA 能接收到 LoRa 网关的数据。
+    """
+    new_data = dict(entry.data)
+    new_data["broker"] = broker
+    new_data["port"] = port
+    if username is not None:
+        new_data["username"] = username
+    if password is not None:
+        new_data["password"] = password
+    entry.hass.config_entries.async_update_entry(entry, data=new_data)
+    _LOGGER.info(
+        "已将 MQTT 配置条目 %s 更新为内置 Broker %s:%s",
+        entry.entry_id, broker, port,
+    )
+
+
 async def ensure_mqtt_connection(hass: HomeAssistant) -> None:
-    """确保 HA 的 MQTT 集成已连接到内置 Broker（需要时自动创建配置条目）。
+    """确保 HA 的 MQTT 集成已连接到内置 Broker（需要时自动创建/更新配置条目）。
 
     - 标记不存在（HACS 独立安装等场景）→ 立即返回，不做任何事。
-    - 已有 MQTT 条目 → 尊重现状（必要时告警地址不一致），删除标记。
+    - 已有 MQTT 条目但 broker 地址不一致 → 自动更新为内置 Broker 地址。
+    - 已有 MQTT 条目且地址一致 → 保持现状，删除标记。
     - 无条目且有标记 → 程序化运行 mqtt config flow 创建条目并等待连接。
 
     抛出 :class:`ConfigEntryNotReady` 表示暂时无法完成（典型为内置 Broker 尚未
@@ -148,20 +173,26 @@ async def ensure_mqtt_connection(hass: HomeAssistant) -> None:
     existing_entries = hass.config_entries.async_entries("mqtt")
 
     if existing_entries:
-        # 用户已有 MQTT 配置：绝不劫持/修改，仅在不一致时告警
         first = existing_entries[0]
         cur_broker = first.data.get("broker")
         cur_port = first.data.get("port")
+
         if cur_broker != broker or str(cur_port) != str(port):
+            # broker 地址不一致：自动更新为内置 Broker
             _LOGGER.warning(
                 "MQTT 集成已连接到 %s:%s，但本插件内置 Broker 为 %s:%s；"
-                "LoRa 网关的上报将无法到达 Home Assistant。"
-                "如需使用内置 Broker，请在 MQTT 集成中修改连接地址。",
-                cur_broker,
-                cur_port,
-                broker,
-                port,
+                "正在自动更新 MQTT 配置条目以使用内置 Broker。",
+                cur_broker, cur_port, broker, port,
             )
+            await _update_mqtt_entry(first, broker, port, username, password)
+            # 更新后触发重载，让 MQTT 集成重新连接
+            await hass.config_entries.async_reload(first.entry_id)
+        else:
+            _LOGGER.debug(
+                "MQTT 配置条目已指向内置 Broker %s:%s，无需更新",
+                broker, port,
+            )
+
         await hass.async_add_executor_job(_remove_marker, marker_path)
         return
 

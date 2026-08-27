@@ -33,13 +33,49 @@ echo ""
 # ---------- 1. 生成密码文件 ----------
 PASSWD_FILE="/etc/mosquitto/passwd"
 
-if ! mosquitto_passwd -b -c "${PASSWD_FILE}" "${USERNAME}" "${PASSWORD}" 2>/dev/null; then
-    echo "[错误] 创建用户 ${USERNAME} 密码失败"
+# 先删除旧密码文件（避免 -c 失败时残留损坏文件）
+rm -f "${PASSWD_FILE}" 2>/dev/null || true
+
+# 用 -c 创建新文件，-b 批量模式（不提示输入密码）
+if mosquitto_passwd -c -b "${PASSWD_FILE}" "${USERNAME}" "${PASSWORD}"; then
+    echo "[OK] 密码文件已生成"
+else
+    # 兜底：手动用 printf 写入密码哈希（适用于 mosquitto_passwd 不可用的场景）
+    # Mosquitto 要求格式: user:$6$salt$hash  或  user:{bcrypt}hash
+    # 这里用 $6$ 格式（SHA-256 with salt）
+    echo "[警告] mosquitto_passwd 失败，尝试手动创建密码文件"
+    SALT=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n' | head -c 16)
+    PASSWD_HASH=$(printf "%s" "${PASSWORD}" | openssl dgst -sha256 -salt -binary 2>/dev/null | od -An -tx1 | tr -d ' \n')
+    if [ -n "${PASSWD_HASH}" ]; then
+        printf "${USERNAME}:\$6\$${SALT}\$${PASSWD_HASH}\n" > "${PASSWD_FILE}" 2>/dev/null || {
+            echo "[错误] 无法创建密码文件"
+            exit 1
+        }
+    else
+        # 最终兜底：直接用 openssl 生成完整的 Mosquitto 密码行
+        printf "${PASSWORD}\n${PASSWORD}\n" | openssl passwd -6 -salt "${SALT}" -stdin 2>/dev/null | {
+            read -r HASH
+            printf "${USERNAME}:${HASH}\n" > "${PASSWD_FILE}" 2>/dev/null || {
+                echo "[错误] 无法创建密码文件"
+                exit 1
+            }
+        }
+    fi
+fi
+
+# 验证密码文件非空
+if [ ! -s "${PASSWD_FILE}" ]; then
+    echo "[错误] 密码文件为空"
     exit 1
 fi
-chmod 700 "${PASSWD_FILE}"
+
+chmod 600 "${PASSWD_FILE}"
 chown mosquitto:mosquitto "${PASSWD_FILE}" 2>/dev/null || true
-echo "[OK] 密码文件已生成"
+echo "[OK] 密码文件权限已设置 (600, mosquitto:mosquitto)"
+
+# 显示密码文件内容（诊断用，生产环境可移除）
+echo "[诊断] 密码文件内容:"
+head -1 "${PASSWD_FILE}" 2>/dev/null | sed 's/\(.\{20\}\).*/\1.../' || true
 
 # ---------- 1b. 动态生成 ACL 文件 ----------
 ACL_FILE="/etc/mosquitto/acl"
@@ -61,7 +97,7 @@ topic readwrite test/#
 # \$SYS 主题
 topic read \$SYS/#
 EOF
-chmod 700 "${ACL_FILE}"
+chmod 600 "${ACL_FILE}"
 chown mosquitto:mosquitto "${ACL_FILE}" 2>/dev/null || true
 echo "[OK] ACL 文件已生成 (用户: ${USERNAME})"
 
@@ -378,6 +414,50 @@ fi
     done
 ) &
 
-# ---------- 8. exec 到前台 mosquitto ----------
+# ---------- 8. 后台启动 mosquitto，验证 MQTT 协议可用后再继续 ----------
 echo "[运行] Broker 以前台模式运行..."
-exec mosquitto -c /etc/mosquitto/mosquitto.conf
+
+# 先后台启动 mosquitto
+mosquitto -c /etc/mosquitto/mosquitto.conf &
+MOSQUITTO_PID=$!
+echo "[运行] Mosquitto PID: ${MOSQUITTO_PID}"
+
+# 等待 Mosquitto 进程启动（最多5秒）
+MOSQUITTO_READY=false
+for i in 1 2 3 4 5; do
+    if ! kill -0 "${MOSQUITTO_PID}" 2>/dev/null; then
+        echo "[错误] Mosquitto 进程已退出（PID=${MOSQUITTO_PID}）"
+        echo "[诊断] 检查密码文件和 ACL 文件格式..."
+        cat /etc/mosquitto/passwd 2>/dev/null | head -1 || echo "  密码文件不存在"
+        cat /etc/mosquitto/acl 2>/dev/null || echo "  ACL 文件不存在"
+        exit 1
+    fi
+    # 尝试 TCP 连接到 localhost:2022
+    if timeout 1 sh -c "echo >/dev/tcp/127.0.0.1/2022" 2>/dev/null; then
+        MOSQUITTO_READY=true
+        break
+    fi
+    sleep 1
+done
+
+if [ "${MOSQUITTO_READY}" = "true" ]; then
+    echo "[OK] Mosquitto TCP 端口 2022 已就绪"
+else
+    echo "[警告] Mosquitto TCP 端口5秒内未就绪，继续启动..."
+fi
+
+# 等待 Mosquitto MQTT 协议响应（用 mosquitto_pub 测试）
+if command -v mosquitto_pub >/dev/null 2>&1; then
+    if mosquitto_pub -h 127.0.0.1 -p 2022 -u "${USERNAME}" -P "${PASSWORD}" -t "test/ping" -m "ok" 2>/dev/null; then
+        echo "[OK] Mosquitto MQTT 协议验证通过（mosquitto_pub 成功）"
+    else
+        echo "[警告] mosquitto_pub 测试失败（broker 可能仍在初始化或密码配置有误）"
+        echo "[诊断] 检查 /etc/mosquitto/passwd 格式:"
+        head -2 /etc/mosquitto/passwd 2>/dev/null | sed 's/^/  /' || echo "  文件不存在"
+        echo "[诊断] mosquitto.conf 内容:"
+        cat /etc/mosquitto/mosquitto.conf 2>/dev/null | sed 's/^/  /'
+    fi
+fi
+
+# 将后台 mosquitto 转为前台（exec 替换当前 shell，容器不会退出）
+wait "${MOSQUITTO_PID}" 2>/dev/null || exec mosquitto -c /etc/mosquitto/mosquitto.conf
