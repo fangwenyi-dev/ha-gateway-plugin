@@ -104,6 +104,10 @@ class WindowControllerRangeNumber(WindowControllerBaseEntity, NumberEntity):
 
     def _read_setpoint(self):
         """读取设备参数设定值（上次用户设定的位置）"""
+        # 守卫：实体被移除后 self.hass 可能为 None（HA 清空引用），
+        # 残留轮询/回调会触发 'NoneType' object has no attribute 'data'（2026-08-28 实测）
+        if self.hass is None:
+            return None
         setpoints = self.hass.data.get(DOMAIN, {}).get(DEVICE_SETPOINTS, {})
         return setpoints.get(self.device_sn, {}).get(self._param_key)
 
@@ -123,6 +127,9 @@ class WindowControllerRangeNumber(WindowControllerBaseEntity, NumberEntity):
 
     async def async_update(self) -> None:
         """定期更新状态（HA 轮询）"""
+        # 守卫：实体被移除后 hass 为 None，残留轮询直接返回（2026-08-28 实测崩溃点）
+        if self.hass is None:
+            return
         if self._pending_value is not None:
             # 防抖等待中：保持用户正在设定的值，避免轮询把滑块拉回旧值
             self._attr_native_value = float(self._pending_value)

@@ -96,6 +96,9 @@ class WindowControllerBatterySensor(WindowControllerBaseEntity, SensorEntity):
     
     async def async_update(self) -> None:
         """更新实体状态"""
+        # 守卫：实体被移除后 hass 为 None，残留轮询直接返回（2026-08-28 实测崩溃点）
+        if self.hass is None:
+            return
         self._update_state()
         self.async_write_ha_state()
 
@@ -169,6 +172,9 @@ class WindowControllerStatusSensor(WindowControllerBaseEntity, SensorEntity):
 
     async def async_update(self) -> None:
         """更新实体状态"""
+        # 守卫：实体被移除后 hass 为 None，残留轮询直接返回（2026-08-28 实测崩溃点）
+        if self.hass is None:
+            return
         self._update_state()
         self.async_write_ha_state()
 

@@ -13,6 +13,18 @@
 
 
 
+
+## [1.6.1] - 2026-08-28
+
+### 修复
+- **删除设备后实体残留崩溃（'NoneType' object has no attribute 'data'）**：
+  实体从注册表删除后 HA 仍周期性调用 async_update，此时 self.hass 已为 None。
+  number/sensor/cover 的 async_update 与 base_entity 的
+  get_current_gateway_sn/_get_mqtt_handler 均加 hass 守卫
+- **移除按钮实体未删除**：删除按钮改用 unique_id 精确定位删除
+  （_aget_eid），不再依赖动态添加实体的 entity_id 赋值时机，带兜底
+- **日志级别优化**：自动发现跳过被删设备、手动配对重新添加被删设备日志降为 debug
+- 版本号统一为 1.6.1（插件 + 集成）
 ## [1.6.0] - 2026-08-28
 
 ### 修复

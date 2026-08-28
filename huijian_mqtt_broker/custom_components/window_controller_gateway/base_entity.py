@@ -49,6 +49,9 @@ class WindowControllerBaseEntity:
         Returns:
             str: 设备当前关联的网关序列号
         """
+        # 守卫：实体被移除后 hass 可能为 None（2026-08-28 实测崩溃点）
+        if self.hass is None:
+            return self.gateway_sn
         return get_device_gateway_mapping(self.hass, self.device_sn) or self.gateway_sn
     
     def _get_mqtt_handler(self):
@@ -64,6 +67,9 @@ class WindowControllerBaseEntity:
         if current_gateway_sn.lower() != self.gateway_sn.lower():
             if current_gateway_sn in self._mqtt_handler_cache:
                 return self._mqtt_handler_cache[current_gateway_sn]
+            # 守卫：hass 可能为 None 或 DOMAIN 数据已清理（实体已移除）
+            if self.hass is None or DOMAIN not in self.hass.data:
+                return self.mqtt_handler
             for entry_id, data in self.hass.data[DOMAIN].items():
                 if isinstance(data, dict) and data.get("gateway_sn", "").lower() == current_gateway_sn.lower():
                     if "mqtt_handler" in data:

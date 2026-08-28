@@ -1348,7 +1348,7 @@ class WindowControllerMQTTHandler:
                 # 无法通过配对重新添加（2026-08-27 实测 bug）。
                 if self.device_manager.is_device_manually_removed(device_sn):
                     if bind_op == "bind":
-                        _LOGGER.info(
+                        _LOGGER.debug(
                             "设备 %s 在手动删除列表中，本次为手动配对确认，"
                             "允许重新添加并从删除列表移除",
                             device_sn,

@@ -467,8 +467,14 @@ async def async_setup_entry(
                     from .utils import async_get_entity_id as _aget_eid
                     from .utils import call_registry_method as _call_reg
                     entity_registry = async_get(hass)
-                    # 删除删除按钮
-                    if remove_button.entity_id:
+                    # 删除删除按钮：用 unique_id 精确定位并删除，
+                    # 不依赖 remove_button.entity_id（实体动态添加时可能未及时赋值）
+                    remove_unique_id = f"{gateway_sn}_remove_{device_sn}"
+                    remove_entity_id = await _aget_eid(hass, "button", remove_unique_id)
+                    if remove_entity_id:
+                        await _call_reg(entity_registry.async_remove, remove_entity_id)
+                        _LOGGER.info("已从实体注册表中删除设备 %s 的删除按钮", device_name)
+                    elif remove_button.entity_id:
                         await _call_reg(entity_registry.async_remove, remove_button.entity_id)
                         _LOGGER.info("已从实体注册表中删除设备 %s 的删除按钮", device_name)
                     

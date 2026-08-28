@@ -401,7 +401,8 @@ class WindowControllerDeviceManager:
         # 自动发现时检查手动删除列表（仅当不是手动配对时）
         # 手动删除的设备不应通过自动发现重新添加，但可以通过手动配对重新添加
         if not is_manual_pairing and device_sn in self._manually_removed_devices:
-            _LOGGER.info("设备 %s 在手动删除列表中，自动发现跳过添加", device_sn)
+            # debug 级别：自动发现跳过被删设备是正常预期行为，避免日志刷屏
+            _LOGGER.debug("设备 %s 在手动删除列表中，自动发现跳过添加", device_sn)
             return None
         
         # 检查设备是否已经添加到其他网关中（迁移时跳过此检查）
