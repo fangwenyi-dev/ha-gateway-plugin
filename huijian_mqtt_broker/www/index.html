@@ -291,7 +291,7 @@
     </div>
 
     <script>
-        let CURRENT_VERSION = '1.6.1';
+        let CURRENT_VERSION = '1.6.2';
         const DOMAIN = 'window_controller_gateway';
 
         // Ingress 下页面路径形如 /hassio/ingress/<token>/，直连插件端口时为 /
@@ -891,7 +891,9 @@
                         showToast('未找到' + (command === 'set_speed' ? '速度' : '力度') + '实体', 'warn');
                     }
                 } else if (command === 'remove') {
-                    const btnEntity = findEntityByUniqueId(dev, 'button', 'remove');
+                    // 删除按钮实体挂在网关设备下（不在子设备实体列表），
+                    // 用 findRemoveButtonEntity 在整个设备列表中按 unique_id 锚点查找
+                    const btnEntity = findRemoveButtonEntity(dev, devices);
                     if (btnEntity) {
                         const r = await haApi('/services/button/press', 'POST', { entity_id: btnEntity.entity_id });
                         if (!r.ok) throw new Error('HA API ' + r.status);
@@ -1063,6 +1065,35 @@
         function findEntityByDomain(dev, domain) {
             if (!dev || !dev.entities || !dev.entities.length) return null;
             return dev.entities.find(e => e.domain === domain) || null;
+        }
+
+        // 删除按钮实体特殊归属：GatewayDeviceRemoveButton.device_info 用网关 SN
+        // （gateway.py identifiers={(DOMAIN, gateway_sn)}），实体挂在网关设备下，
+        // 不在子设备 dev.entities 里。v1.5.5 起 remove 分支只在子设备实体列表中
+        // 按 unique_id 查找，导致恒报"未找到删除按钮实体"（v1.5.9 双锚点仍未
+        // 跳出子设备实体列表，方向不对）。
+        // 修复：先按常规路径在子设备实体列表中找（兼容未来实体归属调整），
+        // 找不到时用目标子设备 SN 构造 _remove_{sn} 锚点（删除按钮 unique_id
+        // 固定为 {gw}_remove_{sn}，gateway.py:228），在 API 返回的整个设备列表
+        // （网关 parent + 子设备）中搜索——一定能命中网关设备下的删除按钮。
+        function findRemoveButtonEntity(dev, devices) {
+            const direct = findEntityByUniqueId(dev, 'button', 'remove');
+            if (direct) return direct;
+            let deviceSn = null;
+            if (dev && dev.identifiers && dev.identifiers.length > 0) {
+                const ident = dev.identifiers[0];
+                if (Array.isArray(ident) && ident.length > 1) deviceSn = ident[1];
+            }
+            if (!deviceSn || !devices || !devices.length) return null;
+            const anchor = '_remove_' + deviceSn;
+            for (const d of devices) {
+                if (!d || !d.entities) continue;
+                const hit = d.entities.find(e =>
+                    e.domain === 'button' && e.unique_id && e.unique_id.endsWith(anchor)
+                );
+                if (hit) return hit;
+            }
+            return null;
         }
 
         // 按 unique_id 锚点找到实体，再返回其在 states 中对应的 state 对象
