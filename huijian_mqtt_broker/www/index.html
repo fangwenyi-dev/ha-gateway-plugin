@@ -283,7 +283,7 @@
     </div>
 
     <script>
-        let CURRENT_VERSION = '1.5.6';
+        let CURRENT_VERSION = '1.5.7';
         const DOMAIN = 'window_controller_gateway';
 
         // Ingress 下页面路径形如 /hassio/ingress/<token>/，直连插件端口时为 /
@@ -612,7 +612,8 @@
             } else if (coverEntity && coverEntity.attributes.voltage) {
                 batteryText = coverEntity.attributes.voltage + 'V';
             }
-            // 速度/力度滑块取值与范围（缺失实体时禁用）
+            // 速度/力度滑块取值与范围（始终可用，与 HA 集成 number 实体一致——
+            // 无初始上报数据时也可拖动设置，值为 0 起；有数据时回显当前值）
             const speedMin = speedEntity && speedEntity.attributes.min !== undefined ? speedEntity.attributes.min : 0;
             const speedMax = speedEntity && speedEntity.attributes.max !== undefined ? speedEntity.attributes.max : 100;
             const speedValid = speedEntity && speedEntity.state && speedEntity.state !== 'unknown' && speedEntity.state !== 'unavailable';
@@ -627,7 +628,7 @@
                 '<button class="btn btn-danger btn-sm" onclick="controlDevice(\'' + jsQuote(safeDevId) + '\',\'close\',\'' + jsQuote(safeEntryId) + '\')">关</button>' +
                 '<button class="btn btn-warn btn-sm" onclick="controlDevice(\'' + jsQuote(safeDevId) + '\',\'stop\',\'' + jsQuote(safeEntryId) + '\')">停</button>' +
                 '</div>';
-            // 第 2 行：位置 / 速度 / 力度 三个滑块一组
+            // 第 2 行：位置 / 速度 / 力度 三个滑块一组（滑块始终可拖动，无初始数据也可设置）
             controls += '<div class="slider-group">' +
                 '<div class="slider-row"><span class="slider-label">位置</span>' +
                 '<input type="range" class="position-slider" min="0" max="100" value="' + (currentPos === '--' ? 0 : currentPos) + '"' +
@@ -636,13 +637,11 @@
                 '<span class="slider-value position-value">' + currentPos + (currentPos === '--' ? '' : '%') + '</span></div>' +
                 '<div class="slider-row"><span class="slider-label">速度</span>' +
                 '<input type="range" class="speed-slider" min="' + speedMin + '" max="' + speedMax + '" value="' + (speedValid ? speedEntity.state : speedMin) + '"' +
-                (speedEntity ? '' : ' disabled') +
                 ' oninput="this.nextElementSibling.textContent=this.value' + (speedUnit ? '+\'' + speedUnit + '\'' : '') + '"' +
                 ' onchange="controlDevice(\'' + jsQuote(safeDevId) + '\',\'set_speed\',\'' + jsQuote(safeEntryId) + '\', this.value)">' +
                 '<span class="slider-value speed-value">' + (speedValid ? speedEntity.state + speedUnit : '--') + '</span></div>' +
                 '<div class="slider-row"><span class="slider-label">力度</span>' +
                 '<input type="range" class="strength-slider" min="' + strengthMin + '" max="' + strengthMax + '" value="' + (strengthValid ? strengthEntity.state : strengthMin) + '"' +
-                (strengthEntity ? '' : ' disabled') +
                 ' oninput="this.nextElementSibling.textContent=this.value' + (strengthUnit ? '+\'' + strengthUnit + '\'' : '') + '"' +
                 ' onchange="controlDevice(\'' + jsQuote(safeDevId) + '\',\'set_strength\',\'' + jsQuote(safeEntryId) + '\', this.value)">' +
                 '<span class="slider-value strength-value">' + (strengthValid ? strengthEntity.state + strengthUnit : '--') + '</span></div>' +
@@ -690,29 +689,26 @@
                 // 速度/力度: number.*speed* / number.*strength*
                 const speedEntity = findEntityState(dev, 'number', 'speed', states);
                 const strengthEntity = findEntityState(dev, 'number', 'strength', states);
-                // 更新速度/力度滑块
+                // 更新速度/力度滑块：始终可用（与 HA 集成 number 实体一致），
+                // 有上报数据时回显当前值，无数据时保持默认值 0 且可拖动。
                 const speedSlider = document.querySelector('#dev-' + dev.id + ' .speed-slider');
                 if (speedSlider) {
+                    speedSlider.disabled = false;
                     if (speedEntity && speedEntity.state !== 'unknown' && speedEntity.state !== 'unavailable') {
                         const unit = speedEntity.attributes.unit_of_measurement || '';
                         speedSlider.value = speedEntity.state;
-                        speedSlider.disabled = false;
                         const valEl = document.querySelector('#dev-' + dev.id + ' .speed-value');
                         if (valEl) valEl.textContent = speedEntity.state + unit;
-                    } else {
-                        speedSlider.disabled = true;
                     }
                 }
                 const strengthSlider = document.querySelector('#dev-' + dev.id + ' .strength-slider');
                 if (strengthSlider) {
+                    strengthSlider.disabled = false;
                     if (strengthEntity && strengthEntity.state !== 'unknown' && strengthEntity.state !== 'unavailable') {
                         const unit = strengthEntity.attributes.unit_of_measurement || '';
                         strengthSlider.value = strengthEntity.state;
-                        strengthSlider.disabled = false;
                         const valEl = document.querySelector('#dev-' + dev.id + ' .strength-value');
                         if (valEl) valEl.textContent = strengthEntity.state + unit;
-                    } else {
-                        strengthSlider.disabled = true;
                     }
                 }
                 // 状态文本
