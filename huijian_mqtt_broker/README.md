@@ -1,6 +1,6 @@
 # 慧尖 LoRa 网关一体化插件
 
-[![版本](https://img.shields.io/badge/version-1.5.3-blue)]()
+[![版本](https://img.shields.io/badge/version-1.5.4-blue)]()
 [![HA Add-on](https://img.shields.io/badge/HA-Add--on-green)]()
 
 慧尖开窗器 LoRa 网关的 Home Assistant 一体化插件。**内置 Mosquitto Broker + mDNS 自动发现 + 网关集成，安装一个插件即可获得全部能力**。
@@ -145,6 +145,15 @@ https://github.com/fangwenyi-dev/ha-gateway-plugin
 不会。持久化数据存储在 HA 配置目录，升级时自动备份恢复。v1.3.2 起增加了 `.bak` 备份机制，JSON 损坏时可自动恢复。
 
 ## 更新日志
+
+### v1.5.4 (2026-08-28)
+- **修复（手动配对重新添加被删设备）**：手动删除过的子设备之前因"设备复活守卫"
+  无条件拦截，即使手动配对（003 绑定确认）也无法重新添加。
+  现修复：手动配对确认（bind_op=bind）允许重新添加并从手动删除列表移除；
+  自动发现（002 上报）仍拦截，保持防复活语义
+- **新增诊断日志**：003 绑定确认打印 id/errcode/sn/bind_op/手动删除列表判定依据
+- **新增回归测试**：5 个 003 绑定确认用例（手动配对重添加/晚到确认阻止/普通添加/解绑/超时清理）
+- ⚠️ **需要重启 HA**（集成代码有更新）
 
 ### v1.5.3 (2026-08-27)
 - **修复（一键升级 400/403 根因）**：Supervisor 安全设计禁止插件通过 API 自我更新

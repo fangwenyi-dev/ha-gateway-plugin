@@ -1,5 +1,4 @@
 """utils.py 的 MQTT 就绪判断辅助函数测试。"""
-import types
 
 from custom_components.window_controller_gateway.utils import is_mqtt_loaded, is_mqtt_connected
 

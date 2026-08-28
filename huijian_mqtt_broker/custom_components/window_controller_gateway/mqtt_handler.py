@@ -1314,6 +1314,13 @@ class WindowControllerMQTTHandler:
         # 记录为 (方向, 设备SN) 元组）
         bind_record = self._bind_ops.pop(payload.get("id"), None)
         bind_op = bind_record[0] if bind_record else None
+        # 诊断日志：明确记录判定依据，便于定位"绑定成功但未添加"类问题
+        _LOGGER.debug(
+            "收到 003 回复: id=%s errcode=%s sn=%s data.bind=%s bind_op=%s "
+            "手动删除列表=%s",
+            payload.get("id"), errcode, device_sn, bind_value, bind_op,
+            self.device_manager.is_device_manually_removed(device_sn) if device_sn else None,
+        )
 
         if errcode == 0 and device_sn:
             # 判断是绑定还是解绑（优先级从高到低）：
@@ -1333,15 +1340,27 @@ class WindowControllerMQTTHandler:
                 # 这里不需要重复处理，仅记录日志
                 _LOGGER.info("设备解绑成功: %s", device_sn)
             else:
-                # P0 设备复活守卫：绑定确认不得复活已手动删除的设备。
-                # 删除后晚到的绑定回复（或网关主动发起的重新绑定）一律拒绝，
-                # 静默 debug 记录，防止绕过手动删除列表复活设备。
+                # P0 设备复活守卫：晚到的绑定确认（自动/网关主动发起的重新绑定）
+                # 不得复活已手动删除的设备。
+                # 但【手动配对确认】（bind_op == "bind"，来自 start_pairing 命令）
+                # 是用户主动操作，应允许重新添加被删设备——与 add_device 的
+                # is_manual_pairing=True 语义一致。否则手动删除过的设备将永远
+                # 无法通过配对重新添加（2026-08-27 实测 bug）。
                 if self.device_manager.is_device_manually_removed(device_sn):
-                    _LOGGER.debug(
-                        "设备 %s 在手动删除列表中，拒绝晚到的绑定确认（防止设备复活）",
-                        device_sn,
-                    )
-                    return
+                    if bind_op == "bind":
+                        _LOGGER.info(
+                            "设备 %s 在手动删除列表中，本次为手动配对确认，"
+                            "允许重新添加并从删除列表移除",
+                            device_sn,
+                        )
+                        self.device_manager._manually_removed_devices.discard(device_sn)
+                        self.device_manager._save_manually_removed_devices()
+                    else:
+                        _LOGGER.debug(
+                            "设备 %s 在手动删除列表中，拒绝晚到的绑定确认（防止设备复活）",
+                            device_sn,
+                        )
+                        return
                 # 绑定成功，添加设备
                 device_number = self.device_manager.allocate_device_number()
                 device_name = get_device_display_name(self.gateway_sn, device_sn, device_number)
