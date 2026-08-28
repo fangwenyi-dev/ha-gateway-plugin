@@ -44,6 +44,36 @@ def get_entity_registry(hass: HomeAssistant):
     return async_get_entity_registry(hass)
 
 
+async def async_get_entity_id(
+    hass: HomeAssistant, platform: str, unique_id: str
+) -> Optional[str]:
+    """按 unique_id 查找实体的 entity_id（兼容新旧 HA）。
+
+    背景（2026-08-28 实测）：HA 新版将 ``EntityRegistry.async_get_entity_id()``
+    改为 async 方法（返回 coroutine，await 后为 RegistryEntry），旧版为同步方法
+    （直接返回 str）。本函数统一处理：
+    - 调用同步或异步版本，兼容两种返回（str 或 RegistryEntry）
+    - 统一返回 entity_id 字符串；不存在返回 None
+    """
+    entity_registry = get_entity_registry(hass)
+    method = entity_registry.async_get_entity_id
+
+    try:
+        result = method(platform, DOMAIN, unique_id)
+        if hasattr(result, "__await__"):  # coroutine：新版异步 API
+            result = await result
+    except TypeError:
+        # 签名不兼容（极老版本），放弃查找
+        return None
+
+    if result is None:
+        return None
+    # 新版返回 RegistryEntry，旧版返回 str
+    if hasattr(result, "entity_id"):
+        return result.entity_id
+    return str(result)
+
+
 def clear_entity_registry_cache(hass=None):
     """清理实体注册表缓存（兼容接口，实际不再需要缓存管理）"""
     pass

@@ -269,8 +269,10 @@ class GatewayDeviceRemoveButton(ButtonEntity):
         try:
             from homeassistant.helpers.entity_registry import async_get
             entity_registry = async_get(self.hass)
-
-            entity_id = entity_registry.async_get_entity_id("button", DOMAIN, self._attr_unique_id)
+            # 兼容新旧 HA 的 entity 查找（新版 async_get_entity_id 为 async 方法——
+            # 2026-08-28 修复 'RegistryEntry' object can't be awaited）
+            from .utils import async_get_entity_id as _aget_eid
+            entity_id = await _aget_eid(self.hass, "button", self._attr_unique_id)
             if entity_id:
                 await entity_registry.async_remove(entity_id)
                 _LOGGER.info("已从实体注册表中删除删除按钮: %s", entity_id)

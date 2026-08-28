@@ -245,12 +245,13 @@ async def async_setup_entry(
     async def on_device_added(device_sn: str, device_name: str, device_type: str):
         """设备添加回调，自动创建滑动条实体"""
         if device_type == DEVICE_TYPE_WINDOW_OPENER:
-            entity_registry = get_entity_registry(hass)
+            from .utils import async_get_entity_id as _aget_eid
             entities_to_add = []
             created = {}
             for cls in _NUMBER_ENTITY_CLASSES:
                 unique_id = f"{gateway_sn}_{device_sn}_{cls._entity_suffix}"
-                if entity_registry.async_get_entity_id("number", DOMAIN, unique_id) is not None:
+                # 兼容新旧 HA 的 entity 查找（新版 async_get_entity_id 为 async 方法——2026-08-28 修复）
+                if await _aget_eid(hass, "number", unique_id) is not None:
                     _LOGGER.debug("%s实体已存在，跳过创建: %s", cls._entity_label, device_sn)
                     continue
                 number = cls(

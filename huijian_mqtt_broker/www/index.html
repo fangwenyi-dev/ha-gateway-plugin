@@ -291,7 +291,7 @@
     </div>
 
     <script>
-        let CURRENT_VERSION = '1.5.7';
+        let CURRENT_VERSION = '1.5.8';
         const DOMAIN = 'window_controller_gateway';
 
         // Ingress 下页面路径形如 /hassio/ingress/<token>/，直连插件端口时为 /
@@ -857,6 +857,16 @@
                         const r = await haApi('/services/cover/' + service, 'POST', { entity_id: coverEntity.entity_id });
                         if (!r.ok) throw new Error('HA API ' + r.status);
                         showToast('命令已发送: ' + command, 'ok');
+                    }
+                } else if (command === 'a') {
+                    // 内倒（toggle）：与 wind_lock 相同模式，按 button 实体 unique_id 后缀 _a 查找
+                    const btnEntity = findEntityByUniqueId(dev, 'button', 'a');
+                    if (btnEntity) {
+                        const r = await haApi('/services/button/press', 'POST', { entity_id: btnEntity.entity_id });
+                        if (!r.ok) throw new Error('HA API ' + r.status);
+                        showToast('内倒命令已发送', 'ok');
+                    } else {
+                        showToast('未找到内倒按钮实体', 'warn');
                     }
                 } else if (command === 'wind_lock_tilt' || command === 'wind_lock_flat') {
                     const btnSuffix = command === 'wind_lock_tilt' ? 'wind_lock_tilt' : 'wind_lock_flat';

@@ -10,6 +10,18 @@
 
 
 
+
+## [1.5.8] - 2026-08-28
+
+### 修复
+- **重命名设备报错 'RegistryEntry' object can't be awaited**：HA 新版将
+  EntityRegistry.async_get_entity_id 改为 async 方法（返回 coroutine，await 后为
+  RegistryEntry），项目 12 处调用均未 await。新增 utils.async_get_entity_id 兼容
+  辅助函数（自动探测同步/异步 API，统一返回 entity_id），全部调用点已修复
+- **Web 界面"内倒"按钮不发送命令**：controlDevice 缺少 'a' 命令分支，点内倒
+  落入"未知命令"；新增分支按 button 实体 unique_id 后缀 _a 精确查找并调用
+  button/press 触发内倒（004 命令 value=200）
+- 版本号统一为 1.5.8（插件 + 集成）
 ## [1.5.7] - 2026-08-28
 
 ### 优化

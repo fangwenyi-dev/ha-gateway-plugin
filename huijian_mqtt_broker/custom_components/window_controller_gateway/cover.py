@@ -178,10 +178,11 @@ async def async_setup_entry(
     async def on_device_added(device_sn: str, device_name: str, device_type: str):
         """设备添加回调，自动创建Cover实体"""
         if device_type == DEVICE_TYPE_WINDOW_OPENER:
-            entity_registry = get_entity_registry(hass)
+            from .utils import async_get_entity_id as _aget_eid
 
             cover_unique_id = f"{gateway_sn}_{device_sn}_cover"
-            cover_exists = entity_registry.async_get_entity_id("cover", DOMAIN, cover_unique_id) is not None
+            # 兼容新旧 HA 的 entity 查找（新版 async_get_entity_id 为 async 方法——2026-08-28 修复）
+            cover_exists = await _aget_eid(hass, "cover", cover_unique_id) is not None
 
             if cover_exists:
                 _LOGGER.debug("Cover实体已存在，跳过创建: %s", device_sn)

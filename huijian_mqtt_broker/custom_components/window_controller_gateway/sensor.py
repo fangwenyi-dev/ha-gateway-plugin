@@ -206,14 +206,14 @@ async def async_setup_entry(
         """设备添加回调，自动创建传感器实体"""
         _LOGGER.info("收到设备添加回调: %s - %s", device_name, device_sn)
         
-        # 检查实体是否已存在（避免重复创建）
-        entity_registry = get_entity_registry(hass)
+        # 检查实体是否已存在（避免重复创建；兼容新旧 HA entity 查找）
+        from .utils import async_get_entity_id as _aget_eid
         
         battery_unique_id = f"{gateway_sn}_{device_sn}_battery"
         status_unique_id = f"{gateway_sn}_{device_sn}_status"
         
-        battery_exists = entity_registry.async_get_entity_id("sensor", DOMAIN, battery_unique_id) is not None
-        status_exists = entity_registry.async_get_entity_id("sensor", DOMAIN, status_unique_id) is not None
+        battery_exists = await _aget_eid(hass, "sensor", battery_unique_id) is not None
+        status_exists = await _aget_eid(hass, "sensor", status_unique_id) is not None
         
         if battery_exists and status_exists:
             _LOGGER.info("传感器实体已存在，跳过创建: %s", device_sn)

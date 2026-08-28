@@ -1,6 +1,6 @@
 # 慧尖 LoRa 网关一体化插件
 
-[![版本](https://img.shields.io/badge/version-1.5.7-blue)]()
+[![版本](https://img.shields.io/badge/version-1.5.8-blue)]()
 [![HA Add-on](https://img.shields.io/badge/HA-Add--on-green)]()
 
 慧尖开窗器 LoRa 网关的 Home Assistant 一体化插件。**内置 Mosquitto Broker + mDNS 自动发现 + 网关集成，安装一个插件即可获得全部能力**。
@@ -145,6 +145,14 @@ https://github.com/fangwenyi-dev/ha-gateway-plugin
 不会。持久化数据存储在 HA 配置目录，升级时自动备份恢复。v1.3.2 起增加了 `.bak` 备份机制，JSON 损坏时可自动恢复。
 
 ## 更新日志
+
+### v1.5.8 (2026-08-28)
+- **修复（重命名设备报错）**：HA 新版将 EntityRegistry.async_get_entity_id 改为
+  async 方法，项目 12 处调用均未 await 导致 'RegistryEntry' object can't be awaited。
+  新增兼容辅助函数（兼容新旧 HA），统一修复全部调用点
+- **修复（Web 界面"内倒"按钮不发送命令）**：controlDevice 缺少 'a' 命令分支，
+  点内倒落入"未知命令"；新增按 button 实体 unique_id 后缀 _a 精确查找并触发
+- ⚠️ **需要重启 HA**（集成代码有更新）
 
 ### v1.5.7 (2026-08-28)
 - **优化（Web 界面滑块始终可用）**：子设备的速度/力度滑块不再因无初始上报数据
