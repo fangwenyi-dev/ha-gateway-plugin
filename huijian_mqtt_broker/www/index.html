@@ -261,7 +261,7 @@
     </div>
 
     <script>
-        let CURRENT_VERSION = '1.5.4';
+        let CURRENT_VERSION = '1.5.5';
         const DOMAIN = 'window_controller_gateway';
 
         // Ingress 下页面路径形如 /hassio/ingress/<token>/，直连插件端口时为 /
@@ -412,19 +412,19 @@
                     return;
                 }
                 let subDevices = [];
+                let gwDevice = null;
                 for (const dev of devices) {
                     if (dev.via_device_id) subDevices.push(dev);
+                    else gwDevice = dev;  // 网关（parent）设备
                 }
                 try {
                     const stateResp = await haApi('/states');
                     if (!stateResp.ok) throw new Error('HA API ' + stateResp.status);
                     const states = await stateResp.json();
-                    const snSuffix = (gatewaySn && gatewaySn.length >= 4) ? gatewaySn.slice(-6).toLowerCase() : '';
-                    const gwSensor = snSuffix ? states.find(s =>
-                        s.entity_id.includes('binary_sensor') &&
-                        s.entity_id.toLowerCase().includes(snSuffix) &&
-                        s.entity_id.includes('online')
-                    ) : null;
+                    // 2026-08-28 修复：网关在线传感器按 unique_id 精确查找
+                    // （unique_id 为 {gateway_sn}_online，设备名只含后 4 位，模糊匹配必然失败）
+                    const gwEntity = findEntityByUniqueId(gwDevice, 'binary_sensor', 'online');
+                    const gwSensor = gwEntity ? (states.find(s => s.entity_id === gwEntity.entity_id) || null) : null;
                     updateGatewayStatus(statusEl, gwSensor ? (gwSensor.state === 'on' ? 'online' : 'offline') : 'unknown');
                     if (subDevices.length === 0) {
                         deviceListEl.innerHTML = '<p style="font-size:12px;color:var(--text-muted);padding:8px;">暂无子设备，点击「配对」按钮添加</p>';
@@ -465,28 +465,16 @@
                 if (Array.isArray(ident) && ident.length > 1) sn = ident[1];
             }
             const supportsWindLock = sn.startsWith('5005');
-            const snSuffix = (sn !== '未知' && sn.length >= 4) ? sn.slice(-6).toLowerCase() : '';
-            const coverEntity = snSuffix ? states.find(s =>
-                s.entity_id.startsWith('cover.') && s.entity_id.toLowerCase().includes(snSuffix)
-            ) : null;
-            // 在线状态: binary_sensor.*{sn_suffix}*online*
-            const onlineEntity = snSuffix ? states.find(s =>
-                s.entity_id.startsWith('binary_sensor.') &&
-                s.entity_id.toLowerCase().includes(snSuffix) &&
-                s.entity_id.includes('online')
-            ) : null;
-            // 电池电压: sensor.*{sn_suffix}*voltage* 或 sensor.*{sn_suffix}*battery*
-            const batteryEntity = snSuffix ? states.find(s =>
-                s.entity_id.startsWith('sensor.') && s.entity_id.toLowerCase().includes(snSuffix) &&
-                (s.entity_id.includes('voltage') || s.entity_id.includes('battery'))
-            ) : null;
-            // 开窗速度/力度: number.*{sn_suffix}*speed* / number.*{sn_suffix}*strength*
-            const speedEntity = snSuffix ? states.find(s =>
-                s.entity_id.startsWith('number.') && s.entity_id.toLowerCase().includes(snSuffix) && s.entity_id.includes('speed')
-            ) : null;
-            const strengthEntity = snSuffix ? states.find(s =>
-                s.entity_id.startsWith('number.') && s.entity_id.toLowerCase().includes(snSuffix) && s.entity_id.includes('strength')
-            ) : null;
+            // 2026-08-28 修复：用 API 返回的精确实体列表按 unique_id 锚点查找，
+            // 替代 SN 后 6 位模糊匹配（设备名只有后 4 位，模糊匹配必然失败）。
+            const coverEntity = findEntityState(dev, 'cover', 'cover', states);
+            // 在线状态: binary_sensor.*online*
+            const onlineEntity = findEntityState(dev, 'binary_sensor', 'online', states);
+            // 电池电压: sensor.*battery*（unique_id 后缀为 _battery）
+            const batteryEntity = findEntityState(dev, 'sensor', 'battery', states);
+            // 开窗速度/力度: number.*speed* / number.*strength*
+            const speedEntity = findEntityState(dev, 'number', 'speed', states);
+            const strengthEntity = findEntityState(dev, 'number', 'strength', states);
             // 集成未提供 current_position，实际位置属性为 attributes.position（缺失时显示 --）
             const rawPos = coverEntity ? coverEntity.attributes.position : undefined;
             const currentPos = (rawPos === undefined || rawPos === null) ? '--' : rawPos;
@@ -560,21 +548,10 @@
             const stateEl = document.getElementById('dev-state-' + dev.id);
             if (!stateEl) return;
             try {
-                let sn = '';
-                if (dev.identifiers && dev.identifiers.length > 0) {
-                    const ident = dev.identifiers[0];
-                    if (Array.isArray(ident) && ident.length > 1) sn = ident[1];
-                }
-                const snSuffix = (sn && sn.length >= 4) ? sn.slice(-6).toLowerCase() : '';
-                const coverEntity = snSuffix ? states.find(s =>
-                    s.entity_id.startsWith('cover.') && s.entity_id.toLowerCase().includes(snSuffix)
-                ) : null;
-                // 在线状态点: binary_sensor.*{sn_suffix}*online*
-                const onlineEntity = snSuffix ? states.find(s =>
-                    s.entity_id.startsWith('binary_sensor.') &&
-                    s.entity_id.toLowerCase().includes(snSuffix) &&
-                    s.entity_id.includes('online')
-                ) : null;
+                // 2026-08-28 修复：用 API 返回的精确实体列表按 unique_id 锚点查找
+                const coverEntity = findEntityState(dev, 'cover', 'cover', states);
+                // 在线状态点: binary_sensor.*online*
+                const onlineEntity = findEntityState(dev, 'binary_sensor', 'online', states);
                 const dot = document.querySelector('#dev-' + dev.id + ' .dev-dot');
                 if (dot) {
                     if (onlineEntity) {
@@ -583,18 +560,11 @@
                         dot.className = 'dev-dot ' + (coverEntity.state === 'unavailable' ? 'dot-offline' : 'dot-online');
                     }
                 }
-                // 电池电压: sensor.*{sn_suffix}*voltage* 或 *battery*
-                const batteryEntity = snSuffix ? states.find(s =>
-                    s.entity_id.startsWith('sensor.') && s.entity_id.toLowerCase().includes(snSuffix) &&
-                    (s.entity_id.includes('voltage') || s.entity_id.includes('battery'))
-                ) : null;
-                // 速度/力度: number.*{sn_suffix}*speed* / *strength*
-                const speedEntity = snSuffix ? states.find(s =>
-                    s.entity_id.startsWith('number.') && s.entity_id.toLowerCase().includes(snSuffix) && s.entity_id.includes('speed')
-                ) : null;
-                const strengthEntity = snSuffix ? states.find(s =>
-                    s.entity_id.startsWith('number.') && s.entity_id.toLowerCase().includes(snSuffix) && s.entity_id.includes('strength')
-                ) : null;
+                // 电池电压: sensor.*battery*
+                const batteryEntity = findEntityState(dev, 'sensor', 'battery', states);
+                // 速度/力度: number.*speed* / number.*strength*
+                const speedEntity = findEntityState(dev, 'number', 'speed', states);
+                const strengthEntity = findEntityState(dev, 'number', 'strength', states);
                 // 更新速度/力度滑块
                 const speedSlider = document.querySelector('#dev-' + dev.id + ' .speed-slider');
                 if (speedSlider) {
@@ -743,15 +713,9 @@
                 if (!devResp.ok) throw new Error('HA API ' + devResp.status);
                 const devices = await devResp.json();
                 const dev = devices.find(d => d.id === deviceId);
-                let sn = '';
-                if (dev && dev.identifiers && dev.identifiers.length > 0) {
-                    const ident = dev.identifiers[0];
-                    if (Array.isArray(ident) && ident.length > 1) sn = ident[1];
-                }
-                const snSuffix = (sn && sn.length >= 4) ? sn.slice(-6).toLowerCase() : '';
-                const coverEntity = snSuffix ? states.find(s =>
-                    s.entity_id.startsWith('cover.') && s.entity_id.toLowerCase().includes(snSuffix)
-                ) : null;
+                // 2026-08-28 修复：用 API 返回的精确实体列表按 unique_id 锚点查找，
+                // 不再用 SN 后 6 位模糊匹配 entity_id（设备名只有后 4 位，模糊匹配必然失败）。
+                const coverEntity = findEntityByUniqueId(dev, 'cover', 'cover');
                 if (command === 'open' || command === 'close' || command === 'stop') {
                     if (!coverEntity) {
                         showToast('未找到设备 cover 实体', 'warn');
@@ -766,11 +730,7 @@
                     }
                 } else if (command === 'wind_lock_tilt' || command === 'wind_lock_flat') {
                     const btnSuffix = command === 'wind_lock_tilt' ? 'wind_lock_tilt' : 'wind_lock_flat';
-                    const btnEntity = snSuffix ? states.find(s =>
-                        s.entity_id.startsWith('button.') &&
-                        s.entity_id.toLowerCase().includes(snSuffix) &&
-                        s.entity_id.includes(btnSuffix)
-                    ) : null;
+                    const btnEntity = findEntityByUniqueId(dev, 'button', btnSuffix);
                     if (btnEntity) {
                         const r = await haApi('/services/button/press', 'POST', { entity_id: btnEntity.entity_id });
                         if (!r.ok) throw new Error('HA API ' + r.status);
@@ -780,9 +740,7 @@
                     }
                 } else if (command === 'set_speed' || command === 'set_strength') {
                     const numSuffix = command === 'set_speed' ? 'speed' : 'strength';
-                    const numEntity = snSuffix ? states.find(s =>
-                        s.entity_id.startsWith('number.') && s.entity_id.toLowerCase().includes(snSuffix) && s.entity_id.includes(numSuffix)
-                    ) : null;
+                    const numEntity = findEntityByUniqueId(dev, 'number', numSuffix);
                     if (numEntity) {
                         const numVal = parseFloat(value);
                         if (isNaN(numVal)) throw new Error('无效数值: ' + value);
@@ -793,9 +751,7 @@
                         showToast('未找到' + (command === 'set_speed' ? '速度' : '力度') + '实体', 'warn');
                     }
                 } else if (command === 'remove') {
-                    const btnEntity = snSuffix ? states.find(s =>
-                        s.entity_id.startsWith('button.') && s.entity_id.toLowerCase().includes(snSuffix) && s.entity_id.includes('remove')
-                    ) : null;
+                    const btnEntity = findEntityByUniqueId(dev, 'button', 'remove');
                     if (btnEntity) {
                         const r = await haApi('/services/button/press', 'POST', { entity_id: btnEntity.entity_id });
                         if (!r.ok) throw new Error('HA API ' + r.status);
@@ -821,15 +777,9 @@
                 if (!devResp.ok) throw new Error('HA API ' + devResp.status);
                 const devices = await devResp.json();
                 const dev = devices.find(d => d.id === deviceId);
-                let sn = '';
-                if (dev && dev.identifiers && dev.identifiers.length > 0) {
-                    const ident = dev.identifiers[0];
-                    if (Array.isArray(ident) && ident.length > 1) sn = ident[1];
-                }
-                const snSuffix = (sn && sn.length >= 4) ? sn.slice(-6).toLowerCase() : '';
-                const coverEntity = snSuffix ? states.find(s =>
-                    s.entity_id.startsWith('cover.') && s.entity_id.toLowerCase().includes(snSuffix)
-                ) : null;
+                // 2026-08-28 修复：精确查找 cover 实体（仅作存在性判断，
+                // 实际服务为 window_controller_gateway.set_position）
+                const coverEntity = findEntityByUniqueId(dev, 'cover', 'cover');
                 if (coverEntity) {
                     // 集成未注册 cover.set_cover_position（cover.py 无 SET_POSITION 特性标志），
                     // 实际服务为 window_controller_gateway.set_position：字段 device_id（设备注册表ID）+ position
@@ -938,6 +888,44 @@
         function escapeHtml(text) {
             if (text === null || text === undefined) return '';
             return String(text).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+        }
+
+        // ========== 实体精确定位（2026-08-28 修复） ==========
+        // 背景：Web UI 之前用设备 SN 后 6 位模糊匹配 entity_id，但设备显示名
+        // 只含 SN 后 4 位（"开窗器 1207-0603 (#01)"），HA 生成的 entity_id
+        // 里没有后 6 位 → 永远匹配不上 → "未找到设备 cover 实体"。
+        // 现在 API（/window_controller_gateway/devices）为每个设备返回精确实体
+        // 列表（entity_id/domain/unique_id），这里按 unique_id 精确查找：
+        //   unique_id 格式：{gateway_sn}_{device_sn}_{suffix}
+        // 用 device_sn（设备 SN）做唯一锚点匹配，天然精确、无前缀歧义。
+        function findEntityByUniqueId(dev, domain, suffix) {
+            if (!dev || !dev.entities || !dev.entities.length) return null;
+            let deviceSn = null;
+            if (dev.identifiers && dev.identifiers.length > 0) {
+                const ident = dev.identifiers[0];
+                if (Array.isArray(ident) && ident.length > 1) deviceSn = ident[1];
+            }
+            if (!deviceSn) return null;
+            const anchor = '_' + deviceSn + '_' + suffix;
+            for (const e of dev.entities) {
+                if (e.domain !== domain || !e.unique_id) continue;
+                if (e.unique_id.endsWith(anchor)) return e;
+            }
+            return null;
+        }
+
+        function findEntityByDomain(dev, domain) {
+            if (!dev || !dev.entities || !dev.entities.length) return null;
+            return dev.entities.find(e => e.domain === domain) || null;
+        }
+
+        // 按 unique_id 锚点找到实体，再返回其在 states 中对应的 state 对象
+        // （含 entity_id/state/attributes，供渲染与控制使用）。
+        // 找不到实体或 states 中无此实体时返回 null。
+        function findEntityState(dev, domain, suffix, states) {
+            const ent = findEntityByUniqueId(dev, domain, suffix);
+            if (!ent || !ent.entity_id) return null;
+            return states.find(s => s.entity_id === ent.entity_id) || null;
         }
 
         // HTML 解析器会在 JS 编译前解码 &#39;，实体转义保护不了单引号包裹的 onclick/onchange 参数，需额外转义

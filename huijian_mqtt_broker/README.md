@@ -1,6 +1,6 @@
 # 慧尖 LoRa 网关一体化插件
 
-[![版本](https://img.shields.io/badge/version-1.5.4-blue)]()
+[![版本](https://img.shields.io/badge/version-1.5.5-blue)]()
 [![HA Add-on](https://img.shields.io/badge/HA-Add--on-green)]()
 
 慧尖开窗器 LoRa 网关的 Home Assistant 一体化插件。**内置 Mosquitto Broker + mDNS 自动发现 + 网关集成，安装一个插件即可获得全部能力**。
@@ -145,6 +145,14 @@ https://github.com/fangwenyi-dev/ha-gateway-plugin
 不会。持久化数据存储在 HA 配置目录，升级时自动备份恢复。v1.3.2 起增加了 `.bak` 备份机制，JSON 损坏时可自动恢复。
 
 ## 更新日志
+
+### v1.5.5 (2026-08-28)
+- **修复（Web 界面无法控制子设备）**：Web UI 之前用设备 SN 后 6 位模糊匹配实体
+  entity_id，但设备显示名只含 SN 后 4 位（"开窗器 1207-0603 (#01)"），
+  HA 生成的实体名不含后 6 位 → 永远匹配失败（"未找到设备 cover 实体"）
+- **方案**：设备列表 API 现在返回每个设备的精确实体列表（entity_id/domain/unique_id），
+  Web UI 按 unique_id 锚点精确查找，替代脆弱的字符串模糊匹配（控制/状态/滑块/删除全部修复）
+- ⚠️ **需要重启 HA**（api.py 有更新）
 
 ### v1.5.4 (2026-08-28)
 - **修复（手动配对重新添加被删设备）**：手动删除过的子设备之前因"设备复活守卫"

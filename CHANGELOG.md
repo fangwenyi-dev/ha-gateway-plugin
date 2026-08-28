@@ -7,6 +7,18 @@
 
 
 
+
+## [1.5.5] - 2026-08-28
+
+### 修复
+- **Web 界面无法控制子设备（"未找到设备 cover 实体"）**：Web UI 用设备 SN 后 6 位
+  模糊匹配 entity_id，但设备显示名只含 SN 后 4 位（get_device_display_name 用
+  device_sn[-4:]，HA 生成的实体名不含后 6 位）→ 匹配永远失败。
+  修复：设备列表 API（/window_controller_gateway/devices）为每个设备返回精确实体列表
+  （entity_id/domain/unique_id），Web UI 按 unique_id 锚点（_{device_sn}_{suffix}）
+  精确查找，替代字符串模糊匹配。修复范围：开/关/停、位置滑块、速度/力度滑块、
+  内倒/风锁模式按钮、删除按钮、在线状态、电池电压显示
+- 版本号统一为 1.5.5（插件 + 集成）
 ## [1.5.4] - 2026-08-28
 
 ### 修复
