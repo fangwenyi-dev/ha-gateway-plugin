@@ -100,24 +100,29 @@
         .gateway-sn { font-size: 11px; color: var(--text-light); margin-left: 8px; font-family: "SF Mono", Consolas, monospace; }
         .device-list { margin-top: 10px; }
         .device-item {
-            display: flex; align-items: center; justify-content: space-between;
+            display: flex; flex-direction: column;
             padding: 12px 14px; border-radius: var(--radius-sm); background: var(--bg);
-            margin-bottom: 8px; flex-wrap: wrap; gap: 8px; transition: all .15s;
+            margin-bottom: 8px; gap: 10px; transition: all .15s;
             border: 1px solid transparent;
         }
         .device-item:hover { background: var(--slate-bg); border-color: var(--border); }
+        .device-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
         .device-info { flex: 1; min-width: 100px; }
         .device-name { font-size: 14px; font-weight: 600; }
         .device-sn { font-size: 10px; color: var(--text-light); font-family: "SF Mono", Consolas, monospace; }
         .device-status { font-size: 11px; margin-top: 3px; color: var(--text-muted); }
-        .device-controls { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
-        .device-btn-group .btn-sm { flex: 1; min-width: 64px; text-align: center; justify-content: center; }
-        .slider-group { margin-top: 6px; display: flex; flex-direction: column; gap: 6px; }
+        .device-actions { display: flex; gap: 4px; flex-shrink: 0; }
+        .device-actions .btn-sm { padding: 6px 10px; font-size: 11px; min-height: 30px; }
+        .control-section { display: flex; flex-direction: column; gap: 8px; }
+        .control-row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+        .control-row .btn-sm { flex: 1; min-width: 60px; text-align: center; justify-content: center; }
+        .section-label { font-size: 10px; color: var(--text-light); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 2px; }
+        .slider-group { display: flex; flex-direction: column; gap: 6px; }
         .slider-row { display: flex; align-items: center; gap: 8px; }
         .slider-row .slider-label { width: 32px; flex-shrink: 0; }
         .slider-row input[type="range"] { flex: 1; }
         .slider-row .slider-value { min-width: 36px; text-align: right; flex-shrink: 0; }
-        .position-slider { width: 90px; height: 22px; }
+        .position-slider, .speed-slider, .strength-slider { width: 100%; height: 22px; }
         /* ===== Device online dot ===== */
         .dev-name { display: flex; align-items: center; gap: 6px; }
         .dev-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
@@ -126,7 +131,6 @@
         /* ===== Device sliders ===== */
         .slider-label { font-size: 10px; color: var(--text-muted); }
         .slider-value { font-size: 11px; min-width: 30px; text-align: right; }
-        .speed-slider, .strength-slider { width: 90px; height: 22px; }
         /* ===== Badge ===== */
         .badge {
             display: inline-flex; align-items: center; padding: 3px 10px; border-radius: 20px;
@@ -201,11 +205,11 @@
             .status-item .value { font-size: 11px; }
             .conn-grid { grid-template-columns: 1fr; }
             .device-item { padding: 10px 12px; }
-            .device-controls { gap: 6px; }
-            .device-controls .btn-sm { flex: 1; min-width: 60px; text-align: center; justify-content: center; }
+            .control-row { gap: 4px; }
+            .control-row .btn-sm { flex: 1; min-width: 56px; padding: 7px 8px; font-size: 12px; min-height: 32px; }
+            .device-actions .btn-sm { padding: 6px 8px; font-size: 11px; }
             .slider-row { gap: 6px; }
             .slider-row .slider-label { width: 28px; }
-            .slider-row input[type="range"] { min-width: 100px; }
             .gateway-header { flex-wrap: wrap; gap: 8px; }
             .gateway-name { font-size: 15px; }
         }
@@ -585,26 +589,18 @@
                 if (Array.isArray(ident) && ident.length > 1) sn = ident[1];
             }
             const supportsWindLock = sn.startsWith('5005');
-            // 2026-08-28 修复：用 API 返回的精确实体列表按 unique_id 锚点查找，
-            // 替代 SN 后 6 位模糊匹配（设备名只有后 4 位，模糊匹配必然失败）。
             const coverEntity = findEntityState(dev, 'cover', 'cover', states);
-            // 在线状态: binary_sensor.*online*
             const onlineEntity = findEntityState(dev, 'binary_sensor', 'online', states);
-            // 电池电压: sensor.*battery*（unique_id 后缀为 _battery）
             const batteryEntity = findEntityState(dev, 'sensor', 'battery', states);
-            // 开窗速度/力度: number.*speed* / number.*strength*
             const speedEntity = findEntityState(dev, 'number', 'speed', states);
             const strengthEntity = findEntityState(dev, 'number', 'strength', states);
-            // 集成未提供 current_position，实际位置属性为 attributes.position（缺失时显示 --）
             const rawPos = coverEntity ? coverEntity.attributes.position : undefined;
             const currentPos = (rawPos === undefined || rawPos === null) ? '--' : rawPos;
             const safeName = escapeHtml(devName);
             const safeSn = escapeHtml(sn);
             const safeDevId = escapeHtml(devId);
             const safeEntryId = escapeHtml(entryId);
-            // 在线圆点（无实体时默认离线红点，loadDeviceState 会再校正）
             const isOnline = onlineEntity ? (onlineEntity.state === 'on') : false;
-            // 电池电压（sensor 优先，缺失时回退 cover attributes.voltage）
             let batteryText = '';
             if (batteryEntity && batteryEntity.state && batteryEntity.state !== 'unknown' && batteryEntity.state !== 'unavailable') {
                 const bUnit = batteryEntity.attributes.unit_of_measurement || 'V';
@@ -612,8 +608,6 @@
             } else if (coverEntity && coverEntity.attributes.voltage) {
                 batteryText = coverEntity.attributes.voltage + 'V';
             }
-            // 速度/力度滑块取值与范围（始终可用，与 HA 集成 number 实体一致——
-            // 无初始上报数据时也可拖动设置，值为 0 起；有数据时回显当前值）
             const speedMin = speedEntity && speedEntity.attributes.min !== undefined ? speedEntity.attributes.min : 0;
             const speedMax = speedEntity && speedEntity.attributes.max !== undefined ? speedEntity.attributes.max : 100;
             const speedValid = speedEntity && speedEntity.state && speedEntity.state !== 'unknown' && speedEntity.state !== 'unavailable';
@@ -622,14 +616,33 @@
             const strengthMax = strengthEntity && strengthEntity.attributes.max !== undefined ? strengthEntity.attributes.max : 100;
             const strengthValid = strengthEntity && strengthEntity.state && strengthEntity.state !== 'unknown' && strengthEntity.state !== 'unavailable';
             const strengthUnit = (strengthEntity && strengthEntity.attributes.unit_of_measurement) || '';
-            // 第 1 行：开 / 关 / 停
-            let controls = '<div class="device-controls device-btn-group">' +
+
+            // === 顶部行：设备信息 + 管理按钮（重命名/移除） ===
+            let html = '<div class="device-item" id="dev-' + safeDevId + '">' +
+                '<div class="device-top">' +
+                '<div class="device-info"><div class="device-name dev-name">' +
+                '<span class="dev-dot ' + (isOnline ? 'dot-online' : 'dot-offline') + '" id="dev-dot-' + safeDevId + '"></span>' +
+                safeName + '</div>' +
+                '<div class="device-sn">SN: ' + safeSn + '</div>' +
+                '<div class="device-status" id="dev-state-' + safeDevId + '">状态: 加载中' + (batteryText ? ' | 电压: ' + batteryText : '') + '</div></div>' +
+                '<div class="device-actions">' +
+                '<button class="btn btn-sm" style="background:var(--slate);color:white;" onclick="renameDevice(\'' + jsQuote(safeDevId) + '\',\'' + jsQuote(safeEntryId) + '\',\'' + jsQuote(safeName) + '\')" title="重命名设备">改名</button>' +
+                '<button class="btn btn-danger btn-sm" title="移除设备" onclick="controlDevice(\'' + jsQuote(safeDevId) + '\',\'remove\',\'' + jsQuote(safeEntryId) + '\')">移除</button>' +
+                '</div></div>';
+
+            // === 主控制区：开/关/停（5005 含内倒） ===
+            html += '<div class="control-section">' +
+                '<div class="control-row">' +
                 '<button class="btn btn-success btn-sm" onclick="controlDevice(\'' + jsQuote(safeDevId) + '\',\'open\',\'' + jsQuote(safeEntryId) + '\')">开</button>' +
                 '<button class="btn btn-danger btn-sm" onclick="controlDevice(\'' + jsQuote(safeDevId) + '\',\'close\',\'' + jsQuote(safeEntryId) + '\')">关</button>' +
-                '<button class="btn btn-warn btn-sm" onclick="controlDevice(\'' + jsQuote(safeDevId) + '\',\'stop\',\'' + jsQuote(safeEntryId) + '\')">停</button>' +
-                '</div>';
-            // 第 2 行：位置 / 速度 / 力度 三个滑块一组（滑块始终可拖动，无初始数据也可设置）
-            controls += '<div class="slider-group">' +
+                '<button class="btn btn-warn btn-sm" onclick="controlDevice(\'' + jsQuote(safeDevId) + '\',\'stop\',\'' + jsQuote(safeEntryId) + '\')">停</button>';
+            if (supportsWindLock) {
+                html += '<button class="btn btn-sm" style="background:#6366f1;color:white;" onclick="controlDevice(\'' + jsQuote(safeDevId) + '\',\'a\',\'' + jsQuote(safeEntryId) + '\')">内倒</button>';
+            }
+            html += '</div>';
+
+            // === 滑块区：位置 / 速度 / 力度 ===
+            html += '<div class="slider-group">' +
                 '<div class="slider-row"><span class="slider-label">位置</span>' +
                 '<input type="range" class="position-slider" min="0" max="100" value="' + (currentPos === '--' ? 0 : currentPos) + '"' +
                 ' oninput="this.nextElementSibling.textContent=this.value+\'%\'"' +
@@ -646,26 +659,18 @@
                 ' onchange="controlDevice(\'' + jsQuote(safeDevId) + '\',\'set_strength\',\'' + jsQuote(safeEntryId) + '\', this.value)">' +
                 '<span class="slider-value strength-value">' + (strengthValid ? strengthEntity.state + strengthUnit : '--') + '</span></div>' +
                 '</div>';
-            // 第 3 行：内倒 / 内倒模式 / 平开模式（仅 5005 设备）
+
+            // === 模式切换区（仅 5005）：内倒模式 / 平开模式 ===
             if (supportsWindLock) {
-                controls += '<div class="device-controls device-btn-group" style="margin-top:4px;">' +
-                    '<button class="btn btn-sm" style="background:#6366f1;color:white;" onclick="controlDevice(\'' + jsQuote(safeDevId) + '\',\'a\',\'' + jsQuote(safeEntryId) + '\')">内倒</button>' +
-                    '<button class="btn btn-sm" style="background:#4f46e5;color:white;" onclick="controlDevice(\'' + jsQuote(safeDevId) + '\',\'wind_lock_tilt\',\'' + jsQuote(safeEntryId) + '\')">内倒模式</button>' +
-                    '<button class="btn btn-sm" style="background:#4338ca;color:white;" onclick="controlDevice(\'' + jsQuote(safeDevId) + '\',\'wind_lock_flat\',\'' + jsQuote(safeEntryId) + '\')">平开模式</button>' +
+                html += '<div class="control-row">' +
+                    '<button class="btn btn-sm" style="background:#4f46e5;color:white;flex:1;" onclick="controlDevice(\'' + jsQuote(safeDevId) + '\',\'wind_lock_tilt\',\'' + jsQuote(safeEntryId) + '\')">内倒模式</button>' +
+                    '<button class="btn btn-sm" style="background:#4338ca;color:white;flex:1;" onclick="controlDevice(\'' + jsQuote(safeDevId) + '\',\'wind_lock_flat\',\'' + jsQuote(safeEntryId) + '\')">平开模式</button>' +
                     '</div>';
             }
-            // 第 4 行：重命名 + 移除（危险操作放最后，不易误触）
-            controls += '<div class="device-controls device-btn-group" style="margin-top:4px;">' +
-                '<button class="btn btn-sm" style="background:#6366f1;color:white;" onclick="renameDevice(\'' + jsQuote(safeDevId) + '\',\'' + jsQuote(safeEntryId) + '\',\'' + jsQuote(safeName) + '\')" title="重命名设备">重命名</button>' +
-                '<button class="btn btn-danger btn-sm" title="移除设备" onclick="controlDevice(\'' + jsQuote(safeDevId) + '\',\'remove\',\'' + jsQuote(safeEntryId) + '\')">移除</button>' +
-                '</div>';
-            return '<div class="device-item" id="dev-' + safeDevId + '">' +
-                '<div class="device-info"><div class="device-name dev-name">' +
-                '<span class="dev-dot ' + (isOnline ? 'dot-online' : 'dot-offline') + '" id="dev-dot-' + safeDevId + '"></span>' +
-                safeName + '</div>' +
-                '<div class="device-sn">SN: ' + safeSn + '</div>' +
-                '<div class="device-status" id="dev-state-' + safeDevId + '">状态: 加载中' + (batteryText ? ' | 电压: ' + batteryText : '') + '</div></div>' +
-                controls + '</div>';
+
+            html += '</div>'; // close control-section
+            html += '</div>'; // close device-item
+            return html;
         }
 
         function loadDeviceState(dev, states) {
