@@ -52,24 +52,22 @@ v1.6.0 的 "entity" 字面量回归曾骗过全部 38 个测试，教训记录�
 
 ---
 
-### Gitee Token 配置
-**Gitee 推送使用 OAuth2 token 认证：**
-
+### Gitee 凭据（v1.6.3 定案：remote 不带 token）
 ```bash
-# Token 存储位置
-C:\Users\fangwenyi\.gitee_token
-
-# 配置 Gitee 远程 URL（包含 token）
-$token = Get-Content "C:\Users\fangwenyi\.gitee_token" -Raw
-$giteeUrl = "https://oauth2:${token}@gitee.com/fangwenyi-dev/ha-gateway-plugin.git"
-git remote set-url gitee $giteeUrl
+# remote 保持干净 URL（.git/config 不落任何密钥）
+git remote set-url gitee https://gitee.com/fangwenyi-dev/ha-gateway-plugin.git
 ```
-
-**验证配置：**
-```bash
-git remote -v  # 应显示包含 token 的 URL
-git push gitee main  # 测试推送
-```
+**两条已验证的认证路径（2026-08-28 实测，均无需 URL 内嵌 token）：**
+1. **Windows 侧推送**：Git Credential Manager 已存 gitee.com 条目
+   （host=gitee.com, username=oauth2），`git push gitee main` 直接走 GCM
+2. **WSL/agent 侧推送**：一次性注入 token，不落盘到 remote 配置：
+   ```bash
+   TOK=$(cat /mnt/c/Users/fangwenyi/.gitee_token | tr -d '\r\n')
+   GIT_TERMINAL_PROMPT=0 git push "https://oauth2:${TOK}@gitee.com/fangwenyi-dev/ha-gateway-plugin.git" main
+   ```
+GitHub 同理走 `gh auth token` 注入一次性 URL（WSL 无 GCM 交互）。
+禁止再把 token 写回 `git remote set-url`——历史做法会让明文 token 长期驻留
+`.git/config`，任何读取该文件的工具/日志/备份都可能带出。
 
 ---
 

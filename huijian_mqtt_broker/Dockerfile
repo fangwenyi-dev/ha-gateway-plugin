@@ -31,7 +31,11 @@ COPY mosquitto.conf /etc/mosquitto/mosquitto.conf
 COPY run.sh /run.sh
 
 # 复制慧尖网关集成代码
-# /data 在运行时被 HA 挂载的持久化卷覆盖，所以同时复制到 /usr/share 作为备份
+# /usr/share：run.sh 集成安装/升级链的第一查找路径（生产实际使用）
+# /data：运行时会被 HA 挂载的持久化卷覆盖，看似死层，但它是 run.sh
+# INTEGRATION_SRC 回退链的第二路径（`for src in /usr/share/... /data/...`）——
+# 不带卷挂载直接 docker run 调试镜像时 /usr/share 缺失则靠它兜底。
+# v1.6.3 审查定论：保留勿删；构建体积已由 .dockerignore 排除 __pycache__/tests
 COPY custom_components /usr/share/custom_components
 COPY custom_components /data/custom_components
 
