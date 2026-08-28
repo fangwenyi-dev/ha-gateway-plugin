@@ -35,7 +35,7 @@
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
-            background: var(--bg); color: var(--text); padding: 12px; max-width: 880px; margin: 0 auto;
+            background: var(--bg); color: var(--text); padding: 12px; max-width: 1200px; margin: 0 auto;
             -webkit-font-smoothing: antialiased;
         }
         /* ===== Header ===== */
@@ -98,11 +98,11 @@
         .gateway-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
         .gateway-name { font-size: 16px; font-weight: 700; }
         .gateway-sn { font-size: 11px; color: var(--text-light); margin-left: 8px; font-family: "SF Mono", Consolas, monospace; }
-        .device-list { margin-top: 10px; }
+        .device-list { margin-top: 10px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
         .device-item {
             display: flex; flex-direction: column;
             padding: 12px 14px; border-radius: var(--radius-sm); background: var(--bg);
-            margin-bottom: 8px; gap: 10px; transition: all .15s;
+            gap: 10px; transition: all .15s;
             border: 1px solid transparent;
         }
         .device-item:hover { background: var(--slate-bg); border-color: var(--border); }
@@ -204,6 +204,7 @@
             .status-item .label { font-size: 9px; }
             .status-item .value { font-size: 11px; }
             .conn-grid { grid-template-columns: 1fr; }
+            .device-list { grid-template-columns: 1fr; }
             .device-item { padding: 10px 12px; }
             .control-row { gap: 4px; }
             .control-row .btn-sm { flex: 1; min-width: 56px; padding: 7px 8px; font-size: 12px; min-height: 32px; }
