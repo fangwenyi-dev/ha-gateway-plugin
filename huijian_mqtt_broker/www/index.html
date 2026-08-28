@@ -291,10 +291,17 @@
     </div>
 
     <script>
-        let CURRENT_VERSION = '1.6.2';
+        let CURRENT_VERSION = '1.6.3';
         const DOMAIN = 'window_controller_gateway';
 
-        // Ingress 下页面路径形如 /hassio/ingress/<token>/，直连插件端口时为 /
+        // v1.6.3：页头/页脚的初始版本号不再硬编码——脚本在 body 末尾，
+        // 启动即与 CURRENT_VERSION 常量同步；之后 /api/version 拉到真实版本再刷新。
+        // 旧实现硬编码 v1.5.1，/api/version 失败时页面永远显示过期版本号。
+        document.getElementById('addonVersion').textContent = 'v' + CURRENT_VERSION;
+        document.getElementById('footerVersion').textContent = 'v' + CURRENT_VERSION;
+
+        // Ingress 下页面路径形如 /api/hassio_ingress/<token>/index.html（或带尾斜杠），
+        // 直连插件端口 8099 时为 /index.html。去掉最后一段得到部署基路径。
         const INGRESS_BASE = window.location.pathname.replace(/\/[^/]*$/, '/');
         // 各配置条目的网关 SN（控制操作后刷新设备用，避免空 SN 误匹配首个实体）
         const GATEWAY_SN_BY_ENTRY = {};
@@ -434,14 +441,17 @@
             const safeName = escapeHtml(name);
             const safeSn = escapeHtml(sn);
             const safeEntryId = escapeHtml(entryId);
+            // 事件属性统一 jsAttr（先 JS 转义后 HTML 转义，v1.6.3）；
+            // SN 不再烘焙进 onclick——按钮触发时实时读 GATEWAY_SN_BY_ENTRY，
+            // 避免渲染时 SN 未知/变更导致把「未知」当真实 SN 发给服务（假成功）
             return '<div class="gateway-item" id="gw-' + safeEntryId + '">' +
                 '<div class="gateway-header"><div>' +
                 '<span class="gateway-name">' + safeName + '</span>' +
                 '<span class="gateway-sn">SN: ' + safeSn + '</span>' +
                 '</div><div>' +
                 '<span class="badge badge-info" id="gw-status-' + safeEntryId + '">检测中</span>' +
-                '<button class="btn btn-success btn-sm" onclick="startPairing(\'' + jsQuote(safeEntryId) + '\',\'' + jsQuote(safeSn) + '\')" style="margin-left:8px;">配对</button>' +
-                '<button class="btn btn-sm" style="background:var(--slate);color:white;" onclick="checkGatewayStatus(\'' + jsQuote(safeEntryId) + '\',\'' + jsQuote(safeSn) + '\')" title="检查网关连接状态">状态</button>' +
+                '<button class="btn btn-success btn-sm" onclick="startPairing(\'' + jsAttr(entryId) + '\')" style="margin-left:8px;">配对</button>' +
+                '<button class="btn btn-sm" style="background:var(--slate);color:white;" onclick="checkGatewayStatus(\'' + jsAttr(entryId) + '\')" title="检查网关连接状态">状态</button>' +
                 '</div></div>' +
                 '<div class="device-list" id="devices-' + safeEntryId + '"><div class="loading"><div class="spinner" style="width:16px;height:16px;"></div></div></div>' +
                 '</div>';
@@ -470,10 +480,9 @@
                 // 更新网关卡片 SN 显示（解决 "SN: 未知"，无 SN 等待模式
                 // 下 entry.data.gateway_sn 为空，但设备注册表中已有真实 SN）。
                 let gwSn = gatewaySn || '';
-                if (!gwSn && gwDevice && gwDevice.identifiers && gwDevice.identifiers.length > 0) {
-                    const ident = gwDevice.identifiers[0];
-                    if (Array.isArray(ident) && ident.length > 1) gwSn = ident[1];
-                }
+                // v1.6.3：占位符「未知」不是真实 SN（调用方可能透传），视为空；
+                // 回退提取按本集成 DOMAIN 匹配 identifiers，不再依赖 [0] 位置假设
+                if (!gwSn || gwSn === '未知') gwSn = deviceSnOf(gwDevice) || '';
                 if (gwSn) {
                     GATEWAY_SN_BY_ENTRY[entryId] = gwSn;
                     const snEl = document.querySelector('#gw-' + entryId + ' .gateway-sn');
@@ -542,10 +551,9 @@
                     else gwDevice = dev;
                 }
                 let gwSn = gatewaySn || '';
-                if (!gwSn && gwDevice && gwDevice.identifiers && gwDevice.identifiers.length > 0) {
-                    const ident = gwDevice.identifiers[0];
-                    if (Array.isArray(ident) && ident.length > 1) gwSn = ident[1];
-                }
+                // v1.6.3：占位符「未知」不是真实 SN（调用方可能透传），视为空；
+                // 回退提取按本集成 DOMAIN 匹配 identifiers，不再依赖 [0] 位置假设
+                if (!gwSn || gwSn === '未知') gwSn = deviceSnOf(gwDevice) || '';
                 if (gwSn) {
                     GATEWAY_SN_BY_ENTRY[entryId] = gwSn;
                     const snEl = document.querySelector('#gw-' + entryId + ' .gateway-sn');
@@ -578,6 +586,8 @@
         }
 
         function updateGatewayStatus(el, status) {
+            // v1.6.3：卡片可能被重渲染移除（await 后 DOM 已换），空引用防护
+            if (!el) return;
             if (status === 'online') { el.className = 'badge badge-ok'; el.textContent = '在线'; }
             else if (status === 'pairing') { el.className = 'badge badge-warn'; el.textContent = '配对中'; }
             else if (status === 'offline') { el.className = 'badge badge-err'; el.textContent = '离线'; }
@@ -587,11 +597,7 @@
         function renderDevice(dev, entryId, states) {
             const devName = dev.name_by_user || dev.name || '未命名设备';
             const devId = dev.id;
-            let sn = '未知';
-            if (dev.identifiers && dev.identifiers.length > 0) {
-                const ident = dev.identifiers[0];
-                if (Array.isArray(ident) && ident.length > 1) sn = ident[1];
-            }
+            const sn = deviceSnOf(dev) || '未知';
             const supportsWindLock = sn.startsWith('5005');
             const coverEntity = findEntityState(dev, 'cover', 'cover', states);
             const onlineEntity = findEntityState(dev, 'binary_sensor', 'online', states);
@@ -608,9 +614,9 @@
             let batteryText = '';
             if (batteryEntity && batteryEntity.state && batteryEntity.state !== 'unknown' && batteryEntity.state !== 'unavailable') {
                 const bUnit = batteryEntity.attributes.unit_of_measurement || 'V';
-                batteryText = batteryEntity.state + bUnit;
+                batteryText = escapeHtml(batteryEntity.state + bUnit);
             } else if (coverEntity && coverEntity.attributes.voltage) {
-                batteryText = coverEntity.attributes.voltage + 'V';
+                batteryText = escapeHtml(coverEntity.attributes.voltage) + 'V';
             }
             const speedMin = speedEntity && speedEntity.attributes.min !== undefined ? speedEntity.attributes.min : 0;
             const speedMax = speedEntity && speedEntity.attributes.max !== undefined ? speedEntity.attributes.max : 100;
@@ -630,45 +636,45 @@
                 '<div class="device-sn">SN: ' + safeSn + '</div>' +
                 '<div class="device-status" id="dev-state-' + safeDevId + '">状态: 加载中' + (batteryText ? ' | 电压: ' + batteryText : '') + '</div></div>' +
                 '<div class="device-actions">' +
-                '<button class="btn btn-sm" style="background:var(--slate);color:white;" onclick="renameDevice(\'' + jsQuote(safeDevId) + '\',\'' + jsQuote(safeEntryId) + '\',\'' + jsQuote(safeName) + '\')" title="重命名设备">改名</button>' +
-                '<button class="btn btn-danger btn-sm" title="移除设备" onclick="controlDevice(\'' + jsQuote(safeDevId) + '\',\'remove\',\'' + jsQuote(safeEntryId) + '\')">移除</button>' +
+                '<button class="btn btn-sm" style="background:var(--slate);color:white;" onclick="renameDevice(\'' + jsAttr(devId) + '\',\'' + jsAttr(entryId) + '\',\'' + jsAttr(devName) + '\')" title="重命名设备">改名</button>' +
+                '<button class="btn btn-danger btn-sm" title="移除设备" onclick="controlDevice(\'' + jsAttr(devId) + '\',\'remove\',\'' + jsAttr(entryId) + '\')">移除</button>' +
                 '</div></div>';
 
             // === 主控制区：开/关/停（5005 含内倒） ===
             html += '<div class="control-section">' +
                 '<div class="control-row">' +
-                '<button class="btn btn-success btn-sm" onclick="controlDevice(\'' + jsQuote(safeDevId) + '\',\'open\',\'' + jsQuote(safeEntryId) + '\')">开</button>' +
-                '<button class="btn btn-danger btn-sm" onclick="controlDevice(\'' + jsQuote(safeDevId) + '\',\'close\',\'' + jsQuote(safeEntryId) + '\')">关</button>' +
-                '<button class="btn btn-warn btn-sm" onclick="controlDevice(\'' + jsQuote(safeDevId) + '\',\'stop\',\'' + jsQuote(safeEntryId) + '\')">停</button>';
+                '<button class="btn btn-success btn-sm" onclick="controlDevice(\'' + jsAttr(devId) + '\',\'open\',\'' + jsAttr(entryId) + '\')">开</button>' +
+                '<button class="btn btn-danger btn-sm" onclick="controlDevice(\'' + jsAttr(devId) + '\',\'close\',\'' + jsAttr(entryId) + '\')">关</button>' +
+                '<button class="btn btn-warn btn-sm" onclick="controlDevice(\'' + jsAttr(devId) + '\',\'stop\',\'' + jsAttr(entryId) + '\')">停</button>';
             if (supportsWindLock) {
-                html += '<button class="btn btn-sm" style="background:#6366f1;color:white;" onclick="controlDevice(\'' + jsQuote(safeDevId) + '\',\'a\',\'' + jsQuote(safeEntryId) + '\')">内倒</button>';
+                html += '<button class="btn btn-sm" style="background:#6366f1;color:white;" onclick="controlDevice(\'' + jsAttr(devId) + '\',\'a\',\'' + jsAttr(entryId) + '\')">内倒</button>';
             }
             html += '</div>';
 
             // === 滑块区：位置 / 速度 / 力度 ===
             html += '<div class="slider-group">' +
                 '<div class="slider-row"><span class="slider-label">位置</span>' +
-                '<input type="range" class="position-slider" min="0" max="100" value="' + (currentPos === '--' ? 0 : currentPos) + '"' +
+                '<input type="range" class="position-slider" min="0" max="100" value="' + (currentPos === '--' ? 0 : escapeHtml(currentPos)) + '"' +
                 ' oninput="this.nextElementSibling.textContent=this.value+\'%\'"' +
-                ' onchange="controlDevicePosition(\'' + jsQuote(safeDevId) + '\', this.value, \'' + jsQuote(safeEntryId) + '\')">' +
-                '<span class="slider-value position-value">' + currentPos + (currentPos === '--' ? '' : '%') + '</span></div>' +
+                ' onchange="controlDevicePosition(\'' + jsAttr(devId) + '\', this.value, \'' + jsAttr(entryId) + '\')">' +
+                '<span class="slider-value position-value">' + escapeHtml(currentPos) + (currentPos === '--' ? '' : '%') + '</span></div>' +
                 '<div class="slider-row"><span class="slider-label">速度</span>' +
-                '<input type="range" class="speed-slider" min="' + speedMin + '" max="' + speedMax + '" value="' + (speedValid ? speedEntity.state : speedMin) + '"' +
-                ' oninput="this.nextElementSibling.textContent=this.value' + (speedUnit ? '+\'' + speedUnit + '\'' : '') + '"' +
-                ' onchange="controlDevice(\'' + jsQuote(safeDevId) + '\',\'set_speed\',\'' + jsQuote(safeEntryId) + '\', this.value)">' +
-                '<span class="slider-value speed-value">' + (speedValid ? speedEntity.state + speedUnit : '--') + '</span></div>' +
+                '<input type="range" class="speed-slider" min="' + escapeHtml(speedMin) + '" max="' + escapeHtml(speedMax) + '" value="' + escapeHtml(speedValid ? speedEntity.state : speedMin) + '"' +
+                ' oninput="this.nextElementSibling.textContent=this.value' + (speedUnit ? '+\'' + escapeHtml(speedUnit) + '\'' : '') + '"' +
+                ' onchange="controlDevice(\'' + jsAttr(devId) + '\',\'set_speed\',\'' + jsAttr(entryId) + '\', this.value)">' +
+                '<span class="slider-value speed-value">' + (speedValid ? escapeHtml(speedEntity.state + speedUnit) : '--') + '</span></div>' +
                 '<div class="slider-row"><span class="slider-label">力度</span>' +
-                '<input type="range" class="strength-slider" min="' + strengthMin + '" max="' + strengthMax + '" value="' + (strengthValid ? strengthEntity.state : strengthMin) + '"' +
-                ' oninput="this.nextElementSibling.textContent=this.value' + (strengthUnit ? '+\'' + strengthUnit + '\'' : '') + '"' +
-                ' onchange="controlDevice(\'' + jsQuote(safeDevId) + '\',\'set_strength\',\'' + jsQuote(safeEntryId) + '\', this.value)">' +
-                '<span class="slider-value strength-value">' + (strengthValid ? strengthEntity.state + strengthUnit : '--') + '</span></div>' +
+                '<input type="range" class="strength-slider" min="' + escapeHtml(strengthMin) + '" max="' + escapeHtml(strengthMax) + '" value="' + escapeHtml(strengthValid ? strengthEntity.state : strengthMin) + '"' +
+                ' oninput="this.nextElementSibling.textContent=this.value' + (strengthUnit ? '+\'' + escapeHtml(strengthUnit) + '\'' : '') + '"' +
+                ' onchange="controlDevice(\'' + jsAttr(devId) + '\',\'set_strength\',\'' + jsAttr(entryId) + '\', this.value)">' +
+                '<span class="slider-value strength-value">' + (strengthValid ? escapeHtml(strengthEntity.state + strengthUnit) : '--') + '</span></div>' +
                 '</div>';
 
             // === 模式切换区（仅 5005）：内倒模式 / 平开模式 ===
             if (supportsWindLock) {
                 html += '<div class="control-row">' +
-                    '<button class="btn btn-sm" style="background:#4f46e5;color:white;flex:1;" onclick="controlDevice(\'' + jsQuote(safeDevId) + '\',\'wind_lock_tilt\',\'' + jsQuote(safeEntryId) + '\')">内倒模式</button>' +
-                    '<button class="btn btn-sm" style="background:#4338ca;color:white;flex:1;" onclick="controlDevice(\'' + jsQuote(safeDevId) + '\',\'wind_lock_flat\',\'' + jsQuote(safeEntryId) + '\')">平开模式</button>' +
+                    '<button class="btn btn-sm" style="background:#4f46e5;color:white;flex:1;" onclick="controlDevice(\'' + jsAttr(devId) + '\',\'wind_lock_tilt\',\'' + jsAttr(entryId) + '\')">内倒模式</button>' +
+                    '<button class="btn btn-sm" style="background:#4338ca;color:white;flex:1;" onclick="controlDevice(\'' + jsAttr(devId) + '\',\'wind_lock_flat\',\'' + jsAttr(entryId) + '\')">平开模式</button>' +
                     '</div>';
             }
 
@@ -752,16 +758,18 @@
             }
         }
 
-        async function startPairing(entryId, gatewaySn) {
+        async function startPairing(entryId) {
             if (!confirm('确定要启动网关配对模式吗？\n配对期间请将子设备靠近网关。')) return;
             const statusEl = document.getElementById('gw-status-' + entryId);
             updateGatewayStatus(statusEl, 'pairing');
+            // v1.6.3：SN 实时读 map，不再用渲染时烘焙的旧值/占位符
+            const gatewaySn = GATEWAY_SN_BY_ENTRY[entryId] || '';
             try {
                 const resp = await haApi('/window_controller_gateway/devices?config_entry_id=' + entryId);
                 if (!resp.ok) throw new Error('HA API ' + resp.status);
                 const devices = await resp.json();
                 const gwDevice = devices.find(d => !d.via_device_id);
-                if (!gwDevice) { showToast('未找到网关设备', 'err'); return; }
+                if (!gwDevice) { showToast('未找到网关设备', 'err'); updateGatewayStatus(statusEl, 'unknown'); return; }
                 const pairResp = await haApi('/services/window_controller_gateway/start_pairing', 'POST', {
                     device_id: gwDevice.id, duration: 60
                 });
@@ -771,23 +779,19 @@
                 setTimeout(() => loadGatewayDevices(entryId, gatewaySn), 60000);
             } catch (e) {
                 showToast('配对启动失败: ' + e.message, 'err');
-                updateGatewayStatus(statusEl, 'online');
+                // v1.6.3：失败不硬标 online（设备可能确实离线），回到未知由下次刷新判定
+                updateGatewayStatus(statusEl, 'unknown');
             }
         }
 
-        async function refreshDevices(entryId, gatewaySn) {
-            showToast('正在刷新设备列表...', 'warn');
-            try {
-                const resp = await haApi('/services/window_controller_gateway/refresh_devices', 'POST', {});
-                if (!resp.ok) throw new Error('HA API ' + resp.status);
-                showToast('刷新命令已发送', 'ok');
-                setTimeout(() => loadGatewayDevices(entryId, gatewaySn), 3000);
-            } catch (e) {
-                showToast('刷新失败: ' + e.message, 'err');
+        async function checkGatewayStatus(entryId) {
+            // v1.6.3：SN 实时读 map；拿不到真实 SN 时明确报错，
+            // 不再把占位符发给服务端静默 no-op 后弹「已发送」假成功
+            const gatewaySn = GATEWAY_SN_BY_ENTRY[entryId] || '';
+            if (!gatewaySn || gatewaySn === '未知') {
+                showToast('该网关 SN 尚未识别，无法检查状态（稍后重试或点配对刷新）', 'err');
+                return;
             }
-        }
-
-        async function checkGatewayStatus(entryId, gatewaySn) {
             showToast('正在检查网关状态...', 'warn');
             try {
                 const resp = await haApi('/services/window_controller_gateway/check_gateway_status', 'POST', { gateway_sn: gatewaySn });
@@ -815,30 +819,18 @@
             }
         }
 
-        async function transferDevice(deviceId, entryId, deviceSn) {
-            const targetSn = prompt('请输入目标网关 SN:\n（将设备 ' + deviceSn + ' 转移到该网关）');
-            if (!targetSn) return;
-            if (!confirm('确定要将设备转移到网关 ' + targetSn + ' 吗？')) return;
-            showToast('正在转移设备...', 'warn');
-            try {
-                const resp = await haApi('/services/window_controller_gateway/transfer_device', 'POST', {
-                    device_id: deviceId, target_gateway_sn: targetSn
-                });
-                if (!resp.ok) throw new Error('HA API ' + resp.status);
-                showToast('转移命令已发送', 'ok');
-                setTimeout(() => loadGatewayDevices(entryId, GATEWAY_SN_BY_ENTRY[entryId] || ''), 3000);
-            } catch (e) {
-                showToast('转移失败: ' + e.message, 'err');
-            }
-        }
+        // v1.6.3：删除 transferDevice/refreshDevices 死代码——
+        // 二者无任何调用点（页面无按钮），且字段有误：transfer_device 服务
+        // 参数为 new_gateway_sn（services.yaml），旧代码发 target_gateway_sn；
+        // refresh_devices 需要必填 device_id，旧代码发空 payload 必然 400。
+        // 需要该功能时按正确字段重新接线，勿直接恢复旧实现。
 
         async function controlDevice(deviceId, command, entryId, value) {
             if (command === 'remove' && !confirm('确定要删除该子设备吗？\n将移除该设备在 HA 中的全部实体。')) return;
             showToast('正在发送命令: ' + command + '...', 'warn');
             try {
-                const resp = await haApi('/states');
-                if (!resp.ok) throw new Error('HA API ' + resp.status);
-                const states = await resp.json();
+                // v1.6.3：删除无用的全量 /states 拉取——本函数只按 devices API
+                // 的实体列表定位；旧实现拉回后从未使用，且 !ok 抛错会拦死控制
                 const devResp = await haApi('/window_controller_gateway/devices?config_entry_id=' + entryId);
                 if (!devResp.ok) throw new Error('HA API ' + devResp.status);
                 const devices = await devResp.json();
@@ -912,9 +904,13 @@
 
         async function controlDevicePosition(deviceId, position, entryId) {
             try {
-                const resp = await haApi('/states');
-                if (!resp.ok) throw new Error('HA API ' + resp.status);
-                const states = await resp.json();
+                // v1.6.3：钳制 0-100 并拒绝 NaN（服务 schema 范围 0-100，越界会被 400 拒绝）
+                const pos = Math.round(Number(position));
+                if (!Number.isFinite(pos) || pos < 0 || pos > 100) {
+                    showToast('无效位置: ' + position, 'err');
+                    return;
+                }
+                // v1.6.3：删除无用的全量 /states 拉取（同上，仅用 devices API 实体列表）
                 const devResp = await haApi('/window_controller_gateway/devices?config_entry_id=' + entryId);
                 if (!devResp.ok) throw new Error('HA API ' + devResp.status);
                 const devices = await devResp.json();
@@ -926,10 +922,10 @@
                     // 集成未注册 cover.set_cover_position（cover.py 无 SET_POSITION 特性标志），
                     // 实际服务为 window_controller_gateway.set_position：字段 device_id（设备注册表ID）+ position
                     const r = await haApi('/services/window_controller_gateway/set_position', 'POST', {
-                        device_id: deviceId, position: parseInt(position)
+                        device_id: deviceId, position: pos
                     });
                     if (!r.ok) throw new Error('HA API ' + r.status);
-                    showToast('位置设置: ' + position + '%', 'ok');
+                    showToast('位置设置: ' + pos + '%', 'ok');
                 } else {
                     showToast('未找到设备 cover 实体', 'warn');
                 }
@@ -951,12 +947,18 @@
                 let releases = null;
                 try {
                     const giteeResp = await fetch(INGRESS_BASE + 'api/gitee/repos/fangwenyi-dev/ha-gateway-plugin/releases?per_page=100');
-                    if (giteeResp.ok) releases = await giteeResp.json();
+                    if (giteeResp.ok) {
+                        const giteeData = await giteeResp.json();
+                        // v1.6.3：Gitee 对无 Release 的仓库返回 200 + []，
+                        // 旧代码把空数组当有效数据，跳过 GitHub 回退直接报「未找到 Release」
+                        releases = (Array.isArray(giteeData) && giteeData.length > 0) ? giteeData : null;
+                    }
                 } catch (e) { /* Gitee 网络异常，尝试 GitHub */ }
                 if (!releases) {
                     const ghResp = await fetch(INGRESS_BASE + 'api/github/repos/fangwenyi-dev/ha-gateway-plugin/releases?per_page=100');
                     if (!ghResp.ok) throw new Error('更新源不可用 (HTTP ' + ghResp.status + ')');
                     releases = await ghResp.json();
+                    if (!Array.isArray(releases)) throw new Error('GitHub 返回数据异常');
                 }
                 // 找版本号最大的 release
                 let latestVersion = '0.0.0';
@@ -1040,13 +1042,21 @@
         // 列表（entity_id/domain/unique_id），这里按 unique_id 精确查找：
         //   unique_id 格式：{gateway_sn}_{device_sn}_{suffix}
         // 用 device_sn（设备 SN）做唯一锚点匹配，天然精确、无前缀歧义。
+        // 从 HA 设备 identifiers 中取本集成的 SN（v1.6.3）：
+        // identifiers 是 (config_entry 命名空间, 值) 的集合，顺序不保证且可能
+        // 含其它命名空间（如 mqtt 发现条目的 (DOMAIN, topic) 形式），
+        // 取 identifiers[0] 是位置假设——必须按本集成 DOMAIN 匹配。
+        function deviceSnOf(dev) {
+            if (!dev || !Array.isArray(dev.identifiers)) return null;
+            for (const ident of dev.identifiers) {
+                if (Array.isArray(ident) && ident.length > 1 && ident[0] === DOMAIN) return ident[1];
+            }
+            return null;
+        }
+
         function findEntityByUniqueId(dev, domain, suffix) {
             if (!dev || !dev.entities || !dev.entities.length) return null;
-            let deviceSn = null;
-            if (dev.identifiers && dev.identifiers.length > 0) {
-                const ident = dev.identifiers[0];
-                if (Array.isArray(ident) && ident.length > 1) deviceSn = ident[1];
-            }
+            const deviceSn = deviceSnOf(dev);
             if (!deviceSn) return null;
             // 常规实体 unique_id 为 {gw}_{device_sn}_{suffix}，锚点 _ {device_sn} _ {suffix}。
             // 删除按钮 special：unique_id 为 {gw}_remove_{device_sn}（remove 在 device_sn 前，
@@ -1079,11 +1089,7 @@
         function findRemoveButtonEntity(dev, devices) {
             const direct = findEntityByUniqueId(dev, 'button', 'remove');
             if (direct) return direct;
-            let deviceSn = null;
-            if (dev && dev.identifiers && dev.identifiers.length > 0) {
-                const ident = dev.identifiers[0];
-                if (Array.isArray(ident) && ident.length > 1) deviceSn = ident[1];
-            }
+            const deviceSn = deviceSnOf(dev);
             if (!deviceSn || !devices || !devices.length) return null;
             const anchor = '_remove_' + deviceSn;
             for (const d of devices) {
@@ -1110,6 +1116,16 @@
             return String(v == null ? '' : v).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
         }
 
+        // onclick/onchange 等事件属性的正确转义顺序（v1.6.3 修复）：
+        // 必须先 jsQuote（JS 层转义单引号）再 escapeHtml（HTML 属性层）。
+        // 反序（jsQuote(escapeHtml(x))）时 `'` 已变成 `&#39;`，jsQuote 找不到
+        // 裸引号可转义，而浏览器解析属性时会把 `&#39;` 还原成 `'` 再交给 JS 引擎
+        // ——单引号字符串被闭合，用户可控值（设备昵称可重命名）可注入任意 JS。
+        // 仅限事件属性；文本节点仍然只用 escapeHtml。
+        function jsAttr(v) {
+            return escapeHtml(jsQuote(v));
+        }
+
         function showToast(message, type) {
             const toast = document.createElement('div');
             toast.className = 'toast toast-' + (type || 'ok');
@@ -1124,8 +1140,13 @@
 
         // ========== 启动 ==========
         init();
-        // 定时无感刷新：只更新状态值，不重建 DOM，避免页面闪烁
-        setInterval(silentRefresh, 30000);
+        // 定时无感刷新：只更新状态值，不重建 DOM，避免页面闪烁。
+        // v1.6.3：页面不可见（后台标签/手机锁屏内嵌页）时跳过——
+        // 每轮每个网关各拉一次全量 /states，隐藏页轮询纯耗 Home Assistant 资源
+        setInterval(() => {
+            if (document.hidden) return;
+            silentRefresh();
+        }, 30000);
     </script>
 </body>
 </html>

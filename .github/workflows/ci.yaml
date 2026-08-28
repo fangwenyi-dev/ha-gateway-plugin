@@ -48,10 +48,22 @@ jobs:
 
       - name: Check JSON files syntax
         run: |
-          for f in $(find . -name "*.json" -not -path "./.git/*"); do
+          for f in $(find . -name "*.json" -not -path "./.git/*" -not -path "./node_modules/*"); do
             python3 -c "import json; json.load(open('$f'))" || exit 1
             echo "✅ $f"
           done
+
+      - name: Python syntax & unit tests (v1.6.3 回归护栏)
+        run: |
+          # 38 个既有单测 + 注册表实参回归测试曾在本地全绿却漏掉 v1.6.0 的
+          # "entity" 字面量回归——CI 从未跑过 pytest，本地验证形同虚设。补齐。
+          # 依赖说明：services.py 真实 import voluptuous（conftest 只假造
+          # homeassistant 包树）；@pytest.mark.asyncio 需要 pytest-asyncio，
+          # 缺失时 pytest 会把 async 测试直接判 error。
+          pip install -q pytest pytest-asyncio voluptuous
+          python3 -m py_compile huijian_mqtt_broker/custom_components/window_controller_gateway/*.py
+          python3 -m py_compile huijian_mqtt_broker/mdns_publisher.py
+          python3 -m pytest huijian_mqtt_broker/tests -q
 
       - name: Verify version consistency
         run: |
@@ -61,10 +73,21 @@ jobs:
           HTML_VER=$(grep "CURRENT_VERSION = '" huijian_mqtt_broker/www/index.html | sed "s/.*CURRENT_VERSION = '\([^']*\)'.*/\1/")
           echo "index.html 版本: $HTML_VER"
           [ "$VERSION" = "$HTML_VER" ] || { echo "❌ 版本不一致"; exit 1; }
-          # 检查 version.json 版本一致
-          JSON_VER=$(python3 -c "import json; print(json.load(open('huijian_mqtt_broker/www/version.json'))['addon_version'])")
-          echo "version.json 版本: $JSON_VER"
-          [ "$VERSION" = "$JSON_VER" ] || { echo "❌ 版本不一致"; exit 1; }
+          # 检查 version.json 两个字段一致（addon_version 与 integration_version
+          # 此前只查前者，manifest.json 完全没查——四处版本一致是 CLAUDE.md 铁律）
+          python3 - "$VERSION" <<'PYEOF'
+          import json, sys
+          want = sys.argv[1]
+          vj = json.load(open('huijian_mqtt_broker/www/version.json'))
+          mf = json.load(open('huijian_mqtt_broker/custom_components/window_controller_gateway/manifest.json'))
+          for label, got in [("version.json.addon_version", vj.get("addon_version")),
+                             ("version.json.integration_version", vj.get("integration_version")),
+                             ("manifest.json.version", mf.get("version"))]:
+              status = "✅" if got == want else "❌"
+              print(f"{status} {label}: {got}")
+              if got != want:
+                  sys.exit(1)
+          PYEOF
           echo "✅ 所有版本号一致: $VERSION"
 
   # ========== 1. 读取版本号 & 准备变更日志 ==========
@@ -167,6 +190,32 @@ jobs:
           image-tags: |
             ${{ needs.prepare.outputs.version }}
             latest
+
+      # v1.6.3：ghcr 包默认 private，匿名拉取 403——CI 推上去的镜像 Supervisor
+      # 根本用不了（config.yaml 无法声明 image），构建纯属白烧 runner。
+      # 用本次构建的 GITHUB_TOKEN（packages:write）把包设为 public；
+      # 成功后即可在 config.yaml 启用 image: ghcr.io/fangwenyi-dev/{arch}-huijian-mqtt-broker。
+      # 失败不阻塞发布（源码构建路径仍可用），但日志必须醒目提示。
+      - name: Make container packages public
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -u
+          FAILED=""
+          for p in "${IMAGE_NAME}" "amd64-${IMAGE_NAME}" "aarch64-${IMAGE_NAME}"; do
+            if curl -fsS -o /dev/null -X PATCH \
+                 -H "Authorization: Bearer ${GH_TOKEN}" \
+                 -H "Accept: application/vnd.github+json" \
+                 "https://api.github.com/users/${GITHUB_ACTOR}/packages/container/${p}/visibility" \
+                 -d '{"visibility":"public"}'; then
+              echo "✅ ${p} 已设为 public"
+            else
+              FAILED="${FAILED} ${p}"
+            fi
+          done
+          if [ -n "${FAILED}" ]; then
+            echo "::warning title=ghcr 包未能公开::以下包设为 public 失败:${FAILED}——config.yaml 的 image: 字段不可启用，用户仍走源码构建路径；可在仓库 Settings 手动公开"
+          fi
 
   # ========== 3. 创建 GitHub Release ==========
   release:

@@ -147,9 +147,11 @@ async def ensure_mqtt_connection(hass: HomeAssistant) -> None:
 
     broker = str(data.get("broker") or "").strip()
     try:
-        port = int(data.get("port") or 1883)
+        # v1.6.3：内置 Broker 固定监听 2022（见 mosquitto.conf/run.sh），
+        # 旧回退值 1883 指向根本不监听的端口，属死配置
+        port = int(data.get("port") or 2022)
     except (TypeError, ValueError):
-        port = 1883
+        port = 2022
     username = data.get("username") or None
     password = data.get("password") or None
 

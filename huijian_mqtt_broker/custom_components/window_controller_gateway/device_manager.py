@@ -265,7 +265,10 @@ class WindowControllerDeviceManager:
                 return
             
             # 快速创建设备注册（返回值不需要：注册表按 identifiers 幂等）
-            device_registry.async_get_or_create(
+            # v1.6.3 收口：registry 写操作一律经 call_registry_method（约定见 utils.py）
+            from .utils import call_registry_method as _call_reg
+            await _call_reg(
+                device_registry.async_get_or_create,
                 config_entry_id=self.entry.entry_id,
                 identifiers={(DOMAIN, device_sn)},
                 name=device_name,
@@ -516,7 +519,10 @@ class WindowControllerDeviceManager:
                     if config_entry:
                         # 直接使用async_get_or_create方法重新创建设备关联
                         # 这种方式可以确保设备被正确关联到新的配置条目和网关
-                        updated_device = device_registry.async_get_or_create(
+                        # v1.6.3 收口：registry 写操作一律经 call_registry_method
+                        from .utils import call_registry_method as _call_reg
+                        updated_device = await _call_reg(
+                            device_registry.async_get_or_create,
                             config_entry_id=self.entry.entry_id,
                             identifiers={(DOMAIN, device_sn)},
                             name=device_name_with_sn,
@@ -578,7 +584,10 @@ class WindowControllerDeviceManager:
                 _LOGGER.debug("开窗器设备添加成功 (内存中): %s (%s)", device_name_with_sn, device_sn)
                 return device_sn
             
-            device = device_registry.async_get_or_create(
+            # v1.6.3 收口：registry 写操作一律经 call_registry_method
+            from .utils import call_registry_method as _call_reg
+            device = await _call_reg(
+                device_registry.async_get_or_create,
                 config_entry_id=self.entry.entry_id,
                 identifiers={(DOMAIN, device_sn)},
                 name=device_name_with_sn,
@@ -957,10 +966,12 @@ class WindowControllerDeviceManager:
         
         # 5. 更新设备注册表中的关联
         try:
+            from .utils import call_registry_method as _call_reg
             device_registry = await self._get_device_registry()
             target_entry = self.hass.config_entries.async_get_entry(target_entry_id)
             if target_entry:
-                device_registry.async_get_or_create(
+                await _call_reg(
+                    device_registry.async_get_or_create,
                     config_entry_id=target_entry_id,
                     identifiers={(DOMAIN, device_sn)},
                     manufacturer=MANUFACTURER,
@@ -973,6 +984,7 @@ class WindowControllerDeviceManager:
         
         # 6. 更新实体关联到目标网关的配置条目
         try:
+            from .utils import call_registry_method as _call_reg
             entity_registry = await self._get_entity_registry()
             device_registry = await self._get_device_registry()
             device = device_registry.async_get_device(identifiers={(DOMAIN, device_sn)})
@@ -982,7 +994,9 @@ class WindowControllerDeviceManager:
                 for entity_id, entity_entry in list(entity_registry.entities.items()):
                     if entity_entry.device_id == device.id:
                         if entity_entry.config_entry_id != target_entry_id:
-                            entity_registry.async_get_or_create(
+                            # v1.6.3 收口：registry 写操作一律经 call_registry_method
+                            await _call_reg(
+                                entity_registry.async_get_or_create,
                                 domain=entity_entry.domain,
                                 platform=DOMAIN,
                                 unique_id=entity_entry.unique_id,
@@ -1149,7 +1163,9 @@ class WindowControllerDeviceManager:
             # 注意：HA 的 async_update_device 没有 config_entry_id 参数，
             # 必须用 async_get_or_create 重建关联（含新 config_entry_id 与 via_device）
             try:
-                device_registry.async_get_or_create(
+                # v1.6.3 收口：registry 写操作一律经 call_registry_method
+                await _call_reg(
+                    device_registry.async_get_or_create,
                     config_entry_id=self.entry.entry_id,
                     identifiers={(DOMAIN, device_sn)},
                     name=device.name,
@@ -1252,8 +1268,9 @@ class WindowControllerDeviceManager:
                     break
 
         # 兜底：仍在注册表中且配置条目未指向新网关的实体，更新其关联
+        # v1.6.3：list() 快照——循环体内有 await，事件循环让出期间注册表可能并发变更
         for platform in self.entity_recreate_platforms:
-            for entity_id, entity_entry in entity_registry.entities.items():
+            for entity_id, entity_entry in list(entity_registry.entities.items()):
                 if entity_entry.platform == DOMAIN and entity_entry.domain == platform:
                     for device_sn in device_sns:
                         # 边界匹配（device_sn 前后均有下划线），避免 SN 前缀重叠误关联
@@ -1399,14 +1416,15 @@ class WindowControllerDeviceManager:
         
         # 清理旧网关设备本身
         try:
+            from .utils import call_registry_method as _call_reg
             device_registry = await self._get_device_registry()
             old_gateway_device = device_registry.async_get_device(
                 identifiers={(DOMAIN, old_gateway_sn)}
             )
             
             if old_gateway_device:
-                # 从设备注册表中删除旧网关设备
-                device_registry.async_remove_device(old_gateway_device.id)
+                # 从设备注册表中删除旧网关设备（v1.6.3 收口：经 call_registry_method）
+                await _call_reg(device_registry.async_remove_device, old_gateway_device.id)
                 _LOGGER.info("已从设备注册表中删除旧网关: %s", old_gateway_sn)
         except Exception as e:
             _LOGGER.error("删除旧网关设备失败: %s", e)
@@ -1506,7 +1524,10 @@ class WindowControllerDeviceManager:
                     continue
 
                 # 恢复设备关联到旧网关：使用旧网关的 config_entry_id 和 via_device
-                device_registry.async_get_or_create(
+                # v1.6.3 收口：registry 写操作一律经 call_registry_method
+                from .utils import call_registry_method as _call_reg
+                await _call_reg(
+                    device_registry.async_get_or_create,
                     config_entry_id=old_gateway_entry_id,
                     identifiers={(DOMAIN, device_sn)},
                     name=device.name,

@@ -155,6 +155,9 @@ class WindowControllerRangeNumber(WindowControllerBaseEntity, NumberEntity):
     def _on_debounce_fired(self):
         """防抖窗口结束：仅发送最后一次设定的值"""
         self._debounce_handle = None
+        # 守卫：实体已被移除（hass=None）时不再创建发送任务（v1.6.3）
+        if self.hass is None:
+            return
         value = self._pending_value
         self._pending_value = None
         if value is None:
@@ -163,6 +166,10 @@ class WindowControllerRangeNumber(WindowControllerBaseEntity, NumberEntity):
 
     async def _send_value(self, value: int) -> None:
         """发送 004 控制命令；成功后持久化设定值，失败则回退显示"""
+        # 守卫：任务已 create_task 出去后实体可能被删除（拖滑块后立即删设备），
+        # 此路径不受 async_will_remove_from_hass 的定时器取消保护（v1.6.3）
+        if self.hass is None:
+            return
         try:
             success = await self._get_mqtt_handler().send_command(
                 self.device_sn, self._command, {self._param_key: value}
@@ -184,6 +191,9 @@ class WindowControllerRangeNumber(WindowControllerBaseEntity, NumberEntity):
 
     def _revert_to_saved(self):
         """发送失败：滑块回退到已保存的设定值（无保存则回到未设定状态）"""
+        # 守卫：实体已移除时 async_write_ha_state 会崩溃（v1.6.3）
+        if self.hass is None:
+            return
         self._attr_native_value = None
         self._update_state()
         self.async_write_ha_state()
@@ -256,8 +266,14 @@ async def async_setup_entry(
             entities_to_add = []
             created = {}
             for cls in _NUMBER_ENTITY_CLASSES:
+                # 会话内幂等短路（v1.6.3）：设备重同步会重复触发本回调，
+                # 重复创建会叠加 add_status_callback（旧实例回调无人摘除 → 泄漏）。
+                # 注册表查重存在 async_add_entities 尚未落库的窗口，故先查会话字典。
+                if cls._entity_suffix in created_numbers.get(device_sn, {}):
+                    _LOGGER.debug("%s实体本会话已创建，跳过: %s", cls._entity_label, device_sn)
+                    continue
                 unique_id = f"{gateway_sn}_{device_sn}_{cls._entity_suffix}"
-                # 兼容新旧 HA 的 entity 查找（新版 async_get_entity_id 为 async 方法——2026-08-28 修复）
+                # 兼容新旧 HA 的 entity 查找（跨会话残留实体查注册表）
                 if await _aget_eid(hass, "number", unique_id) is not None:
                     _LOGGER.debug("%s实体已存在，跳过创建: %s", cls._entity_label, device_sn)
                     continue

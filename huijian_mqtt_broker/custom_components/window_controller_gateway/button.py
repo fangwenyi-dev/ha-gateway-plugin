@@ -409,9 +409,9 @@ async def async_setup_entry(
             # 清理不支持内倒功能设备的多余按钮实体（升级兼容）
             await _cleanup_unsupported_buttons(hass, gateway_sn, device_sn)
             
-            # 检查删除按钮是否已存在（兼容新旧 HA entity 查找）
+            # 检查删除按钮是否已存在（会话内跟踪优先，兼容新旧 HA entity 查找）
             remove_unique_id = f"{gateway_sn}_remove_{device_sn}"
-            if not await _aget_eid(hass, "button", remove_unique_id):
+            if device_sn not in created_remove_buttons and not await _aget_eid(hass, "button", remove_unique_id):
                 remove_button = GatewayDeviceRemoveButton(
                     hass,
                     device_manager,
@@ -477,6 +477,12 @@ async def async_setup_entry(
                     elif remove_button.entity_id:
                         await _call_reg(entity_registry.async_remove, remove_button.entity_id)
                         _LOGGER.info("已从实体注册表中删除设备 %s 的删除按钮", device_name)
+                    else:
+                        # v1.6.3：双路径落空时留痕，避免静默失败无排障线索
+                        _LOGGER.warning(
+                            "删除按钮实体定位失败（unique_id=%s 与 entity_id 均未命中）: %s",
+                            remove_unique_id, device_name
+                        )
                     
                     # 生成并删除其他按钮实体ID
                     button_types = ["open", "stop", "close", "a", "wind_lock_tilt", "wind_lock_flat"]

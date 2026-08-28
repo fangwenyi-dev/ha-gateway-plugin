@@ -6,6 +6,17 @@ import voluptuous as vol
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers import config_validation as cv
 
+# v1.6.3：网关查找失败等"调用即失败"场景必须让 REST 返回 400，
+# 而不是记完日志静默 return（前端收到 200 弹「已发送」假成功 toast）。
+# ServiceValidationError 自 HA 2024.3 起提供；测试假环境缺失时退化为
+# Exception，语义不变（真实 HA 环境恒走官方类，会以非 2xx 反馈给调用方）。
+try:
+    from homeassistant.exceptions import ServiceValidationError
+except ImportError:  # pragma: no cover
+    class ServiceValidationError(Exception):  # type: ignore[no-redef]
+        def __init__(self, message, **kwargs):
+            super().__init__(message)
+
 from .const import (
     DOMAIN,
     CONF_GATEWAY_SN,
@@ -215,7 +226,7 @@ async def handle_check_gateway_status(hass: HomeAssistant, call: ServiceCall) ->
 
     if not device_id and not gateway_sn:
         _LOGGER.error("检查网关状态服务调用失败：未指定设备ID或网关SN")
-        return
+        raise ServiceValidationError("检查网关状态：未指定 device_id 或 gateway_sn")
 
     # 优先使用 device_id 查找，其次使用 gateway_sn
     gateway_data = None
@@ -233,7 +244,9 @@ async def handle_check_gateway_status(hass: HomeAssistant, call: ServiceCall) ->
     if not gateway_data:
         target = device_id or gateway_sn
         _LOGGER.error("未找到对应的网关: %s", target)
-        return
+        # v1.6.3：抛错让 REST 返回 400，前端如实提示；
+        # 静默 return 会让 Web UI 弹「状态检查已发送」假成功
+        raise ServiceValidationError(f"未找到对应的网关: {target}")
 
     _LOGGER.info("收到检查网关状态请求，网关SN: %s", resolved_sn)
     

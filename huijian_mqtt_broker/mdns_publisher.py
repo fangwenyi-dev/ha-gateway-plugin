@@ -65,8 +65,11 @@ def main():
 
     local_ip = get_local_ip()
     if not local_ip:
-        print("[mDNS] 无法确定本机 IP，mDNS 广播可能不完整", file=sys.stderr)
-        local_ip = "127.0.0.1"
+        # v1.6.3：绝不广播 127.0.0.1——旧实现在 IP 探测失败时把回环地址
+        # 宣告为 huijian.local，LoRa 网关解析后对着自己发连接，永远失败
+        # 且毫无排障线索。退出非零，交由 run.sh 看门狗 10 秒后重试。
+        print("[mDNS] 无法确定本机 IP（网络未就绪？），退出等待看门狗重试", file=sys.stderr)
+        sys.exit(1)
 
     print(f"[mDNS] 本机 IP: {local_ip}")
 
@@ -99,17 +102,49 @@ def main():
         print(f"[mDNS] huijian.local → {local_ip}")
         print(f"[mDNS] mDNS 广播中，LoRa 网关可通过 huijian.local:{mqtt_port} 连接")
 
-        # 保持运行，mDNS 广播持续在线
+        # 保持运行，mDNS 广播持续在线。
+        # v1.6.3：每 30 秒复查本机 IP——DHCP 续租/换网后旧地址仍被广播，
+        # 网关会连到失效 IP；IP 变化时注销并按新地址重注册。
         while True:
-            time.sleep(1)
+            time.sleep(30)
+            current = get_local_ip()
+            if current and current != local_ip:
+                print(f"[mDNS] 本机 IP 变化: {local_ip} → {current}，重新注册")
+                try:
+                    zeroconf.unregister_service(service_info)
+                except Exception:
+                    pass
+                service_info = ServiceInfo(
+                    type_="_mqtt._tcp.local.",
+                    name="huijian-mqtt._mqtt._tcp.local.",
+                    addresses=[socket.inet_aton(current)],
+                    port=mqtt_port,
+                    properties={},
+                    server="huijian.local.",
+                )
+                zeroconf.register_service(service_info)
+                local_ip = current
+                print(f"[mDNS] huijian.local → {local_ip}（已更新）")
 
     except KeyboardInterrupt:
         pass
     except Exception as e:
+        # v1.6.3：注册/重注册失败退出非零，让看门狗接管重试
+        # （旧实现吞异常后正常退出 0，广播静默消失且无人重启）
         print(f"[mDNS] 服务注册失败: {e}", file=sys.stderr)
+        try:
+            zeroconf.unregister_service(service_info)
+            zeroconf.close()
+        except Exception:
+            pass
+        sys.exit(2)
     finally:
-        zeroconf.unregister_service(service_info)
-        zeroconf.close()
+        if sys.exc_info()[0] is None or isinstance(sys.exc_info()[1], KeyboardInterrupt):
+            try:
+                zeroconf.unregister_service(service_info)
+                zeroconf.close()
+            except Exception:
+                pass
         print("[mDNS] mDNS 服务已注销")
 
 

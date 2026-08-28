@@ -34,6 +34,24 @@ gh run view <run-id> --repo fangwenyi-dev/ha-gateway-plugin --log-failed
 
 ---
 
+### 回归测试（本地必做）
+CI 的 lint job 已跑 `pytest huijian_mqtt_broker/tests`（v1.6.3 起）。
+本地推送前必须同步跑通：
+
+```bash
+# Windows 侧（WSL python3 无 pytest 时用本机 python）
+cd huijian_mqtt_broker
+/mnt/d/progrem/python/python.exe -m pytest tests -q
+bash -n run.sh                      # shell 语法
+python -m py_compile custom_components/window_controller_gateway/*.py
+```
+
+给 registry 兼容层/事件属性等"静默失效面"加改动时，须补断言实参的测试
+（参考 tests/test_utils.py 的 RecordingEntityRegistry 模式）——
+v1.6.0 的 "entity" 字面量回归曾骗过全部 38 个测试，教训记录于此。
+
+---
+
 ### Gitee Token 配置
 **Gitee 推送使用 OAuth2 token 认证：**
 
@@ -74,6 +92,9 @@ git push gitee main  # 测试推送
 
 ## MQTT 协议
 
+> **端口：2022**。固件 v1.4.2 起 Broker 只监听 2022（1883 已废弃，避与官方
+> Mosquitto 加载项冲突）。mosquitto.conf / run.sh / mDNS / mqtt_bootstrap 全部 2022。
+
 ### 主题
 | 主题 | 方向 |
 |------|------|
@@ -113,19 +134,29 @@ git push gitee main  # 测试推送
 
 ---
 
-## Supvervsor API
+## Supervisor API（2026-08-27 实测定案，v1.6.3 纠偏）
 
 ### 权限要求
 ```yaml
-# config.yaml 必须包含
-homeassistant_api: true  # 访问 HA Core API
-hassio_api: true         # 访问 Supervisor API
+# config.yaml
+homeassistant_api: true   # Web UI 经 /api/ha/ 代理访问 HA Core REST API 的前提
+# hassio_api 已移除：插件零调用 Supervisor 管理 API，权限最小化
 ```
 
-### API 代理路径
-- Supervisor API: `/addons/self/update` (免认证)
-- HA Core API: `/core/api/` (需要 homeassistant_api: true)
-- nginx 代理: `/api/supervisor/` → `http://supervisor/`
+### API 自更新不可行（勿再尝试）
+Supervisor 安全设计禁止加载项通过任何 API 更新自身：
+- `/addons/self/update`、`/store/addons/{slug}/update`：因 REQUEST_FROM 校验恒 **403**
+- `hassio.addon_update`（HA Core 服务）：add-on token 调用实测 **400**
+
+**唯一升级路径**：管理员在 Supervisor「设置 → 加载项 → 慧尖」页面点击「更新」。
+Web UI 的"一键升级"按钮自 v1.5.3 起仅跳转加载项详情页（doUpgrade 无任何 API 调用）。
+本节旧文档「/addons/self/update 免认证」「一键升级依赖 hassio_api」均为错误记载，
+`/api/supervisor/` nginx 死代理已随之删除（run.sh 与 ingress.conf 同步）。
+
+### API 代理路径（现状）
+- HA Core API: nginx `/api/ha/` → `http://supervisor/core/api/`（token 由 nginx 注入，不进浏览器）
+- 更新检查: `/api/gitee/`（默认源，200+空数组自动回退 GitHub）、`/api/github/`（回退）
+- 本地状态: `/api/status`（status.json 探活）、`/api/broker`（连接数）、`/api/version`、`/api/integration`
 
 ---
 

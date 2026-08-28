@@ -181,6 +181,12 @@ async def async_setup_entry(
     async def on_device_added(device_sn: str, device_name: str, device_type: str):
         """设备添加回调，自动创建Cover实体"""
         if device_type == DEVICE_TYPE_WINDOW_OPENER:
+            # 会话内幂等短路（v1.6.3）：设备重同步会重复触发本回调；
+            # async_add_entities 到注册表落库存在窗口，注册表查重挡不住连续事件
+            if device_sn in created_covers:
+                _LOGGER.debug("Cover实体本会话已创建，跳过: %s", device_sn)
+                return
+
             from .utils import async_get_entity_id as _aget_eid
 
             cover_unique_id = f"{gateway_sn}_{device_sn}_cover"

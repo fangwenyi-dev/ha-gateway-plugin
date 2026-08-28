@@ -218,8 +218,12 @@ async def async_setup_entry(
         battery_unique_id = f"{gateway_sn}_{device_sn}_battery"
         status_unique_id = f"{gateway_sn}_{device_sn}_status"
         
-        battery_exists = await _aget_eid(hass, "sensor", battery_unique_id) is not None
-        status_exists = await _aget_eid(hass, "sensor", status_unique_id) is not None
+        # 会话内幂等短路（v1.6.3）：设备重同步会重复触发本回调并叠加
+        # add_status_callback（旧实例回调无人摘除 → 状态多播 + 内存泄漏）；
+        # async_add_entities 到注册表落库存在窗口，注册表查重挡不住连续事件
+        tracked = created_sensors.get(device_sn, {})
+        battery_exists = "battery" in tracked or await _aget_eid(hass, "sensor", battery_unique_id) is not None
+        status_exists = "status" in tracked or await _aget_eid(hass, "sensor", status_unique_id) is not None
         
         if battery_exists and status_exists:
             _LOGGER.info("传感器实体已存在，跳过创建: %s", device_sn)

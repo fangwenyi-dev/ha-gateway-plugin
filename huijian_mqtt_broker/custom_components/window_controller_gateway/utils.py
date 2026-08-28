@@ -45,19 +45,31 @@ def get_entity_registry(hass: HomeAssistant):
 
 
 async def async_get_entity_id(
-    hass: HomeAssistant, platform: str, unique_id: str
+    hass: HomeAssistant, domain: str, unique_id: str
 ) -> Optional[str]:
     """按 unique_id 查找实体的 entity_id（兼容新旧 HA）。
 
+    HA 真实签名：``EntityRegistry.async_get_entity_id(domain, platform, unique_id)``
+    - domain:   实体域（button/cover/number/sensor…，即 entity_id 前缀）
+    - platform: 集成域名（本集成 DOMAIN = window_controller_gateway）
+
     背景（2026-08-28 实测）：HA registry 异步化重构期间，不同版本中
-    ``EntityRegistry.async_get_entity_id()`` 可能是 async（返回 coroutine，
-    await 后为 RegistryEntry）或 sync（直接返回 str）。本函数统一处理，
-    返回 entity_id 字符串；不存在返回 None。
+    该方法可能是 async（返回 coroutine，await 后为 RegistryEntry）或
+    sync（直接返回 str）。本函数统一处理，返回 entity_id 字符串；不存在返回 None。
+
+    v1.6.3 修复：v1.6.0 重构兼容层时曾把第一个实参误写为字面量 "entity"
+    并丢弃调用方传入的实体域，导致索引键 ("entity", DOMAIN, uid) 永不命中、
+    全集成 unique_id 反查恒返回 None（重命名别名/按钮清理/删除按钮自删等
+    13 处调用点静默失效）。参数亦由 platform 更名为 domain 防再犯。
     """
     entity_registry = get_entity_registry(hass)
-    result = await call_registry_method(
-        entity_registry.async_get_entity_id, "entity", DOMAIN, unique_id
-    )
+    try:
+        result = await call_registry_method(
+            entity_registry.async_get_entity_id, domain, DOMAIN, unique_id
+        )
+    except TypeError:
+        # 签名不兼容（极老版本），放弃查找（v1.5.9 原有兜底，v1.6.3 恢复）
+        return None
     if result is None:
         return None
     # 新版返回 RegistryEntry，旧版返回 str
@@ -78,6 +90,12 @@ async def call_registry_method(method, *args, **kwargs):
     本函数统一处理：调用后若返回值是 coroutine 则 await，否则原样返回。
     避免 ``await`` 同步方法（返回 None/RegistryEntry）导致
     "'NoneType' object can't be awaited" / "'RegistryEntry' object can't be awaited"。
+
+    收口约定（v1.6.3）：所有 registry **写操作**（async_get_or_create / async_remove /
+    async_remove_device / async_update_device / async_update_entity /
+    async_get_entity_id 等）一律经本函数调用，不允许直调；纯**只读查询**
+    （device_registry.async_get、async_get_device、entity_registry.entities.get 等）
+    在所有已知版本中均为同步 @callback，可直调，无需经过本函数。
     """
     result = method(*args, **kwargs)
     if hasattr(result, "__await__"):

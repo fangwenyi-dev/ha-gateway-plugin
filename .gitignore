@@ -21,6 +21,12 @@ Thumbs.db
 *.tmp
 *.log
 
+# 会话纪要（本地开发对话记录，体积大且含环境细节，不入库；v1.6.3）
+会话纪要/
+
+# pytest 缓存
+.pytest_cache/
+
 # OpenCode / VibeLoop tool artifacts
 .omo/
 .vibe-loop.json

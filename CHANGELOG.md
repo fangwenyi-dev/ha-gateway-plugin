@@ -14,6 +14,65 @@
 
 
 
+## [1.6.3] - 2026-08-29
+
+### 修复（Critical）
+- **注册表查找实参回归（utils.py）**：v1.6.0 重构把 `async_get_entity_id()`
+  第一实参误写为字面量 `"entity"` 并丢弃调用方传入的实体域，HA 真实签名
+  `(domain, platform, unique_id)` 的索引键永不命中——重命名别名同步、删除按钮
+  精确定位、`_fix_entity_categories`/`_cleanup_unsupported_buttons`、
+  on_device_added 查重等 13 处调用全部静默失效。已还原正确转发（并恢复
+  TypeError 兜底），新增 RecordingEntityRegistry 实参断言单测防再犯
+- **Web UI 事件属性 XSS（index.html）**：onclick/onchange 参数转义顺序颠倒
+  （`jsQuote(escapeHtml(x))` 使 `'` 先变 `&#39;`，浏览器解码后 JS 单引号字符串
+  可被含引号的设备昵称闭合注入）。新增 `jsAttr()=escapeHtml(jsQuote(x))` 用于
+  全部 13 处事件属性；滑块 state/min/max/单位等拼接一并补转义
+- **Broker 崩溃自愈失效（run.sh）**：主循环区 `set -e` 生效下
+  `wait $PID; EXIT_CODE=$?`——wait 非零返回直接杀死脚本，重启逻辑成为死代码。
+  改为 `|| EXIT_CODE=$?`；重启计数按"连续崩溃"语义在稳定运行 60 秒后清零
+  （旧实现生命周期内累计 5 次即永久放弃）
+
+### 修复（High）
+- **number 移除竞态崩溃**：`_send_value`/`_revert_to_saved`/防抖链路补
+  `hass is None` 守卫（拖滑块后立即删设备不再复现 v1.6.1 类 traceback）
+- **实体重复创建**：on_device_added 增加会话内 created_* 字典幂等短路，
+  设备重同步不再叠加 add_status_callback（旧实例回调无人摘除的泄漏路径）
+- **凭据与攻击面收敛**：删除 nginx `/api/supervisor/` 死代理（带完整
+  Supervisor token、前端零调用）及 config.yaml `hassio_api` 权限；
+  mosquitto `log_type all` 降为 warning+error（不再把主题/SN 全量入日志）；
+  删除启动日志打印密码哈希片段；printf 密码文件写法改 `%s` 格式串并校验
+  用户名白名单（含 `%`/`\` 不再损坏哈希）
+- **镜像发布链路**：CI 构建后自动把 ghcr 包设为 public（成功后可在
+  config.yaml 启用 image: 字段）；Dockerfile 构建排除 `__pycache__`/`tests`
+  （新增 .dockerignore）
+
+### 修复（Medium/Low）
+- `/api/status` 由 nginx 硬编码 "running" 改为后台探活循环写 status.json
+  （2022 端口 LISTEN 判活，broker 挂时页面如实显示已停止）
+- mDNS：IP 探测失败不再广播 127.0.0.1（改退出交由看门狗 10 秒重试）；
+  run.sh 增加监督循环（进程异常退出自动重启）；每 30 秒检测 IP 变化自动重注册
+- Web UI：「未知」占位符不再污染网关 SN 映射与状态/配对请求（改实时读
+  GATEWAY_SN_BY_ENTRY）；identifiers 锚点改为按集成 DOMAIN 匹配；
+  删除 controlDevice/controlDevicePosition 中拉而未用的全量 /states 请求
+  （其失败会拦死控制按钮）；set_position 钳制 0-100 并拒绝 NaN；
+  Gitee 无 Release 返回 200+[] 时正确回退 GitHub；页头/页脚版本号不再
+  硬编码过期值；隐藏页暂停 30 秒轮询；删除 refreshDevices/transferDevice
+  死代码（字段有误，注释留修复指引）
+- mqtt_bootstrap 端口回退 1883→2022（1883 根本不监听，死配置）
+- check_gateway_status 服务找不到网关时抛 ServiceValidationError
+  （REST 400），前端不再收到 200 弹「已发送」假成功
+- device_manager：8 处 registry 写操作统一收口 call_registry_method
+  （约定已写入 utils.py docstring）；迁移兜底循环补 list() 快照
+  （循环内有 await，防注册表并发变更）；button 删除按钮双路径落空补 warning 日志
+
+### 工具链
+- CI lint job 新增 pytest 步骤（38→47 项测试；曾整体漏掉 C1 的兼容层
+  现有单测首次进入 CI）；版本一致性检查覆盖 manifest.json 与
+  version.json 双字段；.gitattributes 补 Dockerfile/*.txt/LICENSE LF 规则；
+  .gitignore 排除 会话纪要/ 与 .pytest_cache/
+- CLAUDE.md 纠偏：删除「/addons/self/update 免认证」「一键升级依赖
+  hassio_api」等与实测定案矛盾的记载，补 MQTT 端口 2022 事实与回归测试纪律
+
 ## [1.6.2] - 2026-08-28
 
 ### 修复

@@ -3,6 +3,13 @@
 *.conf text eol=lf
 acl text eol=lf
 
+# Dockerfile / requirements.txt / LICENSE：容器内直接执行或解析，必须 LF。
+# v1.6.3 补规则——此前无覆盖，Windows 端 git（core.autocrlf=true）签出时
+# 翻成 CRLF 再被工具链写回，产生纯换行符 diff 噪音（run.sh 带 \r 会直接起不来）
+Dockerfile text eol=lf
+*.txt text eol=lf
+LICENSE text eol=lf
+
 # Python 文件使用 LF（HA 容器中运行）
 *.py text eol=lf
 

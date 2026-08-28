@@ -1,5 +1,5 @@
 name: 慧尖 LoRa 网关
-version: "1.6.2"
+version: "1.6.3"
 slug: huijian_mqtt_broker
 description: 慧尖开窗器 LoRa 网关一体化插件，内置 Mosquitto Broker + 网关集成，安装即用
 url: 'https://github.com/fangwenyi-dev/ha-gateway-plugin'
@@ -16,14 +16,18 @@ panel_title: 慧尖网关
 # host_network: 容器直接使用主机网络，mosquitto 监听主机 2022 端口
 # mDNS (zeroconf) 广播可到达物理 LAN，LoRa 网关通过 huijian.local 自动发现
 # Python zeroconf 使用普通 UDP socket 广播，不需要设备级访问权限
-# 允许通过 Supervisor /core/api/ 代理访问 HA Core REST API（设备、状态、服务等）
+# 允许经 nginx 注入 token 走 /core/api/ 代理访问 HA Core REST API（设备、状态、服务等）
 # Web UI 的 haApi() 调用依赖此权限，否则返回 401
 homeassistant_api: true
-# 允许 add-on token 访问 Supervisor 管理 API（/addons/*、/supervisor/* 等）
-# Web UI「一键升级」POST /api/supervisor/addons/self/update 依赖此权限，
-# 缺失时 Supervisor 拒绝访问并返回 403 Forbidden
-hassio_api: true
+# v1.6.3：移除 hassio_api。Web UI 已零调用 Supervisor 管理 API——
+# 插件自更新被 Supervisor 安全设计禁止（/addons/self/update 恒 403，实测定案），
+# 旧的「一键升级依赖此权限」注释不实；/api/supervisor/ 死代理已随 run.sh 删除。
+# 权限最小化：不再需要就声明，降低 token 泄露影响面。
 host_network: true
+# image: 未启用——CI 产出的 ghcr 包（fangwenyi-dev/{arch}-huijian-mqtt-broker）
+# 当前 private，加 image 字段会让 Supervisor 拉取 401 直接不可安装。
+# CI 已内置"构建后自动公开包"步骤；包确认为 public 后方可加：
+#   image: ghcr.io/fangwenyi-dev/{arch}-huijian-mqtt-broker
 map:
   - ssl
   - homeassistant_config:rw
@@ -34,6 +38,8 @@ options:
   install_integration: true
 schema:
   username: str
-  password: str
+  # password 类型：Supervisor 配置页输入框脱敏显示（str 会明文回显在设置页）。
+  # 注意 Supervisor 会对已保存值做脱敏存储，UI 显示 * 属正常
+  password: password
   auto_setup_ha_mqtt: bool
   install_integration: bool

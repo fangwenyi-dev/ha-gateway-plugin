@@ -1,0 +1,14 @@
+# 构建上下文 = huijian_mqtt_broker/。不排除 __pycache__ 会把宿主机（Windows
+# WSL 下跑过 pytest 后必然存在）的 .pyc 打进镜像的 /usr/share/custom_components
+# 与 /data 两层，浪费体积且可能带过期字节码。
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# 测试与开发辅助文件不进镜像
+tests/
+.pytest_cache/
+Dockerfile
+.dockerignore

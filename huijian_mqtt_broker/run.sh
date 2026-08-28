@@ -15,6 +15,15 @@ PASSWORD=$(bashio::config 'password')
 AUTO_SETUP=$(bashio::config 'auto_setup_ha_mqtt')
 INSTALL_INTEGRATION=$(bashio::config 'install_integration')
 
+# v1.6.3：用户名白名单校验（H4 根治）——用户名会拼进密码文件/ACL/heredoc，
+# 含 % \ 换行等字符可破坏 printf 输出与 acl 解析；非法则拒绝启动，明确报错
+case "${USERNAME}" in
+    ''|*[!A-Za-z0-9_-]*)
+        echo "[错误] MQTT 用户名非法（仅允许字母/数字/下划线/连字符）: '${USERNAME}'"
+        exit 1
+        ;;
+esac
+
 # host_network 模式：mosquitto 直接监听主机 2022 端口，无需 Docker 端口映射
 MQTT_PORT=2022
 INTERNAL_PORT=2022
@@ -49,7 +58,9 @@ else
     SALT=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n' | head -c 16)
     HASH=$(printf "%s\n" "${PASSWORD}" | openssl passwd -6 -salt "${SALT}" -stdin 2>/dev/null)
     if [ -n "${HASH}" ]; then
-        printf "${USERNAME}:${HASH}\n" > "${PASSWD_FILE}" 2>/dev/null || {
+        # v1.6.3：必须用 printf '%s:%s\n'——直接把变量当格式串时，
+        # 用户名含 % 或反斜杠转义（如 %s、\c）会被 printf 解释，写出损坏的哈希行
+        printf '%s:%s\n' "${USERNAME}" "${HASH}" > "${PASSWD_FILE}" 2>/dev/null || {
             echo "[错误] 无法创建密码文件"
             exit 1
         }
@@ -87,7 +98,7 @@ else
     HA_SALT=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n' | head -c 16)
     HASH=$(printf "%s\n" "${PASSWORD}" | openssl passwd -6 -salt "${HA_SALT}" -stdin 2>/dev/null)
     if [ -n "${HASH}" ]; then
-        printf "${HA_MQTT_USERNAME}:${HASH}\n" >> "${PASSWD_FILE}" 2>/dev/null && HA_MQTT_USER_CREATED=true
+        printf '%s:%s\n' "${HA_MQTT_USERNAME}" "${HASH}" >> "${PASSWD_FILE}" 2>/dev/null && HA_MQTT_USER_CREATED=true
     fi
 fi
 
@@ -101,9 +112,8 @@ chmod 600 "${PASSWD_FILE}"
 chown mosquitto:mosquitto "${PASSWD_FILE}" 2>/dev/null || true
 echo "[OK] 密码文件权限已设置 (600, mosquitto:mosquitto)"
 
-# 显示密码文件内容（诊断用，生产环境可移除）
-echo "[诊断] 密码文件内容:"
-head -1 "${PASSWD_FILE}" 2>/dev/null | sed 's/\(.\{20\}\).*/\1.../' || true
+# v1.6.3：删除"密码文件内容诊断"打印——即使命令端截断，前 20 字符
+# 已足够泄露盐值与算法参数，属凭据外泄面
 
 # ---------- 1b. 动态生成 ACL 文件 ----------
 ACL_FILE="/etc/mosquitto/acl"
@@ -198,7 +208,9 @@ cat > /etc/nginx/http.d/ingress.conf <<NGINXEOF
 server {
     listen 8099;
 
-    # host_network 模式：允许 Supervisor/HA Core (172.30.32.x) 和本地回环
+    # host_network 模式：允许 Supervisor/HA Core (172.30.32.x) 和本地回环。
+    # TODO(设备上验证一次 ingress 实际源 IP 后可收紧为具体 IP；当前 supervisor
+    # 的 hassio 网桥源地址随部署形态变化，贸然收窄会整站 403)
     allow 127.0.0.1;
     allow 172.30.32.0/24;
     deny all;
@@ -221,25 +233,19 @@ server {
         proxy_ssl_verify off;
     }
 
-    # /api/supervisor/ → Supervisor API（插件更新、重启等）
-    # 注意：Supervisor 路由是 /addons/{slug}/...，不是 /supervisor/addons/...
-    # proxy_pass 末尾的 / 会替换 location 匹配的前缀
-    location /api/supervisor/ {
-        proxy_pass http://${SUPERVISOR_HOST}/;
-        proxy_set_header Authorization "Bearer ${HA_SUPERVISOR_TOKEN}";
-        proxy_set_header Content-Type "application/json";
-        proxy_set_header Accept "application/json";
-        # 一键升级（/addons/self/update）需要下载新镜像，可能耗时数分钟；
-        # 120s 会超时中断升级（Supervisor 后台继续但前端显示失败）
-        proxy_read_timeout 600s;
-        proxy_connect_timeout 5s;
-        proxy_ssl_verify off;
-    }
+    # v1.6.3：删除 /api/supervisor/ 死代理。Supervisor 安全设计禁止插件经 API
+    # 自我更新（/addons/self/update 恒 403，2026-08-27 实测定案），Web UI
+    # 自 v1.5.3 起零调用；留着只是把一个带完整 Supervisor token 的通道
+    # 暴露给同网段其它加载项容器，纯攻击面。
 
-    # MQTT Broker 状态检测 — nginx 直接返回，无需调用 HA API
-    location /api/status {
+    # MQTT Broker 状态检测 — 由后台探活循环写 status.json（约 5 秒粒度），
+    # 真实反映 mosquitto 存活。v1.6.3 前此处是 nginx return 硬编码
+    # "running"，broker 崩溃期间页面仍显示运行中，掩盖故障。
+    # 文件不存在（循环未就绪/容器早期）返回 404，前端显示 "HTTP 404" 异常态
+    location = /api/status {
         add_header Content-Type application/json always;
-        return 200 '{"status":"running","broker":"mosquitto","port":${MQTT_PORT},"internal_port":${INTERNAL_PORT}}';
+        root /usr/share/nginx/html;
+        try_files /status.json =404;
     }
 
     location /api/version {
@@ -295,11 +301,14 @@ echo "[mDNS] 配置 mDNS 广播..."
 set +e
 
 # 清理函数：mosquitto 退出时同时清理 mDNS 后台进程
+# v1.6.3：mDNS 现在是看门狗子 shell（MDNS_PID）+ 其 python 子进程，
+# kill 子 shell 不会带走 python，须一并 pkill，否则残留进程继续占用 5353
 MDNS_PID=""
 cleanup_mdns() {
     if [ -n "${MDNS_PID}" ]; then
         kill "${MDNS_PID}" 2>/dev/null
     fi
+    pkill -f mdns_publisher.py 2>/dev/null
 }
 trap cleanup_mdns EXIT INT TERM
 
@@ -317,21 +326,35 @@ trap cleanup_mdns EXIT INT TERM
 
 echo "[mDNS] 使用 Python zeroconf 广播 mDNS 服务..."
 
-# 启动 mDNS 广播脚本（后台运行）
+# 启动 mDNS 广播（v1.6.3 看门狗监督）：
+# 旧实现单发启动 + 3 秒存活检查，进程因网络抖动/IP 变更/异常退出后
+# 广播永久消失（LoRa 网关再也发现不了 huijian.local），且无人重启。
+# 现由子 shell 循环监督：异常退出 10 秒后重启；正常退出（主动停止）则结束。
 if [ -f /usr/bin/mdns_publisher.py ] && command -v python3 >/dev/null 2>&1; then
-    python3 /usr/bin/mdns_publisher.py "${MQTT_PORT}" &
+    (
+        while true; do
+            python3 /usr/bin/mdns_publisher.py "${MQTT_PORT}"
+            RC=$?
+            if [ "${RC}" -eq 0 ]; then
+                echo "[mDNS] 广播进程正常退出，不再重启"
+                break
+            fi
+            echo "[mDNS] 广播进程异常退出 (code ${RC})，10 秒后重启..."
+            sleep 10
+        done
+    ) &
     MDNS_PID=$!
-    echo "[mDNS] mDNS 广播已启动 (PID: ${MDNS_PID})"
+    echo "[mDNS] mDNS 广播已启动 (看门狗 PID: ${MDNS_PID})"
 
     # 等待 mDNS 服务注册（zeroconf 需要几秒初始化）
     sleep 3
 
-    # 检查进程是否存活
+    # 检查看门狗是否存活（python 崩溃重启间隔内看门狗仍在循环）
     if ! kill -0 "${MDNS_PID}" 2>/dev/null; then
-        echo "[mDNS] mDNS 进程已退出，检查 zeroconf 是否安装正确"
+        echo "[mDNS] mDNS 看门狗已退出，检查 zeroconf 是否安装正确"
         MDNS_PID=""
     else
-        echo "[mDNS] mDNS 服务已注册，广播中"
+        echo "[mDNS] mDNS 广播中（异常时自动重启）"
         echo "[mDNS] LoRa 网关可通过 huijian.local:${MQTT_PORT} 连接"
     fi
 else
@@ -484,15 +507,27 @@ else
     rm -f "${HA_CONFIG_DIR}/window_controller_gateway_mqtt_bootstrap.json" 2>/dev/null || true
 fi
 
-# ---------- 7b. Broker 连接数后台采集（Web UI 本地读取，不依赖 HA API） ----------
-# 每 10 秒统计 :2022 上的 ESTABLISHED 连接数写入 broker_status.json。
-# exec mosquitto 后此子进程继续运行（独立进程，被 init 接管）。
+# ---------- 7b. Broker 连接数与存活状态后台采集（Web UI 本地读取，不依赖 HA API） ----------
+# 每 5 秒：统计 :2022 上的 ESTABLISHED 连接数写 broker_status.json；
+# 并写 status.json（nginx /api/status 的真实数据源，v1.6.3 取代硬编码 return 200）。
+# 存活判据用 2022 端口 LISTEN（而非 kill -0 PID——PID 在重启后会变，且
+# mosquitto 僵而不死时 PID 存在但端口已丢），并附当前 PID 便于排障。
+# exec 替换主进程后此子进程继续运行（独立进程，被 init 接管）。
 (
     while true; do
         CLIENTS=$(netstat -tn 2>/dev/null | grep ':2022' | grep -c 'ESTABLISHED' || true)
         jq -n --argjson c "${CLIENTS:-0}" '{clients:$c, updated:(now|todate)}' \
             > /usr/share/nginx/html/broker_status.json 2>/dev/null || true
-        sleep 10
+        if netstat -tln 2>/dev/null | grep -q ':2022 '; then
+            RUNNING=true
+        else
+            RUNNING=false
+        fi
+        PID_NOW=$(cat /run/mosquitto.pid 2>/dev/null || echo 0)
+        jq -n --argjson r "${RUNNING}" --argjson p "${PID_NOW:-0}" \
+            '{status:(if $r then "running" else "stopped" end), running:$r, broker:"mosquitto", port:2022, pid:$p, updated:(now|todate)}' \
+            > /usr/share/nginx/html/status.json 2>/dev/null || true
+        sleep 5
     done
 ) &
 
@@ -502,6 +537,7 @@ echo "[运行] Broker 以前台模式运行..."
 # 先后台启动 mosquitto
 mosquitto -c /etc/mosquitto/mosquitto.conf &
 MOSQUITTO_PID=$!
+echo "${MOSQUITTO_PID}" > /run/mosquitto.pid
 echo "[运行] Mosquitto PID: ${MOSQUITTO_PID}"
 
 # 等待 Mosquitto 进程启动（最多5秒）
@@ -509,13 +545,15 @@ MOSQUITTO_READY=false
 for i in 1 2 3 4 5; do
     if ! kill -0 "${MOSQUITTO_PID}" 2>/dev/null; then
         echo "[错误] Mosquitto 进程已退出（PID=${MOSQUITTO_PID}）"
-        echo "[诊断] 检查密码文件和 ACL 文件格式..."
-        cat /etc/mosquitto/passwd 2>/dev/null | head -1 || echo "  密码文件不存在"
-        cat /etc/mosquitto/acl 2>/dev/null || echo "  ACL 文件不存在"
+        echo "[诊断] 检查密码文件与 ACL 文件是否存在/非空（不打印内容，防哈希入日志）"
+        [ -s /etc/mosquitto/passwd ] && echo "  passwd: 存在且非空" || echo "  passwd: 缺失或为空 ← 重点排查"
+        [ -s /etc/mosquitto/acl ] && echo "  acl: 存在且非空" || echo "  acl: 缺失或为空 ← 重点排查"
         exit 1
     fi
     # 尝试 TCP 连接到 localhost:2022
-    if timeout 1 sh -c "echo >/dev/tcp/127.0.0.1/2022" 2>/dev/null; then
+    # v1.6.3：/dev/tcp 是 bashism，base 镜像的 sh（BusyBox ash）不支持，
+    # 旧写法恒失败、就绪检查形同虚设——改用 bash -c
+    if timeout 1 bash -c "echo >/dev/tcp/127.0.0.1/2022" 2>/dev/null; then
         MOSQUITTO_READY=true
         break
     fi
@@ -534,34 +572,44 @@ if command -v mosquitto_pub >/dev/null 2>&1; then
         echo "[OK] Mosquitto MQTT 协议验证通过（mosquitto_pub 成功）"
     else
         echo "[警告] mosquitto_pub 测试失败（broker 可能仍在初始化或密码配置有误）"
-        echo "[诊断] 检查 /etc/mosquitto/passwd 格式:"
-        head -2 /etc/mosquitto/passwd 2>/dev/null | sed 's/^/  /' || echo "  文件不存在"
+        # v1.6.3：只打印用户名与行数（cut 取冒号前），不再 head 完整哈希行
+        echo "[诊断] /etc/mosquitto/passwd 用户: $(cut -d: -f1 /etc/mosquitto/passwd 2>/dev/null | tr '\n' ' ' || echo 文件不存在)"
         echo "[诊断] mosquitto.conf 内容:"
         cat /etc/mosquitto/mosquitto.conf 2>/dev/null | sed 's/^/  /'
     fi
 fi
 
-# 将后台 mosquitto 转为前台运行：
-# wait 阻塞等待 mosquitto 退出；mosquitto 退出后 trap cleanup_mdns 自动清理 avahi-publish。
-# 如果 mosquitto 异常退出（wait 返回非零），重启 mosquitto 而非 exec 替换，
-# 确保当前 shell 保持存活以执行 trap 清理逻辑。
+# 等待 Mosquitto 退出并自愈：
+# mosquitto 退出后 trap cleanup_mdns 自动清理 mDNS 后台进程相关资源。
 # Bug2 修复：限制连续重启次数。mosquitto 因配置损坏（passwd/acl 格式错误等）
 # 反复崩溃时，无限重启会刷屏且无助于恢复；连续 MAX_MOSQUITTO_RESTARTS 次
 # 崩溃后退出并保留现场（日志/配置），便于排查。
+# C3 修复（v1.6.3）：主循环区 set -e 是生效的（343 行恢复），而崩溃退出时
+# `wait` 返回非零——旧写法 `wait ...; EXIT_CODE=$?` 的第二条语句永远执行不到，
+# 脚本在到达重启逻辑前就被 set -e 杀死，"自愈"实为死代码。改为 `|| EXIT_CODE=$?`。
+# 计数重置（v1.6.3）：旧实现计数只增不减，进程生命周期内累计 5 次崩溃
+# （哪怕间隔数月）即永久放弃；现按"连续"语义——上次运行满 60 秒即视为
+# 已恢复稳定，计数清零，符合 MAX_MOSQUITTO_RESTARTS 的设计初衷。
 MAX_MOSQUITTO_RESTARTS=5
 MOSQUITTO_RESTART_COUNT=0
 while true; do
-    wait "${MOSQUITTO_PID}" 2>/dev/null
-    EXIT_CODE=$?
+    WAIT_START=$(date +%s)
+    EXIT_CODE=0
+    wait "${MOSQUITTO_PID}" 2>/dev/null || EXIT_CODE=$?
+    RUN_SECS=$(( $(date +%s) - WAIT_START ))
+    if [ "${RUN_SECS}" -ge 60 ]; then
+        MOSQUITTO_RESTART_COUNT=0
+    fi
     MOSQUITTO_RESTART_COUNT=$((MOSQUITTO_RESTART_COUNT + 1))
     if [ "${MOSQUITTO_RESTART_COUNT}" -gt "${MAX_MOSQUITTO_RESTARTS}" ]; then
         echo "[错误] Mosquitto 连续退出 ${MAX_MOSQUITTO_RESTARTS} 次（最近 exit code: ${EXIT_CODE}），停止重启"
         echo "[诊断] 请检查 /etc/mosquitto/mosquitto.conf、passwd、acl 配置后手动重启插件"
         exit 1
     fi
-    echo "[运行] Mosquitto 已退出 (exit code: ${EXIT_CODE})，5 秒后重启 (${MOSQUITTO_RESTART_COUNT}/${MAX_MOSQUITTO_RESTARTS})..."
+    echo "[运行] Mosquitto 已退出 (exit code: ${EXIT_CODE}，本次运行 ${RUN_SECS}s)，5 秒后重启 (${MOSQUITTO_RESTART_COUNT}/${MAX_MOSQUITTO_RESTARTS})..."
     sleep 5
     mosquitto -c /etc/mosquitto/mosquitto.conf &
     MOSQUITTO_PID=$!
+    echo "${MOSQUITTO_PID}" > /run/mosquitto.pid
     echo "[运行] Mosquitto 已重启 (PID: ${MOSQUITTO_PID})"
 done
