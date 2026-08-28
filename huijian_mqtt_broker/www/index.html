@@ -41,15 +41,15 @@
         /* ===== Header ===== */
         .header {
             background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
-            color: white; padding: 22px 26px; border-radius: var(--radius); margin-bottom: 14px;
+            color: white; padding: 14px 18px; border-radius: var(--radius); margin-bottom: 10px;
             display: flex; justify-content: space-between; align-items: center;
-            box-shadow: var(--shadow-lg);
+            box-shadow: var(--shadow-md);
         }
-        .header h1 { font-size: 21px; font-weight: 700; letter-spacing: -0.02em; }
-        .header .ver { font-size: 12px; opacity: 0.8; margin-top: 3px; }
+        .header h1 { font-size: 17px; font-weight: 700; letter-spacing: -0.02em; }
+        .header .ver { font-size: 11px; opacity: 0.8; margin-top: 2px; }
         .header .actions { display: flex; gap: 8px; }
         .btn {
-            padding: 8px 18px; border-radius: 8px; border: none; font-size: 13px;
+            padding: 8px 16px; border-radius: 8px; border: none; font-size: 13px;
             cursor: pointer; font-weight: 600; transition: all .15s; display: inline-flex;
             align-items: center; gap: 5px; white-space: nowrap;
         }
@@ -62,33 +62,33 @@
         .btn-danger:hover { background: #dc2626; box-shadow: 0 2px 8px rgba(239,68,68,0.3); }
         .btn-warn { background: var(--yellow); color: white; }
         .btn-warn:hover { background: #d97706; }
-        .btn-sm { padding: 6px 13px; font-size: 12px; }
+        .btn-sm { padding: 8px 14px; font-size: 12px; min-height: 36px; }
         .btn:disabled { opacity: 0.4; cursor: not-allowed; }
         /* ===== Card ===== */
         .card {
-            background: var(--card-bg); border-radius: var(--radius); padding: 18px 20px;
-            box-shadow: var(--shadow); margin-bottom: 14px;
+            background: var(--card-bg); border-radius: var(--radius); padding: 14px 16px;
+            box-shadow: var(--shadow); margin-bottom: 10px;
             border: 1px solid var(--border);
         }
         .card-title {
-            font-size: 12px; font-weight: 700; color: var(--text-light); margin-bottom: 16px;
+            font-size: 11px; font-weight: 700; color: var(--text-light); margin-bottom: 12px;
             text-transform: uppercase; letter-spacing: 0.06em;
             display: flex; align-items: center; gap: 6px;
         }
         /* ===== Status Grid ===== */
-        .status-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+        .status-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
         .status-item {
             display: flex; flex-direction: column; align-items: center; text-align: center;
-            padding: 16px 8px; border-radius: var(--radius-sm); background: var(--bg); transition: all .2s;
+            padding: 10px 6px; border-radius: var(--radius-sm); background: var(--bg); transition: all .2s;
             border: 1px solid transparent;
         }
         .status-item:hover { border-color: var(--border); }
-        .status-item .dot { width: 11px; height: 11px; border-radius: 50%; margin-bottom: 10px; }
+        .status-item .dot { width: 10px; height: 10px; border-radius: 50%; margin-bottom: 6px; }
         .dot-ok { background: var(--green); box-shadow: 0 0 0 4px var(--green-bg); }
         .dot-err { background: var(--red); box-shadow: 0 0 0 4px var(--red-bg); }
         .dot-warn { background: var(--yellow); box-shadow: 0 0 0 4px var(--yellow-bg); }
-        .status-item .label { font-size: 11px; color: var(--text-muted); margin-bottom: 3px; }
-        .status-item .value { font-size: 14px; font-weight: 700; }
+        .status-item .label { font-size: 10px; color: var(--text-muted); margin-bottom: 2px; }
+        .status-item .value { font-size: 13px; font-weight: 700; }
         /* ===== Gateway ===== */
         .gateway-item {
             border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 16px; margin-bottom: 12px;
@@ -110,7 +110,8 @@
         .device-name { font-size: 14px; font-weight: 600; }
         .device-sn { font-size: 10px; color: var(--text-light); font-family: "SF Mono", Consolas, monospace; }
         .device-status { font-size: 11px; margin-top: 3px; color: var(--text-muted); }
-        .device-controls { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; }
+        .device-controls { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+        .device-btn-group .btn-sm { flex: 1; min-width: 64px; text-align: center; justify-content: center; }
         .position-slider { width: 90px; height: 22px; }
         /* ===== Device online dot ===== */
         .dev-name { display: flex; align-items: center; gap: 6px; }
@@ -182,10 +183,25 @@
         .empty-state { text-align: center; padding: 36px; color: var(--text-muted); }
         .empty-state .icon { font-size: 40px; margin-bottom: 10px; }
         .empty-state .hint { font-size: 12px; margin-top: 8px; color: var(--text-light); }
-        @media (max-width: 520px) {
-            .status-grid { grid-template-columns: 1fr; }
+        @media (max-width: 640px) {
+            body { padding: 8px; }
+            .header { padding: 12px 14px; }
+            .header h1 { font-size: 16px; }
+            .header .actions { gap: 6px; }
+            .header .btn { padding: 6px 12px; font-size: 12px; }
+            .status-grid { grid-template-columns: repeat(3, 1fr); gap: 6px; }
+            .status-item { padding: 8px 4px; }
+            .status-item .dot { width: 8px; height: 8px; margin-bottom: 4px; }
+            .status-item .label { font-size: 9px; }
+            .status-item .value { font-size: 11px; }
             .conn-grid { grid-template-columns: 1fr; }
-            .header { flex-direction: column; gap: 12px; align-items: flex-start; }
+            .device-item { padding: 10px 12px; }
+            .device-controls { gap: 6px; }
+            .device-controls .btn-sm { flex: 1; min-width: 60px; text-align: center; justify-content: center; }
+            .position-slider { width: 100%; min-width: 120px; }
+            .speed-slider, .strength-slider { width: 100%; min-width: 100px; }
+            .gateway-header { flex-wrap: wrap; gap: 8px; }
+            .gateway-name { font-size: 15px; }
         }
     </style>
 </head>
@@ -527,34 +543,38 @@
             const strengthMax = strengthEntity && strengthEntity.attributes.max !== undefined ? strengthEntity.attributes.max : 100;
             const strengthValid = strengthEntity && strengthEntity.state && strengthEntity.state !== 'unknown' && strengthEntity.state !== 'unavailable';
             const strengthUnit = (strengthEntity && strengthEntity.attributes.unit_of_measurement) || '';
-            let controls = '<div class="device-controls">' +
+            let controls = '<div class="device-controls device-btn-group">' +
                 '<button class="btn btn-success btn-sm" onclick="controlDevice(\'' + jsQuote(safeDevId) + '\',\'open\',\'' + jsQuote(safeEntryId) + '\')">开</button>' +
                 '<button class="btn btn-danger btn-sm" onclick="controlDevice(\'' + jsQuote(safeDevId) + '\',\'close\',\'' + jsQuote(safeEntryId) + '\')">关</button>' +
                 '<button class="btn btn-warn btn-sm" onclick="controlDevice(\'' + jsQuote(safeDevId) + '\',\'stop\',\'' + jsQuote(safeEntryId) + '\')">停</button>' +
+                '</div>';
+            controls += '<div class="device-controls" style="margin-top:4px;">' +
                 '<input type="range" class="position-slider" min="0" max="100" value="' + (currentPos === '--' ? 0 : currentPos) + '"' +
                 ' oninput="this.nextElementSibling.textContent=this.value+\'%\'"' +
                 ' onchange="controlDevicePosition(\'' + jsQuote(safeDevId) + '\', this.value, \'' + jsQuote(safeEntryId) + '\')">' +
                 '<span style="font-size:11px;min-width:30px;">' + currentPos + (currentPos === '--' ? '' : '%') + '</span>' +
-                '<button class="btn btn-danger btn-sm" style="margin-left:4px;" title="移除设备" onclick="controlDevice(\'' + jsQuote(safeDevId) + '\',\'remove\',\'' + jsQuote(safeEntryId) + '\')">移除</button></div>';
-            // 速度 / 力度滑块
+                '<button class="btn btn-danger btn-sm" title="移除设备" onclick="controlDevice(\'' + jsQuote(safeDevId) + '\',\'remove\',\'' + jsQuote(safeEntryId) + '\')">移除</button></div>';
+            // 速度滑块
             controls += '<div class="device-controls" style="margin-top:4px;">' +
                 '<span class="slider-label">速度</span>' +
                 '<input type="range" class="speed-slider" min="' + speedMin + '" max="' + speedMax + '" value="' + (speedValid ? speedEntity.state : speedMin) + '"' +
                 (speedEntity ? '' : ' disabled') +
                 ' oninput="this.nextElementSibling.textContent=this.value' + (speedUnit ? '+\'' + speedUnit + '\'' : '') + '"' +
                 ' onchange="controlDevice(\'' + jsQuote(safeDevId) + '\',\'set_speed\',\'' + jsQuote(safeEntryId) + '\', this.value)">' +
-                '<span class="slider-value speed-value">' + (speedValid ? speedEntity.state + speedUnit : '--') + '</span>' +
-                '<span class="slider-label" style="margin-left:8px;">力度</span>' +
+                '<span class="slider-value speed-value">' + (speedValid ? speedEntity.state + speedUnit : '--') + '</span></div>';
+            // 力度滑块
+            controls += '<div class="device-controls" style="margin-top:4px;">' +
+                '<span class="slider-label">力度</span>' +
                 '<input type="range" class="strength-slider" min="' + strengthMin + '" max="' + strengthMax + '" value="' + (strengthValid ? strengthEntity.state : strengthMin) + '"' +
                 (strengthEntity ? '' : ' disabled') +
                 ' oninput="this.nextElementSibling.textContent=this.value' + (strengthUnit ? '+\'' + strengthUnit + '\'' : '') + '"' +
                 ' onchange="controlDevice(\'' + jsQuote(safeDevId) + '\',\'set_strength\',\'' + jsQuote(safeEntryId) + '\', this.value)">' +
                 '<span class="slider-value strength-value">' + (strengthValid ? strengthEntity.state + strengthUnit : '--') + '</span></div>';
             if (supportsWindLock) {
-                controls += '<div class="device-controls" style="margin-top:4px;">' +
+                controls += '<div class="device-controls device-btn-group" style="margin-top:4px;">' +
                     '<button class="btn btn-sm" style="background:#6366f1;color:white;" onclick="controlDevice(\'' + jsQuote(safeDevId) + '\',\'a\',\'' + jsQuote(safeEntryId) + '\')">内倒</button>' +
-                    '<button class="btn btn-sm" style="background:#4f46e5;color:white;margin-left:4px;" onclick="controlDevice(\'' + jsQuote(safeDevId) + '\',\'wind_lock_tilt\',\'' + jsQuote(safeEntryId) + '\')">内倒模式</button>' +
-                    '<button class="btn btn-sm" style="background:#4338ca;color:white;margin-left:4px;" onclick="controlDevice(\'' + jsQuote(safeDevId) + '\',\'wind_lock_flat\',\'' + jsQuote(safeEntryId) + '\')">平开模式</button>' +
+                    '<button class="btn btn-sm" style="background:#4f46e5;color:white;" onclick="controlDevice(\'' + jsQuote(safeDevId) + '\',\'wind_lock_tilt\',\'' + jsQuote(safeEntryId) + '\')">内倒模式</button>' +
+                    '<button class="btn btn-sm" style="background:#4338ca;color:white;" onclick="controlDevice(\'' + jsQuote(safeDevId) + '\',\'wind_lock_flat\',\'' + jsQuote(safeEntryId) + '\')">平开模式</button>' +
                     '</div>';
             }
             // 重命名按钮
