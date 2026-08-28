@@ -191,22 +191,27 @@ jobs:
             ${{ needs.prepare.outputs.version }}
             latest
 
-      # v1.6.4 定案：GitHub【没有】改变 package visibility 的 REST API——
-      # PUT/PATCH × /user/ 与 /users/{owner}/ 四种组合实测全 404（端点不存在，
-      # 非 token 权限问题；gh auth status 确认 token 已含 write:packages 依旧 404）。
-      # 唯一途径是 Web UI：Settings → Packages → 选中包 → Danger Zone →
-      # Change visibility → Public。CI 只能提示，无法代办。
-      - name: Check package visibility (manual one-time step)
+      # v1.6.4 定案（实验实锤）：GitHub【没有】visibility 变更 API——
+      # REST PUT/PATCH × /user/ 与 /users/{owner}/ 全 404、GraphQL 公开
+      # schema 无该 mutation（updateV3RegistryPackage 已被移除）。
+      # 但 Actions 用 GITHUB_TOKEN 首推的包【继承仓库可见性】：public 仓库
+      # ⇒ 新包自动 public（amd64 删包重建实测 anon 200）。历史包因创建时
+      # 走了本地 PAT 推送被永久定死 private，修复手段=删包+重推：
+      #   gh api -X DELETE /user/packages/container/<pkg>
+      # 探测注意：token 必须带 service=ghcr.io 且 manifest GET 要带
+      # OCI/idx Accept 头，否则 audience 错 token 会得到误导性 404。
+      - name: Check package visibility
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           set -u
           FAILED=""
           for p in "${IMAGE_NAME}" "amd64-${IMAGE_NAME}" "aarch64-${IMAGE_NAME}"; do
-            # 匿名 manifest 探测：200=public 可用；403/404=仍 private
-            T=$(curl -fsS "https://ghcr.io/token?scope=repository:${GITHUB_REPOSITORY_OWNER}/$p:pull" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p' || true)
-            C=$(curl -s -o /dev/null -w "%{http_code}" "https://ghcr.io/v2/${GITHUB_REPOSITORY_OWNER}/$p/manifests/${VERSION:-latest}" -H "Authorization: Bearer ${T:-none}" || echo 000)
+            T=$(curl -fsS "https://ghcr.io/token?service=ghcr.io&scope=repository:${GITHUB_REPOSITORY_OWNER}/$p:pull" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p' || true)
+            C=$(curl -s -o /dev/null -w "%{http_code}" \
+                 -H "Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json" \
+                 "https://ghcr.io/v2/${GITHUB_REPOSITORY_OWNER}/$p/manifests/${VERSION:-latest}" \
+                 -H "Authorization: Bearer ${T:-none}" || echo 000)
             if [ "$C" = "200" ]; then
               echo "✅ ${p} 匿名可拉（public）"
             else
@@ -214,7 +219,7 @@ jobs:
             fi
           done
           if [ -n "${FAILED}" ]; then
-            echo "::warning title=ghcr 包仍为 private::${FAILED} —— config.yaml 的 image: 字段不可启用。一次性手工修复：打开 https://github.com/users/${GITHUB_REPOSITORY_OWNER}/packages 把三个 *-huijian-mqtt-broker 包 Change visibility 为 Public"
+            echo "::warning title=ghcr 包不可匿名拉取::${FAILED} —— image 路线安装会失败。修复：gh api -X DELETE /user/packages/container/<pkg> 删包后重推 CI 自动按仓库 public 重建（详见本文件上方注释）"
           fi
 
 

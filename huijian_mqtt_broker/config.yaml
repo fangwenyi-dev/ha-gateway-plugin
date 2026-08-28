@@ -24,10 +24,15 @@ homeassistant_api: true
 # 旧的「一键升级依赖此权限」注释不实；/api/supervisor/ 死代理已随 run.sh 删除。
 # 权限最小化：不再需要就声明，降低 token 泄露影响面。
 host_network: true
-# image: 未启用——CI 产出的 ghcr 包（fangwenyi-dev/{arch}-huijian-mqtt-broker）
-# 当前 private，加 image 字段会让 Supervisor 拉取 401 直接不可安装。
-# CI 已内置"构建后自动公开包"步骤；包确认为 public 后方可加：
-#   image: ghcr.io/fangwenyi-dev/{arch}-huijian-mqtt-broker
+# v1.6.4 定案：启用预构建镜像——安装/升级从"NAS 现场 apk+pip 编译(慢网挂死)"
+# 变为"匿名拉 ghcr 几十秒"。CI 每次 push 构建 {arch}-huijian-mqtt-broker:
+# {version}+latest，Supervisor 按 config 版本号拉取对应 tag。
+# 包 public 化定案（2026-08-29 实验实锤）：GitHub 无 visibility 变更 API
+# （REST/GraphQL 全路径实测），但 Actions 用 GITHUB_TOKEN 首推的包【继承
+# 仓库可见性】——public 仓库⇒包自动 public。旧包 private 是 8-25 仓库当天
+# 本地手工 docker push 创建所致（可见性创建时定死，后续推版本不改）。
+# 修复手段即：删包→CI 重建（无需任何人工网页点击）。
+image: ghcr.io/fangwenyi-dev/{arch}-huijian-mqtt-broker
 map:
   - ssl
   - homeassistant_config:rw

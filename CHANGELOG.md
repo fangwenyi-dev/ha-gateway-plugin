@@ -23,10 +23,14 @@
   现拆为 apk/pip 独立两层（后续版本改动不再连带重建依赖层），pip 依次回退
   pypi 直连(30s×2 快速失败)→清华→阿里；requirements COPY 紧随 apk 层，
   代码文件层全部后置以获得最优缓存顺序
-- **ghcr 预构建镜像路线打通**（CI 的 visibility 自动步骤实测 404 根因定案：
-  GitHub 根本没有 packages visibility 的 REST API，Web UI 是唯一途径——
-  该步骤改为显式指路警告）。包设 public 后 config.yaml 启用
-  `image: ghcr.io/fangwenyi-dev/{arch}-huijian-mqtt-broker`，安装变拉镜像
+- **ghcr 预构建镜像路线打通**（定案更新）：GitHub 无 visibility 变更 API 实锤
+  （REST 4 组合 + GraphQL schema 全路径取证），但 Actions GITHUB_TOKEN 首推
+  包【继承仓库可见性】——历史包 private 系 8-25 本地手工推送创建时被定死。
+  修复手段：gh api DELETE 删包 → CI 重建自动 public（amd64 实测匿名拉 200，
+  期间踩坑：token 探测必须带 service=ghcr.io + Accept 索引头，否则假 404）。
+  config.yaml 已启用 image: ghcr.io/fangwenyi-dev/{arch}-huijian-mqtt-broker，
+  安装/更新从"NAS 现场编译"变为"拉预构建镜像几十秒"；CI 探测步骤同步修正
+  并改为输出"删包重推"指引
 
 
 ### 修复
