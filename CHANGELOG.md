@@ -11,6 +11,15 @@
 
 
 
+
+## [1.5.9] - 2026-08-28
+
+### 修复
+- **Web 界面"删除"按钮找不到实体**：删除按钮 unique_id 格式为 {gw}_remove_{sn}
+  （gateway.py:228，remove 在设备 SN 前），与常规实体 {gw}_{sn}_{suffix} 布局不同，
+  导致 findEntityByUniqueId 按 _{sn}_remove 锚点匹配失败。改为双锚点匹配
+  （_{sn}_{suffix} 与 _{suffix}_{sn} 两种布局）
+- 版本号统一为 1.5.9（插件 + 集成）
 ## [1.5.8] - 2026-08-28
 
 ### 修复
