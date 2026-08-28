@@ -1,6 +1,6 @@
 # 慧尖 LoRa 网关一体化插件
 
-[![版本](https://img.shields.io/badge/version-1.5.5-blue)]()
+[![版本](https://img.shields.io/badge/version-1.5.6-blue)]()
 [![HA Add-on](https://img.shields.io/badge/HA-Add--on-green)]()
 
 慧尖开窗器 LoRa 网关的 Home Assistant 一体化插件。**内置 Mosquitto Broker + mDNS 自动发现 + 网关集成，安装一个插件即可获得全部能力**。
@@ -145,6 +145,13 @@ https://github.com/fangwenyi-dev/ha-gateway-plugin
 不会。持久化数据存储在 HA 配置目录，升级时自动备份恢复。v1.3.2 起增加了 `.bak` 备份机制，JSON 损坏时可自动恢复。
 
 ## 更新日志
+
+### v1.5.6 (2026-08-28)
+- **修复（Web 界面网关状态显示"未知"）**：网关在线状态改为直接读取
+  mqtt_handler.connected（收到网关上报即在线），不再依赖 binary_sensor 实体
+- **修复（Web 界面网关 SN 显示"未知"）**：从设备注册表 identifiers 提取真实 SN
+  更新显示（无 SN 等待模式下 entry.data.gateway_sn 为空，但设备已注册）
+- ⚠️ **需要重启 HA**（api.py 有更新）
 
 ### v1.5.5 (2026-08-28)
 - **修复（Web 界面无法控制子设备）**：Web UI 之前用设备 SN 后 6 位模糊匹配实体

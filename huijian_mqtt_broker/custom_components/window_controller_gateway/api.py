@@ -15,6 +15,8 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 
+from .const import DOMAIN
+
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -40,6 +42,18 @@ class WindowGatewayDevicesView(http.HomeAssistantView):
         registry = dr.async_get(hass)
         entity_registry = er.async_get(hass)
         config_entry_id = request.query.get("config_entry_id")
+
+        # 网关在线状态：直接读 mqtt_handler.connected —— 它由"收到网关上报"
+        # 置 True（handle_gateway_response），网关超时置 False。语义即
+        # "网关上报过 = 在线"，不依赖 binary_sensor 实体（实体可能未创建，
+        # 且 v1.5.5 前 Web UI 因匹配失败一直显示"未知"——2026-08-28 实测）。
+        gateway_online: bool | None = None
+        if config_entry_id and DOMAIN in hass.data:
+            entry_data = hass.data[DOMAIN].get(config_entry_id)
+            if isinstance(entry_data, dict):
+                mqtt_handler = entry_data.get("mqtt_handler")
+                if mqtt_handler is not None:
+                    gateway_online = bool(getattr(mqtt_handler, "connected", False))
 
         # 按 device_id 聚合实体（一次遍历完成，避免为每个设备再扫全表）
         entities_by_device: dict = {}
@@ -71,6 +85,7 @@ class WindowGatewayDevicesView(http.HomeAssistantView):
                 "identifiers": [[i[0], i[1]] for i in (device.identifiers or [])],
                 "config_entries": list(entry_ids),
                 "entities": entities_by_device.get(device.id, []),
+                "gateway_online": gateway_online,
             })
 
         if not config_entry_id:

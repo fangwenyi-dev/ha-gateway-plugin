@@ -261,7 +261,7 @@
     </div>
 
     <script>
-        let CURRENT_VERSION = '1.5.5';
+        let CURRENT_VERSION = '1.5.6';
         const DOMAIN = 'window_controller_gateway';
 
         // Ingress 下页面路径形如 /hassio/ingress/<token>/，直连插件端口时为 /
@@ -417,15 +417,36 @@
                     if (dev.via_device_id) subDevices.push(dev);
                     else gwDevice = dev;  // 网关（parent）设备
                 }
+                // 2026-08-28 修复：从网关设备 identifiers 提取真实 SN，
+                // 更新网关卡片 SN 显示（解决 "SN: 未知"，无 SN 等待模式
+                // 下 entry.data.gateway_sn 为空，但设备注册表中已有真实 SN）。
+                let gwSn = gatewaySn || '';
+                if (!gwSn && gwDevice && gwDevice.identifiers && gwDevice.identifiers.length > 0) {
+                    const ident = gwDevice.identifiers[0];
+                    if (Array.isArray(ident) && ident.length > 1) gwSn = ident[1];
+                }
+                if (gwSn) {
+                    GATEWAY_SN_BY_ENTRY[entryId] = gwSn;
+                    const snEl = document.querySelector('#gw-' + entryId + ' .gateway-sn');
+                    if (snEl) snEl.textContent = 'SN: ' + gwSn;
+                }
                 try {
                     const stateResp = await haApi('/states');
                     if (!stateResp.ok) throw new Error('HA API ' + stateResp.status);
                     const states = await stateResp.json();
-                    // 2026-08-28 修复：网关在线传感器按 unique_id 精确查找
-                    // （unique_id 为 {gateway_sn}_online，设备名只含后 4 位，模糊匹配必然失败）
-                    const gwEntity = findEntityByUniqueId(gwDevice, 'binary_sensor', 'online');
-                    const gwSensor = gwEntity ? (states.find(s => s.entity_id === gwEntity.entity_id) || null) : null;
-                    updateGatewayStatus(statusEl, gwSensor ? (gwSensor.state === 'on' ? 'online' : 'offline') : 'unknown');
+                    // 网关在线状态：优先用 API 的 gateway_online 字段
+                    // （mqtt_handler.connected 实时值 = 收到网关上报即在线），
+                    // 不依赖 binary_sensor 实体（实体未创建/匹配失败时不再显示"未知"）。
+                    let gwStatus = 'unknown';
+                    if (gwDevice && typeof gwDevice.gateway_online === 'boolean') {
+                        gwStatus = gwDevice.gateway_online ? 'online' : 'offline';
+                    } else {
+                        // 兼容旧 API：回退到 binary_sensor online 实体精确查找
+                        const gwEntity = findEntityByUniqueId(gwDevice, 'binary_sensor', 'online');
+                        const gwSensor = gwEntity ? (states.find(s => s.entity_id === gwEntity.entity_id) || null) : null;
+                        gwStatus = gwSensor ? (gwSensor.state === 'on' ? 'online' : 'offline') : 'unknown';
+                    }
+                    updateGatewayStatus(statusEl, gwStatus);
                     if (subDevices.length === 0) {
                         deviceListEl.innerHTML = '<p style="font-size:12px;color:var(--text-muted);padding:8px;">暂无子设备，点击「配对」按钮添加</p>';
                         return;
@@ -435,7 +456,12 @@
                     deviceListEl.innerHTML = html;
                     for (const dev of subDevices) loadDeviceState(dev, states);
                 } catch (e) {
-                    updateGatewayStatus(statusEl, 'unknown');
+                    // 状态获取失败：仍用 API 的 gateway_online（若有）显示网关在线状态
+                    if (gwDevice && typeof gwDevice.gateway_online === 'boolean') {
+                        updateGatewayStatus(statusEl, gwDevice.gateway_online ? 'online' : 'offline');
+                    } else {
+                        updateGatewayStatus(statusEl, 'unknown');
+                    }
                     if (subDevices.length === 0) {
                         deviceListEl.innerHTML = '<p style="font-size:12px;color:var(--text-muted);padding:8px;">暂无子设备，点击「配对」按钮添加</p>';
                         return;
