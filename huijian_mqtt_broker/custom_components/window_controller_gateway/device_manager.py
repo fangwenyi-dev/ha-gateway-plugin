@@ -289,9 +289,11 @@ class WindowControllerDeviceManager:
     
     async def register_gateway_device(self):
         """注册网关设备"""
+        from .utils import call_registry_method as _call_reg
         device_registry = await self._get_device_registry()
         
-        device = device_registry.async_get_or_create(
+        device = await _call_reg(
+            device_registry.async_get_or_create,
             config_entry_id=self.entry.entry_id,
             identifiers={(DOMAIN, self.gateway_sn)},
             name=self.gateway_name,
@@ -685,7 +687,8 @@ class WindowControllerDeviceManager:
                     identifiers={(DOMAIN, device_sn)}
                 )
                 if device:
-                    await device_registry.async_remove_device(device.id)
+                    from .utils import call_registry_method as _call_reg
+                    await _call_reg(device_registry.async_remove_device, device.id)
                     _LOGGER.info("设备已从 Home Assistant 设备注册表中删除: %s", device_sn)
                 else:
                     _LOGGER.debug("设备在注册表中未找到: %s", device_sn)
@@ -816,6 +819,10 @@ class WindowControllerDeviceManager:
         old_name = self.devices[device_sn]["name"]
         self.devices[device_sn]["name"] = new_name
 
+        # 兼容新旧 HA registry 同步/异步过渡（2026-08-28 修复）
+        from .utils import async_get_entity_id as _aget_eid
+        from .utils import call_registry_method as _call_reg
+
         from homeassistant.helpers.device_registry import async_get as async_get_device_registry
 
         device_registry = async_get_device_registry(self.hass)
@@ -824,7 +831,8 @@ class WindowControllerDeviceManager:
             identifiers={(DOMAIN, device_sn)}
         )
         if device_entry:
-            device_registry.async_update_device(
+            await _call_reg(
+                device_registry.async_update_device,
                 device_entry.id,
                 name_by_user=new_name
             )
@@ -843,12 +851,11 @@ class WindowControllerDeviceManager:
             button_name_map["wind_lock_tilt"] = "内倒模式"
         for button_type, button_name in button_name_map.items():
             unique_id = f"{self.gateway_sn}_{device_sn}_{button_type}"
-            # 兼容新旧 HA 的 entity 查找（新版 async_get_entity_id 为 async 方法，
-            # 返回 RegistryEntry——2026-08-28 修复 'RegistryEntry' object can't be awaited）
-            from .utils import async_get_entity_id as _aget_eid
+            # 兼容新旧 HA 的 entity 查找（2026-08-28 修复 registry 同步/异步过渡）
             entity_id = await _aget_eid(self.hass, "button", unique_id)
             if entity_id:
-                await entity_registry.async_update_entity(
+                await _call_reg(
+                    entity_registry.async_update_entity,
                     entity_id,
                     aliases={f"{new_name} {button_name}"}
                 )
@@ -992,13 +999,14 @@ class WindowControllerDeviceManager:
         # 6.1 删除旧网关前缀的实体（含删除按钮 {old_gw}_remove_{sn}），
         # 避免转移后 reload 时旧前缀与新前缀实体并存（同一设备两套实体）
         try:
+            from .utils import call_registry_method as _call_reg
             entity_registry = await self._get_entity_registry()
             for entity_id, entity_entry in list(entity_registry.entities.items()):
                 if entity_entry.platform != DOMAIN or not entity_entry.unique_id:
                     continue
                 if (entity_entry.unique_id.startswith(f"{old_gateway_sn}_{device_sn}_")
                         or entity_entry.unique_id == f"{old_gateway_sn}_remove_{device_sn}"):
-                    await entity_registry.async_remove(entity_id)
+                    await _call_reg(entity_registry.async_remove, entity_id)
                     _LOGGER.info("转移时删除旧前缀实体: %s", entity_id)
         except Exception as e:
             _LOGGER.error("删除旧前缀实体失败: %s", e)
@@ -1096,6 +1104,7 @@ class WindowControllerDeviceManager:
     
     async def _transfer_entities_complete(self, old_gateway_sn: str, new_gateway_sn: str):
         """完整转移实体从旧网关到新网关"""
+        from .utils import call_registry_method as _call_reg
         device_registry = await self._get_device_registry()
         entity_registry = await self._get_entity_registry()
         
@@ -1183,7 +1192,8 @@ class WindowControllerDeviceManager:
                     entity_entry = entity_registry.async_get(entity_id)
                     if entity_entry:
                         # 重新注册实体，确保与新网关关联
-                        entity_registry.async_update_entity(
+                        await _call_reg(
+                            entity_registry.async_update_entity,
                             entity_id,
                             device_id=child_device.id
                         )
@@ -1229,13 +1239,14 @@ class WindowControllerDeviceManager:
 
         # 删除旧网关前缀的实体（含删除按钮 {old_gw}_remove_{sn}），
         # 避免迁移后旧前缀与新前缀实体并存
+        from .utils import call_registry_method as _call_reg
         for entity_id, entity_entry in list(entity_registry.entities.items()):
             if entity_entry.platform != DOMAIN or not entity_entry.unique_id:
                 continue
             for device_sn in device_sns:
                 if (entity_entry.unique_id.startswith(f"{old_gateway_sn}_{device_sn}_")
                         or entity_entry.unique_id == f"{old_gateway_sn}_remove_{device_sn}"):
-                    await entity_registry.async_remove(entity_id)
+                    await _call_reg(entity_registry.async_remove, entity_id)
                     _LOGGER.info("迁移时删除旧前缀实体: %s", entity_id)
                     break
 
@@ -1250,7 +1261,8 @@ class WindowControllerDeviceManager:
                                 identifiers={(DOMAIN, device_sn)}
                             )
                             if new_device and entity_entry.config_entry_id != self.entry.entry_id:
-                                await entity_registry.async_get_or_create(
+                                await _call_reg(
+                                    entity_registry.async_get_or_create,
                                     domain=entity_entry.domain,
                                     platform=DOMAIN,
                                     unique_id=entity_entry.unique_id,

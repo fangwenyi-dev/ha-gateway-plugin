@@ -264,13 +264,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # 必须在平台 forward 之前恢复，实体创建时即处于启用状态。
         try:
             entity_registry = er.async_get(hass)
+            from .utils import call_registry_method as _call_reg
             restored_count = 0
             for entity_entry in list(entity_registry.entities.values()):
                 if (entity_entry.platform == DOMAIN
                         and entity_entry.config_entry_id == entry.entry_id
                         and entity_entry.disabled_by is not None
                         and entity_entry.disabled_by != "user"):
-                    await entity_registry.async_update_entity(
+                    await _call_reg(
+                        entity_registry.async_update_entity,
                         entity_entry.entity_id, disabled_by=None
                     )
                     restored_count += 1
@@ -524,12 +526,13 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
                 )
             else:
                 # 先删除该网关设备下的所有实体，避免留下孤儿实体
+                from .utils import call_registry_method as _call_reg
                 entity_registry = er.async_get(hass)
                 for entity_entry in list(entity_registry.entities.values()):
                     if entity_entry.device_id == gateway_device.id:
-                        await entity_registry.async_remove(entity_entry.entity_id)
+                        await _call_reg(entity_registry.async_remove, entity_entry.entity_id)
                 # 再删除网关设备条目本身
-                await device_registry.async_remove_device(gateway_device.id)
+                await _call_reg(device_registry.async_remove_device, gateway_device.id)
                 _LOGGER.info("已删除网关 %s 的设备注册表条目（含其下实体）", gateway_sn)
     except Exception as e:
         _LOGGER.error("删除网关 %s 的设备注册表条目失败: %s", gateway_sn, e)
@@ -537,6 +540,7 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     # 清理该网关的子设备注册表条目（via_device 指向该网关）。
     # 否则子设备条目残留为孤儿设备（config_entry 已删，无法被管理，脏数据）。
     try:
+        from .utils import call_registry_method as _call_reg
         device_registry = dr.async_get(hass)
         entity_registry = er.async_get(hass)
         for device in list(device_registry.devices.values()):
@@ -547,8 +551,8 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
                 for entity_entry in list(entity_registry.entities.values()):
                     if (entity_entry.device_id == device.id
                             and entity_entry.config_entry_id == entry.entry_id):
-                        await entity_registry.async_remove(entity_entry.entity_id)
-                await device_registry.async_remove_device(device.id)
+                        await _call_reg(entity_registry.async_remove, entity_entry.entity_id)
+                await _call_reg(device_registry.async_remove_device, device.id)
                 _LOGGER.info("已删除网关 %s 的子设备注册表条目: %s", gateway_sn, device.id)
     except Exception as e:
         _LOGGER.error("删除网关 %s 的子设备注册表条目失败: %s", gateway_sn, e)

@@ -273,11 +273,12 @@ async def async_setup_entry(
         if device_type == DEVICE_TYPE_WINDOW_OPENER and device_sn in created_numbers:
             numbers = created_numbers.pop(device_sn)
             try:
+                from .utils import call_registry_method as _call_reg
                 entity_registry = get_entity_registry(hass)
                 for number in numbers.values():
                     mqtt_handler.remove_status_callback(device_sn, number.async_update)
                     if number.entity_id:
-                        await entity_registry.async_remove(number.entity_id)
+                        await _call_reg(entity_registry.async_remove, number.entity_id)
                 _LOGGER.info("已移除设备 %s 的滑动条实体", device_name)
             except Exception as e:
                 _LOGGER.error("移除设备 %s 的滑动条实体失败: %s", device_name, e)

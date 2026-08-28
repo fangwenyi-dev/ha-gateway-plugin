@@ -12,6 +12,18 @@
 
 
 
+
+## [1.6.0] - 2026-08-28
+
+### 修复
+- **删除设备批量报错 'NoneType' object can't be awaited**：新版 HA 中
+  EntityRegistry/DeviceRegistry 的 async_remove/async_remove_device/async_update_entity
+  等均为同步方法（@callback def，直接返回结果），代码中 await 同步方法导致
+  'NoneType'/'RegistryEntry' object can't be awaited。新增 utils.call_registry_method
+  兼容层（自动探测返回类型，coroutine 则 await，否则直接用），全项目 22 处
+  registry 调用统一修复，兼容新旧 HA
+- 修复范围：删除设备/子设备、重命名、设备转移、网关迁移、禁用实体恢复、发现忽略等
+- 版本号统一为 1.6.0（插件 + 集成）
 ## [1.5.9] - 2026-08-28
 
 ### 修复

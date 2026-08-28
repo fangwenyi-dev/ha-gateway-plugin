@@ -1,6 +1,6 @@
 # 慧尖 LoRa 网关一体化插件
 
-[![版本](https://img.shields.io/badge/version-1.5.9-blue)]()
+[![版本](https://img.shields.io/badge/version-1.6.0-blue)]()
 [![HA Add-on](https://img.shields.io/badge/HA-Add--on-green)]()
 
 慧尖开窗器 LoRa 网关的 Home Assistant 一体化插件。**内置 Mosquitto Broker + mDNS 自动发现 + 网关集成，安装一个插件即可获得全部能力**。
@@ -145,6 +145,14 @@ https://github.com/fangwenyi-dev/ha-gateway-plugin
 不会。持久化数据存储在 HA 配置目录，升级时自动备份恢复。v1.3.2 起增加了 `.bak` 备份机制，JSON 损坏时可自动恢复。
 
 ## 更新日志
+
+### v1.6.0 (2026-08-28)
+- **修复（删除设备批量报错 'NoneType' object can't be awaited）**：新版 HA 中
+  EntityRegistry/DeviceRegistry 的 async_remove/async_remove_device/async_update_entity
+  等均为同步方法，代码中 await 同步方法导致报错。新增 call_registry_method 兼容层
+  （自动探测同步/异步），全项目 22 处 registry 调用统一修复
+- 修复范围：删除设备/子设备、重命名、设备转移、网关迁移、禁用实体恢复、发现忽略等全部 registry 操作
+- ⚠️ **需要重启 HA**（集成代码有更新）
 
 ### v1.5.9 (2026-08-28)
 - **修复（Web 界面"删除"按钮找不到实体）**：删除按钮 unique_id 格式为

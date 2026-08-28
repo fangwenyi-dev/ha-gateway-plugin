@@ -272,9 +272,10 @@ class GatewayDeviceRemoveButton(ButtonEntity):
             # 兼容新旧 HA 的 entity 查找（新版 async_get_entity_id 为 async 方法——
             # 2026-08-28 修复 'RegistryEntry' object can't be awaited）
             from .utils import async_get_entity_id as _aget_eid
+            from .utils import call_registry_method as _call_reg
             entity_id = await _aget_eid(self.hass, "button", self._attr_unique_id)
             if entity_id:
-                await entity_registry.async_remove(entity_id)
+                await _call_reg(entity_registry.async_remove, entity_id)
                 _LOGGER.info("已从实体注册表中删除删除按钮: %s", entity_id)
             else:
                 _LOGGER.debug("删除按钮实体未找到，可能已经被删除: %s", self._attr_unique_id)

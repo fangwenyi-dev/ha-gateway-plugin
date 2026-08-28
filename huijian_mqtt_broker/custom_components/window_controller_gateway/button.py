@@ -261,9 +261,10 @@ async def _fix_entity_categories(hass, gateway_sn, device_sn):
         from .utils import async_get_entity_id as _aget_eid
         entity_id = await _aget_eid(hass, "button", unique_id)
         if entity_id:
+            from .utils import call_registry_method as _call_reg
             entity_entry = entity_registry.entities.get(entity_id)
             if entity_entry and entity_entry.entity_category != EntityCategory.CONFIG:
-                await entity_registry.async_update_entity(entity_id, entity_category=EntityCategory.CONFIG)
+                await _call_reg(entity_registry.async_update_entity, entity_id, entity_category=EntityCategory.CONFIG)
                 _LOGGER.info("修正配置按钮 entity_category → CONFIG: %s", entity_id)
 
 
@@ -286,9 +287,10 @@ async def _cleanup_unsupported_buttons(hass, gateway_sn, device_sn):
         unique_id = f"{gateway_sn}_{device_sn}_{button_type}"
         # 兼容新旧 HA 的 entity 查找（新版 async_get_entity_id 为 async 方法——2026-08-28 修复）
         from .utils import async_get_entity_id as _aget_eid
+        from .utils import call_registry_method as _call_reg
         entity_id = await _aget_eid(hass, "button", unique_id)
         if entity_id:
-            await entity_registry.async_remove(entity_id)
+            await _call_reg(entity_registry.async_remove, entity_id)
             _LOGGER.info("清理不支持内倒功能设备 %s 的多余按钮: %s (类型: %s)", device_sn, entity_id, button_type)
 
 
@@ -463,10 +465,11 @@ async def async_setup_entry(
                 try:
                     from homeassistant.helpers.entity_registry import async_get
                     from .utils import async_get_entity_id as _aget_eid
+                    from .utils import call_registry_method as _call_reg
                     entity_registry = async_get(hass)
                     # 删除删除按钮
                     if remove_button.entity_id:
-                        await entity_registry.async_remove(remove_button.entity_id)
+                        await _call_reg(entity_registry.async_remove, remove_button.entity_id)
                         _LOGGER.info("已从实体注册表中删除设备 %s 的删除按钮", device_name)
                     
                     # 生成并删除其他按钮实体ID
@@ -476,7 +479,7 @@ async def async_setup_entry(
                         # 查找并删除实体（兼容新旧 HA entity 查找）
                         entity_id = await _aget_eid(hass, "button", button_unique_id)
                         if entity_id:
-                            await entity_registry.async_remove(entity_id)
+                            await _call_reg(entity_registry.async_remove, entity_id)
                             _LOGGER.info("已从实体注册表中删除设备 %s 的%s按钮", device_name, button_type)
                 except Exception as e:
                     _LOGGER.error("从实体注册表中删除设备 %s 的按钮失败: %s", device_name, e)

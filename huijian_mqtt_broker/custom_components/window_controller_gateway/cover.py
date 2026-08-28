@@ -209,9 +209,10 @@ async def async_setup_entry(
                 del created_covers[device_sn]
 
                 try:
+                    from .utils import call_registry_method as _call_reg
                     entity_registry = get_entity_registry(hass)
                     if cover.entity_id:
-                        await entity_registry.async_remove(cover.entity_id)
+                        await _call_reg(entity_registry.async_remove, cover.entity_id)
                         _LOGGER.info("已移除设备 %s 的Cover实体", device_name)
                 except Exception as e:
                     _LOGGER.error("移除Cover实体失败 %s: %s", device_name, e)

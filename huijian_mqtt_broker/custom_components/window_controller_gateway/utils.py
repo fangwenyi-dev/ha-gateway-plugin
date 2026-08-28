@@ -49,29 +49,40 @@ async def async_get_entity_id(
 ) -> Optional[str]:
     """按 unique_id 查找实体的 entity_id（兼容新旧 HA）。
 
-    背景（2026-08-28 实测）：HA 新版将 ``EntityRegistry.async_get_entity_id()``
-    改为 async 方法（返回 coroutine，await 后为 RegistryEntry），旧版为同步方法
-    （直接返回 str）。本函数统一处理：
-    - 调用同步或异步版本，兼容两种返回（str 或 RegistryEntry）
-    - 统一返回 entity_id 字符串；不存在返回 None
+    背景（2026-08-28 实测）：HA registry 异步化重构期间，不同版本中
+    ``EntityRegistry.async_get_entity_id()`` 可能是 async（返回 coroutine，
+    await 后为 RegistryEntry）或 sync（直接返回 str）。本函数统一处理，
+    返回 entity_id 字符串；不存在返回 None。
     """
     entity_registry = get_entity_registry(hass)
-    method = entity_registry.async_get_entity_id
-
-    try:
-        result = method(platform, DOMAIN, unique_id)
-        if hasattr(result, "__await__"):  # coroutine：新版异步 API
-            result = await result
-    except TypeError:
-        # 签名不兼容（极老版本），放弃查找
-        return None
-
+    result = await call_registry_method(
+        entity_registry.async_get_entity_id, "entity", DOMAIN, unique_id
+    )
     if result is None:
         return None
     # 新版返回 RegistryEntry，旧版返回 str
     if hasattr(result, "entity_id"):
         return result.entity_id
     return str(result)
+
+
+async def call_registry_method(method, *args, **kwargs):
+    """调用 registry 方法并兼容同步/异步两种实现（HA registry 异步化过渡期）。
+
+    背景（2026-08-28 实测）：Home Assistant 对 EntityRegistry/DeviceRegistry
+    的异步化重构尚未完成，同一方法在不同版本中可能是：
+    - 同步方法（``@callback def ...``）：直接执行并返回结果（新版 master 如此，
+      如 async_remove 返回 None、async_update_entity 返回 RegistryEntry）
+    - 异步方法（``async def ...``）：返回 coroutine（部分过渡版本如此）
+
+    本函数统一处理：调用后若返回值是 coroutine 则 await，否则原样返回。
+    避免 ``await`` 同步方法（返回 None/RegistryEntry）导致
+    "'NoneType' object can't be awaited" / "'RegistryEntry' object can't be awaited"。
+    """
+    result = method(*args, **kwargs)
+    if hasattr(result, "__await__"):
+        return await result
+    return result
 
 
 def clear_entity_registry_cache(hass=None):
