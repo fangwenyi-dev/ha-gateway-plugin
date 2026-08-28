@@ -11,7 +11,7 @@ startup: system
 watchdog: tcp://[HOST]:2022
 ingress: true
 ingress_port: 8099
-panel_icon: mdi:remote
+panel_icon: mdi:window-open-variant
 panel_title: 慧尖网关
 # host_network: 容器直接使用主机网络，mosquitto 监听主机 2022 端口
 # mDNS (zeroconf) 广播可到达物理 LAN，LoRa 网关通过 huijian.local 自动发现

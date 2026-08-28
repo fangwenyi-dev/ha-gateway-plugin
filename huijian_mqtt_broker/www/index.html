@@ -112,6 +112,11 @@
         .device-status { font-size: 11px; margin-top: 3px; color: var(--text-muted); }
         .device-controls { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
         .device-btn-group .btn-sm { flex: 1; min-width: 64px; text-align: center; justify-content: center; }
+        .slider-group { margin-top: 6px; display: flex; flex-direction: column; gap: 6px; }
+        .slider-row { display: flex; align-items: center; gap: 8px; }
+        .slider-row .slider-label { width: 32px; flex-shrink: 0; }
+        .slider-row input[type="range"] { flex: 1; }
+        .slider-row .slider-value { min-width: 36px; text-align: right; flex-shrink: 0; }
         .position-slider { width: 90px; height: 22px; }
         /* ===== Device online dot ===== */
         .dev-name { display: flex; align-items: center; gap: 6px; }
@@ -198,8 +203,9 @@
             .device-item { padding: 10px 12px; }
             .device-controls { gap: 6px; }
             .device-controls .btn-sm { flex: 1; min-width: 60px; text-align: center; justify-content: center; }
-            .position-slider { width: 100%; min-width: 120px; }
-            .speed-slider, .strength-slider { width: 100%; min-width: 100px; }
+            .slider-row { gap: 6px; }
+            .slider-row .slider-label { width: 28px; }
+            .slider-row input[type="range"] { min-width: 100px; }
             .gateway-header { flex-wrap: wrap; gap: 8px; }
             .gateway-name { font-size: 15px; }
         }
@@ -303,6 +309,25 @@
         async function refreshAll() {
             await checkServiceStatus();
             await loadGateways();
+        }
+
+        // ========== 无感刷新（只更新状态值，不重建 DOM）==========
+        async function silentRefresh() {
+            await checkServiceStatus();
+            // 遍历页面上已有的网关卡片，只更新设备状态
+            const container = document.getElementById('gatewayContainer');
+            if (!container) return;
+            const gwItems = container.querySelectorAll('.gateway-item');
+            if (gwItems.length === 0) {
+                // 页面上还没有网关卡片，走完整加载
+                await loadGateways();
+                return;
+            }
+            for (const gwItem of gwItems) {
+                const entryId = gwItem.id.replace('gw-', '');
+                const gatewaySn = GATEWAY_SN_BY_ENTRY[entryId] || '';
+                await updateGatewayDevices(entryId, gatewaySn);
+            }
         }
 
         // ========== 检查服务状态 ==========
@@ -491,6 +516,59 @@
             }
         }
 
+        // 无感刷新：获取最新设备数据，只更新状态值，不重建 DOM
+        // 与 loadGatewayDevices 的区别：不 innerHTML 重建，只 loadDeviceState 更新
+        async function updateGatewayDevices(entryId, gatewaySn) {
+            const deviceListEl = document.getElementById('devices-' + entryId);
+            const statusEl = document.getElementById('gw-status-' + entryId);
+            if (!deviceListEl) return;
+            try {
+                const resp = await haApi('/window_controller_gateway/devices?config_entry_id=' + entryId);
+                if (!resp.ok) return;
+                const devices = await resp.json();
+                if (!devices || devices.length === 0) return;
+                let subDevices = [];
+                let gwDevice = null;
+                for (const dev of devices) {
+                    if (dev.via_device_id) subDevices.push(dev);
+                    else gwDevice = dev;
+                }
+                let gwSn = gatewaySn || '';
+                if (!gwSn && gwDevice && gwDevice.identifiers && gwDevice.identifiers.length > 0) {
+                    const ident = gwDevice.identifiers[0];
+                    if (Array.isArray(ident) && ident.length > 1) gwSn = ident[1];
+                }
+                if (gwSn) {
+                    GATEWAY_SN_BY_ENTRY[entryId] = gwSn;
+                    const snEl = document.querySelector('#gw-' + entryId + ' .gateway-sn');
+                    if (snEl) snEl.textContent = 'SN: ' + gwSn;
+                }
+                try {
+                    const stateResp = await haApi('/states');
+                    if (!stateResp.ok) return;
+                    const states = await stateResp.json();
+                    let gwStatus = 'unknown';
+                    if (gwDevice && typeof gwDevice.gateway_online === 'boolean') {
+                        gwStatus = gwDevice.gateway_online ? 'online' : 'offline';
+                    } else {
+                        const gwEntity = findEntityByUniqueId(gwDevice, 'binary_sensor', 'online');
+                        const gwSensor = gwEntity ? (states.find(s => s.entity_id === gwEntity.entity_id) || null) : null;
+                        gwStatus = gwSensor ? (gwSensor.state === 'on' ? 'online' : 'offline') : 'unknown';
+                    }
+                    updateGatewayStatus(statusEl, gwStatus);
+                    // 只更新已有设备元素的状态，不重建 DOM
+                    for (const dev of subDevices) {
+                        const devEl = document.getElementById('dev-' + dev.id);
+                        if (devEl) loadDeviceState(dev, states);
+                    }
+                } catch (e) {
+                    if (gwDevice && typeof gwDevice.gateway_online === 'boolean') {
+                        updateGatewayStatus(statusEl, gwDevice.gateway_online ? 'online' : 'offline');
+                    }
+                }
+            } catch (e) { /* 静默失败，不干扰用户 */ }
+        }
+
         function updateGatewayStatus(el, status) {
             if (status === 'online') { el.className = 'badge badge-ok'; el.textContent = '在线'; }
             else if (status === 'pairing') { el.className = 'badge badge-warn'; el.textContent = '配对中'; }
@@ -543,33 +621,33 @@
             const strengthMax = strengthEntity && strengthEntity.attributes.max !== undefined ? strengthEntity.attributes.max : 100;
             const strengthValid = strengthEntity && strengthEntity.state && strengthEntity.state !== 'unknown' && strengthEntity.state !== 'unavailable';
             const strengthUnit = (strengthEntity && strengthEntity.attributes.unit_of_measurement) || '';
+            // 第 1 行：开 / 关 / 停
             let controls = '<div class="device-controls device-btn-group">' +
                 '<button class="btn btn-success btn-sm" onclick="controlDevice(\'' + jsQuote(safeDevId) + '\',\'open\',\'' + jsQuote(safeEntryId) + '\')">开</button>' +
                 '<button class="btn btn-danger btn-sm" onclick="controlDevice(\'' + jsQuote(safeDevId) + '\',\'close\',\'' + jsQuote(safeEntryId) + '\')">关</button>' +
                 '<button class="btn btn-warn btn-sm" onclick="controlDevice(\'' + jsQuote(safeDevId) + '\',\'stop\',\'' + jsQuote(safeEntryId) + '\')">停</button>' +
                 '</div>';
-            controls += '<div class="device-controls" style="margin-top:4px;">' +
+            // 第 2 行：位置 / 速度 / 力度 三个滑块一组
+            controls += '<div class="slider-group">' +
+                '<div class="slider-row"><span class="slider-label">位置</span>' +
                 '<input type="range" class="position-slider" min="0" max="100" value="' + (currentPos === '--' ? 0 : currentPos) + '"' +
                 ' oninput="this.nextElementSibling.textContent=this.value+\'%\'"' +
                 ' onchange="controlDevicePosition(\'' + jsQuote(safeDevId) + '\', this.value, \'' + jsQuote(safeEntryId) + '\')">' +
-                '<span style="font-size:11px;min-width:30px;">' + currentPos + (currentPos === '--' ? '' : '%') + '</span>' +
-                '<button class="btn btn-danger btn-sm" title="移除设备" onclick="controlDevice(\'' + jsQuote(safeDevId) + '\',\'remove\',\'' + jsQuote(safeEntryId) + '\')">移除</button></div>';
-            // 速度滑块
-            controls += '<div class="device-controls" style="margin-top:4px;">' +
-                '<span class="slider-label">速度</span>' +
+                '<span class="slider-value position-value">' + currentPos + (currentPos === '--' ? '' : '%') + '</span></div>' +
+                '<div class="slider-row"><span class="slider-label">速度</span>' +
                 '<input type="range" class="speed-slider" min="' + speedMin + '" max="' + speedMax + '" value="' + (speedValid ? speedEntity.state : speedMin) + '"' +
                 (speedEntity ? '' : ' disabled') +
                 ' oninput="this.nextElementSibling.textContent=this.value' + (speedUnit ? '+\'' + speedUnit + '\'' : '') + '"' +
                 ' onchange="controlDevice(\'' + jsQuote(safeDevId) + '\',\'set_speed\',\'' + jsQuote(safeEntryId) + '\', this.value)">' +
-                '<span class="slider-value speed-value">' + (speedValid ? speedEntity.state + speedUnit : '--') + '</span></div>';
-            // 力度滑块
-            controls += '<div class="device-controls" style="margin-top:4px;">' +
-                '<span class="slider-label">力度</span>' +
+                '<span class="slider-value speed-value">' + (speedValid ? speedEntity.state + speedUnit : '--') + '</span></div>' +
+                '<div class="slider-row"><span class="slider-label">力度</span>' +
                 '<input type="range" class="strength-slider" min="' + strengthMin + '" max="' + strengthMax + '" value="' + (strengthValid ? strengthEntity.state : strengthMin) + '"' +
                 (strengthEntity ? '' : ' disabled') +
                 ' oninput="this.nextElementSibling.textContent=this.value' + (strengthUnit ? '+\'' + strengthUnit + '\'' : '') + '"' +
                 ' onchange="controlDevice(\'' + jsQuote(safeDevId) + '\',\'set_strength\',\'' + jsQuote(safeEntryId) + '\', this.value)">' +
-                '<span class="slider-value strength-value">' + (strengthValid ? strengthEntity.state + strengthUnit : '--') + '</span></div>';
+                '<span class="slider-value strength-value">' + (strengthValid ? strengthEntity.state + strengthUnit : '--') + '</span></div>' +
+                '</div>';
+            // 第 3 行：内倒 / 内倒模式 / 平开模式（仅 5005 设备）
             if (supportsWindLock) {
                 controls += '<div class="device-controls device-btn-group" style="margin-top:4px;">' +
                     '<button class="btn btn-sm" style="background:#6366f1;color:white;" onclick="controlDevice(\'' + jsQuote(safeDevId) + '\',\'a\',\'' + jsQuote(safeEntryId) + '\')">内倒</button>' +
@@ -577,9 +655,10 @@
                     '<button class="btn btn-sm" style="background:#4338ca;color:white;" onclick="controlDevice(\'' + jsQuote(safeDevId) + '\',\'wind_lock_flat\',\'' + jsQuote(safeEntryId) + '\')">平开模式</button>' +
                     '</div>';
             }
-            // 重命名按钮
-            controls += '<div class="device-controls" style="margin-top:4px;">' +
+            // 第 4 行：重命名 + 移除（危险操作放最后，不易误触）
+            controls += '<div class="device-controls device-btn-group" style="margin-top:4px;">' +
                 '<button class="btn btn-sm" style="background:#6366f1;color:white;" onclick="renameDevice(\'' + jsQuote(safeDevId) + '\',\'' + jsQuote(safeEntryId) + '\',\'' + jsQuote(safeName) + '\')" title="重命名设备">重命名</button>' +
+                '<button class="btn btn-danger btn-sm" title="移除设备" onclick="controlDevice(\'' + jsQuote(safeDevId) + '\',\'remove\',\'' + jsQuote(safeEntryId) + '\')">移除</button>' +
                 '</div>';
             return '<div class="device-item" id="dev-' + safeDevId + '">' +
                 '<div class="device-info"><div class="device-name dev-name">' +
@@ -993,7 +1072,8 @@
 
         // ========== 启动 ==========
         init();
-        setInterval(refreshAll, 30000);
+        // 定时无感刷新：只更新状态值，不重建 DOM，避免页面闪烁
+        setInterval(silentRefresh, 30000);
     </script>
 </body>
 </html>
