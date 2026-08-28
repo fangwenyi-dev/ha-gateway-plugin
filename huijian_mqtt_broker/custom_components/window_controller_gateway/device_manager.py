@@ -995,6 +995,11 @@ class WindowControllerDeviceManager:
                     if entity_entry.device_id == device.id:
                         if entity_entry.config_entry_id != target_entry_id:
                             # v1.6.3 收口：registry 写操作一律经 call_registry_method
+                            # v1.6.4 修正：EntityRegistry.async_get_or_create 的
+                            # 关键字白名单里没有 name/aliases（只有 original_name），
+                            # 旧代码传 name=/aliases= 令该分支 100% TypeError 被外层
+                            # except 吞掉、实体重挂从未生效。命中既有实体时 registry
+                            # 本就不覆盖用户自定义名称/别名，无需也无法"保留"传参。
                             await _call_reg(
                                 entity_registry.async_get_or_create,
                                 domain=entity_entry.domain,
@@ -1002,10 +1007,7 @@ class WindowControllerDeviceManager:
                                 unique_id=entity_entry.unique_id,
                                 config_entry=target_entry,
                                 device_id=device.id,
-                                # 保留用户自定义名称与别名，避免转移后丢失
-                                name=entity_entry.name,
                                 original_name=entity_entry.original_name,
-                                aliases=entity_entry.aliases,
                             )
                             _LOGGER.debug("已更新实体 %s 的配置条目关联", entity_id)
         except Exception as e:

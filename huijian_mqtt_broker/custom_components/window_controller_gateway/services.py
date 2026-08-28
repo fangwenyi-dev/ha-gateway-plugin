@@ -6,10 +6,13 @@ import voluptuous as vol
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers import config_validation as cv
 
-# v1.6.3：网关查找失败等"调用即失败"场景必须让 REST 返回 400，
-# 而不是记完日志静默 return（前端收到 200 弹「已发送」假成功 toast）。
-# ServiceValidationError 自 HA 2024.3 起提供；测试假环境缺失时退化为
-# Exception，语义不变（真实 HA 环境恒走官方类，会以非 2xx 反馈给调用方）。
+# v1.6.3："调用即失败"场景必须让 REST 返回非 2xx，而不是记完日志静默
+# return（前端收到 200 弹「已发送」假成功 toast）。
+# v1.6.4 纠偏（上游取证）：REST 服务视图仅把 vol.Invalid/ServiceNotFound
+# 映射为 400，ServiceValidationError（HomeAssistantError 子类）实测落到
+# aiohttp 兜底 500——对前端 "!resp.ok → 错误 toast" 语义等价，且 WS/自动化
+# 侧保留 HomeAssistantError 正确语义；代价是 HA 日志会记 traceback。
+# ServiceValidationError 自 HA 2024.3 提供；测试假环境缺失时退化为 Exception。
 try:
     from homeassistant.exceptions import ServiceValidationError
 except ImportError:  # pragma: no cover
@@ -55,20 +58,20 @@ async def handle_start_pairing(hass: HomeAssistant, call: ServiceCall) -> None:
     duration = call.data.get("duration", GATEWAY_PAIRING_TIMEOUT)
 
     if not device_id:
-        _LOGGER.error("开始配对服务调用失败：未指定设备ID")
-        return
+        # v1.6.4：假成功根治（同 check_gateway_status），REST 非 2xx
+        raise ServiceValidationError("开始配对：未指定 device_id")
 
     _LOGGER.info("收到开始配对请求，设备ID: %s，持续时间: %d秒", device_id, duration)
     
     gateway_data, gateway_sn = find_gateway_by_device_id(hass, device_id)
     if not gateway_data:
         _LOGGER.error("未找到设备ID %s 对应的网关", device_id)
-        return
+        raise ServiceValidationError(f"未找到设备ID {device_id} 对应的网关")
 
     mqtt_handler = gateway_data.get("mqtt_handler")
     if not mqtt_handler:
         _LOGGER.error("未找到MQTT处理器")
-        return
+        raise ServiceValidationError("未找到该网关的 MQTT 处理器")
 
     try:
         # P1 修复：使用 mqtt_handler.pairing_timeout_handle 统一管理配对超时，
@@ -79,8 +82,10 @@ async def handle_start_pairing(hass: HomeAssistant, call: ServiceCall) -> None:
 
         success = await mqtt_handler.send_command(mqtt_handler.gateway_sn, "start_pairing")
         if not success:
+            # v1.6.4：网关离线导致命令未送达——以前静默 return，前端 200
+            # 弹「配对模式已启动（60秒）」假成功并停留在"配对中"徽标
             _LOGGER.error("发送配对命令失败")
-            return
+            raise ServiceValidationError("发送配对命令失败：网关可能离线")
 
         mqtt_handler.pairing_active = True
         mqtt_handler._notify_status_change()
@@ -120,28 +125,37 @@ async def handle_rename_device(hass: HomeAssistant, call: ServiceCall) -> None:
     new_name = call.data.get(ATTR_NEW_NAME)
 
     if not device_id or not new_name:
+        # v1.6.4：假成功根治——参数不完整/设备不存在/重命名返回 False
+        # 都必须让调用方（Web UI/自动化）收到非 2xx，
+        # 以前静默 return 时前端弹「重命名成功」假成功
         _LOGGER.error("重命名设备服务调用失败：参数不完整")
-        return
+        raise ServiceValidationError("重命名：device_id 与新名称均不可为空")
 
     # P0 修复：使用 find_device_by_device_id 解析出设备 SN，
     # 而非直接把 device_id（可能是 HA 设备 ID）传给 rename_device。
     device, gateway_data, gateway_sn = find_device_by_device_id(hass, device_id)
     if not device or not gateway_data:
         _LOGGER.error("未找到设备ID %s 对应的设备", device_id)
-        return
+        raise ServiceValidationError(f"未找到设备ID {device_id} 对应的设备")
 
     device_manager = gateway_data.get("device_manager")
     if not device_manager:
         _LOGGER.error("未找到设备管理器")
-        return
+        raise ServiceValidationError("未找到该网关的设备管理器")
 
     try:
         device_sn = device["sn"]
         success = await device_manager.rename_device(device_sn, new_name)
         if success:
             _LOGGER.info("设备 %s 已重命名为 %s", device_sn, new_name)
+        else:
+            # rename_device 返回 False（名称超 50 字符/设备不存在等于线等）
+            raise ServiceValidationError(f"重命名设备 {device_sn} 失败（名称过长或设备不存在）")
+    except ServiceValidationError:
+        raise
     except Exception as e:
         _LOGGER.error("设备 %s 重命名失败: %s", device_id, e)
+        raise ServiceValidationError(f"重命名失败: {e}") from e
 
 async def handle_refresh_devices(hass: HomeAssistant, call: ServiceCall) -> None:
     """处理刷新设备服务调用
@@ -244,8 +258,8 @@ async def handle_check_gateway_status(hass: HomeAssistant, call: ServiceCall) ->
     if not gateway_data:
         target = device_id or gateway_sn
         _LOGGER.error("未找到对应的网关: %s", target)
-        # v1.6.3：抛错让 REST 返回 400，前端如实提示；
-        # 静默 return 会让 Web UI 弹「状态检查已发送」假成功
+        # v1.6.3：抛错使 REST 返回非 2xx（v1.6.4 取证：实际为 500 非 400），
+        # 前端如实提示；静默 return 会让 Web UI 弹「状态检查已发送」假成功
         raise ServiceValidationError(f"未找到对应的网关: {target}")
 
     _LOGGER.info("收到检查网关状态请求，网关SN: %s", resolved_sn)

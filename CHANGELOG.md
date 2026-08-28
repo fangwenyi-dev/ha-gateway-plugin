@@ -14,6 +14,73 @@
 
 
 
+## [1.6.4] - 2026-08-29
+
+### 修复
+- **Web UI 误报「MQTT Broker 已停止」（v1.6.3 引入）**：v1.6.3 的 status.json
+  探活循环用 `netstat` 判 2022 端口 LISTEN，但 HA alpine base 镜像根本不含
+  netstat（apk 仅 bash/bind-tools/ca-certificates/curl/jq/libstdc++/tzdata/xz），
+  `2>/dev/null` 吞掉 command-not-found 后 grep 恒失败 → status.json 永远写
+  stopped。v1.6.3 之前该假状态被 nginx 硬编码 "running" 掩盖，之后则反向
+  恒假。改用 base 必有的 `/proc/net/tcp{,6}` + busybox awk 解析
+  （2022=0x07EA，state 0A=LISTEN/01=ESTABLISHED），一次扫描同时产出：
+  status.json（running/pid/listeners）与 broker_status.json（clients/connected）
+- **连接数恒 0 的连带旧 bug 一并根治**：v1.5 时代的 `netstat -tn | ... -c
+  ESTABLISHED` 连接数采集同样依赖不存在的 netstat（grep -c 空输入返回 0
+  伪装成功），Web「HA MQTT 连接」指示灯一直靠 0 兜底走 warn 分支
+
+### 修复（v1.6.4 增量审查批次：两路独立审查 + 主线对抗复核）
+- **run.sh `getent hosts supervisor` 恒假（netstat 同构）**：alpine/musl 体系
+  不存在 getent（busybox 未编 applet、aports 无包），错误被吞后每次启动都
+  走"无法解析"误导日志、主机名优先设计永久落空——改用 base 实装的
+  bind-tools `host` 命令
+- **停机路径根修**：`trap cleanup EXIT INT TERM` 的 handler 只清理不退出，
+  SIGTERM 后从被中断的 wait 返回（rc=143）被主循环当作崩溃重启 mosquitto，
+  直到 docker 宽限期 SIGKILL——broker 从未收到优雅 TERM（persistence 最坏
+  丢 30 分钟 retained 状态）、每次 stop/restart 拖满超时。现 INT/TERM 显式
+  转发 TERM 给 broker + 1s 落盘窗口 + exit 143（bash 行为已实证）
+- **transfer_device 实体重挂从未生效**：`EntityRegistry.async_get_or_create`
+  关键字白名单（2024.12→dev 全版本取证）无 name/aliases，旧代码传之
+  → 该分支 100% TypeError 被外层 except 吞。已删非法 kwargs（命中既有
+  实体时 registry 本就不覆盖自定义名，无需"保留"传参）
+- **start_pairing/rename_device 假成功残留**：8 个 error-log-then-return
+  分支（未指定参数/未找到网关设备/MQTT 发送失败/rename 返回 False）
+  与 check_gateway_status 同类——REST 200 令 Web 弹「配对模式已启动」
+  「重命名成功」假 toast。全部改抛 ServiceValidationError
+- **check_gateway_status REST 语义纠偏（上游源码取证）**：ServiceValidationError
+  实测返回 500 非注释宣称的 400（服务视图仅映射 vol.Invalid/ServiceNotFound），
+  对前端 !resp.ok 判据等价；注释改实，前端失败分支补徽标回"未知"重判
+- **status/broker json 探活写失败告警**：tmp+mv 链尾 `|| true` 会在 /usr
+  只读/磁盘满时让 status.json 冻结在最后成功值（v1.6.2 硬编码 200 的隐蔽
+  复刻），改为一行告警入容器日志
+- **7b 循环端口动态化**：0x07EA 硬编码改 `printf '%04X' ${MQTT_PORT}`，
+  status.json 的 port 字段跟随配置（消灭"改端口后状态说谎"面）
+- **Dockerfile 显式安装 openssl CLI**：base 仅含 libssl 库，run.sh 密码哈希
+  的 mosquitto_passwd 兜底路径此前是死路（command not found 被吞）
+- **诊断与静默吞错清理**：nginx 启动不再 `2>/dev/null`（真实 bind 错误可见，
+  此前只剩 nginx -t"语法正常"假象）；`cut|tr||echo 文件不存在` 死兜底改
+  显式存在性判断；`cat|jq` 管道掩蔽（cat 失败 jq 空输入输出空串、|| echo 0
+  永不触发）改 jq 直读；删除 s6-overlay v3 不存在的 /run/s6/container-env
+  死回退分支；utils.async_get_entity_id 的 TypeError→None 兜底补 warning
+  日志（registry 内部真 TypeError 不再无声吞成"实体不存在"）
+- **number._send_value TOCTOU**：await send_command 后补二次 hass-None 守卫
+  （await 窗口内实体被删时不再把"命令已成功"误记为"设置失败"并空跑回退）
+- **index.html**：速度/力度 oninput 的 unit 转义序统一为 jsAttr（同类
+  残留，当前不可利用但防属性来源变化）
+- **services.yaml**：check_gateway_status 补 gateway_sn 字段、device_id 改
+  非 required（与 Python schema 与 Web 实际调用形态对齐）
+- **nginx 静态 JSON 响应头**：status/version/integration/broker 四处删除
+  `add_header Content-Type application/json`（与 mime.types 默认值重复
+  产生双 Content-Type 头，违反 HTTP 语义）
+- **运维卫生**：run.sh 状态文件写入改 tmp+mv 原子替换（防 nginx 读半截）、
+  /api/status 与 /api/broker 补 Cache-Control no-store（防浏览器启发缓存
+  显示滞后状态）、头部"v1.4.2"假版本号清除、探活注释周期修正
+- 审查中排除的假定性问题（勿再整改）：sensor 移除回调不删注册表条目安全
+  （device_registry.async_remove_device 上游级联删除全部实体条目，删除按钮
+  实体恰有 button.py 显式删除闭环）；number 启动循环与回调注册间无 await，
+  无覆盖竞态窗口；`async_get_device(identifiers=set)` 在 manifest 下限
+  2024.12→dev 全版本合法（HA 已标 2027.8 废弃，届时再迁）
+
 ## [1.6.3] - 2026-08-29
 
 ### 修复（Critical）

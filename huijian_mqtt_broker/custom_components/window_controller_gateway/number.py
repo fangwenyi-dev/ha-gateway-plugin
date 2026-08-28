@@ -175,6 +175,12 @@ class WindowControllerRangeNumber(WindowControllerBaseEntity, NumberEntity):
                 self.device_sn, self._command, {self._param_key: value}
             )
             if success:
+                # v1.6.4：await 期间实体可能已被移除（TOCTOU）——hass 摘除后
+                # 再访问 self.hass.data 会 AttributeError 落入 except 分支，
+                # 把"命令已成功"误记为"设置失败"日志并空跑回退。命令已送达，
+                # 静默跳过本地持久化即可。
+                if self.hass is None:
+                    return
                 # 本地记录设定值：重新进入界面/HA 重启后仍回显上次设定位置
                 setpoints = self.hass.data.setdefault(DOMAIN, {}).setdefault(DEVICE_SETPOINTS, {})
                 setpoints.setdefault(self.device_sn, {})[self._param_key] = value

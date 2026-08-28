@@ -57,13 +57,22 @@ set_position:
 
 check_gateway_status:
   name: 检查网关状态
-  description: 检查网关的在线状态和连接情况
+  description: 检查网关的在线状态和连接情况（device_id 与 gateway_sn 至少提供一个）
   fields:
     device_id:
       name: 设备ID
-      description: 网关设备的唯一标识符
-      required: true
+      description: 网关设备的唯一标识符（与 gateway_sn 二选一）
+      required: false
       example: "window_gateway_123456"
+      selector:
+        text:
+    # v1.6.4：Web UI 实际以 gateway_sn 调用（Python schema 一直支持），
+    # 补齐元数据消除开发者工具与真实调用形态的漂移
+    gateway_sn:
+      name: 网关SN
+      description: 网关序列号（与 device_id 二选一）
+      required: false
+      example: "100121501186"
       selector:
         text:
 

@@ -67,8 +67,15 @@ async def async_get_entity_id(
         result = await call_registry_method(
             entity_registry.async_get_entity_id, domain, DOMAIN, unique_id
         )
-    except TypeError:
-        # 签名不兼容（极老版本），放弃查找（v1.5.9 原有兜底，v1.6.3 恢复）
+    except TypeError as e:
+        # 签名不兼容（极老版本），放弃查找（v1.5.9 原有兜底，v1.6.3 恢复）。
+        # v1.6.4：兜底不得无声——registry 内部真 TypeError 也会被吞成
+        # "实体不存在"，与 v1.6.0 "entity" 字面量回归同构的静默失效面，
+        # 必须留可观测痕迹（manifest 已钉 2024.12 下限，触发即异常事件）
+        _LOGGER.warning(
+            "async_get_entity_id(%s, %s) 抛出 TypeError，降级为未找到: %s",
+            domain, unique_id, e,
+        )
         return None
     if result is None:
         return None

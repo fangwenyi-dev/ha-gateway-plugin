@@ -291,7 +291,7 @@
     </div>
 
     <script>
-        let CURRENT_VERSION = '1.6.3';
+        let CURRENT_VERSION = '1.6.4';
         const DOMAIN = 'window_controller_gateway';
 
         // v1.6.3：页头/页脚的初始版本号不再硬编码——脚本在 body 末尾，
@@ -660,12 +660,12 @@
                 '<span class="slider-value position-value">' + escapeHtml(currentPos) + (currentPos === '--' ? '' : '%') + '</span></div>' +
                 '<div class="slider-row"><span class="slider-label">速度</span>' +
                 '<input type="range" class="speed-slider" min="' + escapeHtml(speedMin) + '" max="' + escapeHtml(speedMax) + '" value="' + escapeHtml(speedValid ? speedEntity.state : speedMin) + '"' +
-                ' oninput="this.nextElementSibling.textContent=this.value' + (speedUnit ? '+\'' + escapeHtml(speedUnit) + '\'' : '') + '"' +
+                ' oninput="this.nextElementSibling.textContent=this.value' + (speedUnit ? '+\'' + jsAttr(speedUnit) + '\'' : '') + '"' +
                 ' onchange="controlDevice(\'' + jsAttr(devId) + '\',\'set_speed\',\'' + jsAttr(entryId) + '\', this.value)">' +
                 '<span class="slider-value speed-value">' + (speedValid ? escapeHtml(speedEntity.state + speedUnit) : '--') + '</span></div>' +
                 '<div class="slider-row"><span class="slider-label">力度</span>' +
                 '<input type="range" class="strength-slider" min="' + escapeHtml(strengthMin) + '" max="' + escapeHtml(strengthMax) + '" value="' + escapeHtml(strengthValid ? strengthEntity.state : strengthMin) + '"' +
-                ' oninput="this.nextElementSibling.textContent=this.value' + (strengthUnit ? '+\'' + escapeHtml(strengthUnit) + '\'' : '') + '"' +
+                ' oninput="this.nextElementSibling.textContent=this.value' + (strengthUnit ? '+\'' + jsAttr(strengthUnit) + '\'' : '') + '"' +
                 ' onchange="controlDevice(\'' + jsAttr(devId) + '\',\'set_strength\',\'' + jsAttr(entryId) + '\', this.value)">' +
                 '<span class="slider-value strength-value">' + (strengthValid ? escapeHtml(strengthEntity.state + strengthUnit) : '--') + '</span></div>' +
                 '</div>';
@@ -800,6 +800,9 @@
                 setTimeout(() => loadGatewayDevices(entryId, gatewaySn), 2000);
             } catch (e) {
                 showToast('状态检查失败: ' + e.message, 'err');
+                // v1.6.4：失败（含服务端"未找到网关"非 2xx）不保留旧徽标结论，
+                // 回到"未知"由下次刷新重新判定
+                updateGatewayStatus(document.getElementById('gw-status-' + entryId), 'unknown');
             }
         }
 

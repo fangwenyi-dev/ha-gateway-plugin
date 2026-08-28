@@ -1,6 +1,6 @@
 #!/usr/bin/with-contenv bashio
 # =============================================================================
-# 慧尖 LoRa 网关一体化插件 — 启动脚本 v1.4.2
+# 慧尖 LoRa 网关一体化插件 — 启动脚本（版本号以 config.yaml 为准）
 #
 # 架构（host_network 模式）：
 #   - 容器直接使用主机网络，mosquitto 监听主机 2022 端口
@@ -178,16 +178,13 @@ echo "[OK] 持久化目录已创建"
 echo "[Ingress] 配置 nginx Web UI..."
 mkdir -p /run/nginx
 
-# SUPERVISOR_TOKEN 由 with-contenv 从 /run/s6/container-env 自动加载
+# SUPERVISOR_TOKEN 由 shebang 的 with-contenv 注入环境（s6-overlay v3 的
+# /run/s6/container_environment 是"每变量一文件"的目录，不存在可 source 的
+# container-env 单文件——v1.6.4 删除该死回退分支，旧代码 source 恒不执行）。
 HA_SUPERVISOR_TOKEN="${SUPERVISOR_TOKEN:-}"
 
 if [ -z "${HA_SUPERVISOR_TOKEN}" ]; then
     echo "[Ingress] 警告: SUPERVISOR_TOKEN 为空，HA API 代理将返回 401"
-    echo "[Ingress] 尝试从 /run/s6/container-env 读取..."
-    if [ -f /run/s6/container-env ]; then
-        source /run/s6/container-env 2>/dev/null || true
-        HA_SUPERVISOR_TOKEN="${SUPERVISOR_TOKEN:-}"
-    fi
 fi
 
 if [ -n "${HA_SUPERVISOR_TOKEN}" ]; then
@@ -196,10 +193,12 @@ else
     echo "[Ingress] 错误: SUPERVISOR_TOKEN 仍为空，Web UI 状态检测将不可用"
 fi
 
-# HA Supervisor 地址：优先用主机名，兜底用固定 IP（full_access 模式下 DNS 可能不解析）
+# HA Supervisor 地址：优先用主机名，兜底用固定 IP（host_network 下 DNS 可能不解析）
+# v1.6.4 修复：旧判活命令 getent 在 alpine/musl 体系根本不存在（busybox 未编该
+# applet、aports 无此包——netstat 事故同构），错误被吞导致恒走固定 IP 分支
+# 且每次启动打印误导日志。改用 base 镜像 bind-tools 提供的 host 命令。
 SUPERVISOR_HOST="supervisor"
-# 解析测试：如果不通则使用 Supervisor 固定 IP
-if ! getent hosts supervisor >/dev/null 2>&1; then
+if ! host supervisor >/dev/null 2>&1; then
     echo "[Ingress] supervisor 主机名无法解析，使用固定 IP 172.30.32.2"
     SUPERVISOR_HOST="172.30.32.2"
 fi
@@ -243,27 +242,25 @@ server {
     # "running"，broker 崩溃期间页面仍显示运行中，掩盖故障。
     # 文件不存在（循环未就绪/容器早期）返回 404，前端显示 "HTTP 404" 异常态
     location = /api/status {
-        add_header Content-Type application/json always;
+        add_header Cache-Control "no-store" always;
         root /usr/share/nginx/html;
         try_files /status.json =404;
     }
 
     location /api/version {
-        add_header Content-Type application/json;
         root /usr/share/nginx/html;
         try_files /version.json =404;
     }
 
     # 集成安装状态 — 插件本地事实（integration.json 由本脚本写入），不依赖 HA API
     location = /api/integration {
-        add_header Content-Type application/json always;
         root /usr/share/nginx/html;
         try_files /integration.json =404;
     }
 
-    # Broker 客户端连接数 — broker_status.json 由后台循环每 10 秒刷新
+    # Broker 客户端连接数 — broker_status.json 由后台循环每 5 秒刷新
     location = /api/broker {
-        add_header Content-Type application/json always;
+        add_header Cache-Control "no-store" always;
         root /usr/share/nginx/html;
         try_files /broker_status.json =404;
     }
@@ -288,9 +285,11 @@ server {
 }
 NGINXEOF
 
-nginx 2>/dev/null || {
-    echo "[Ingress] nginx 启动失败，侧边栏可能不可用"
-    # 诊断：输出 nginx 配置测试结果
+# v1.6.4：不再 2>/dev/null 吞启动错误——nginx 起不来最常见是 8099 被占/权限，
+# 旧写法把真实报错丢了，只剩 nginx -t"配置语法正常"的假象，Web UI 静默瘫痪
+nginx || {
+    echo "[Ingress] nginx 启动失败（错误见上），侧边栏可能不可用"
+    # 追加配置语法测试辅助定位（语法问题与运行时问题分开看）
     nginx -t 2>&1 || true
 }
 
@@ -304,13 +303,31 @@ set +e
 # v1.6.3：mDNS 现在是看门狗子 shell（MDNS_PID）+ 其 python 子进程，
 # kill 子 shell 不会带走 python，须一并 pkill，否则残留进程继续占用 5353
 MDNS_PID=""
+MOSQUITTO_PID=""
 cleanup_mdns() {
     if [ -n "${MDNS_PID}" ]; then
-        kill "${MDNS_PID}" 2>/dev/null
+        kill "${MDNS_PID}" 2>/dev/null || true
     fi
-    pkill -f mdns_publisher.py 2>/dev/null
+    pkill -f mdns_publisher.py 2>/dev/null || true
 }
-trap cleanup_mdns EXIT INT TERM
+# v1.6.4 停机路径根修：旧写法 trap cleanup_mdns EXIT INT TERM 的处理函数
+# 只清理不退出——SIGTERM 到达后 bash 跑完 handler 从被中断的 wait 返回
+# （rc=143），主循环把它当崩溃继续计数并重启 mosquitto，直到 docker 宽限期
+# 结束 SIGKILL：broker 从未收到 TERM 优雅落盘（persistence 最坏丢 30 分钟
+# retained 状态）、add-on 每次 stop/restart 都拖满超时。现 INT/TERM 显式
+# 转发 TERM 给 broker、清理、exit 143。
+shutdown_handler() {
+    if [ -n "${MOSQUITTO_PID}" ]; then
+        kill -TERM "${MOSQUITTO_PID}" 2>/dev/null || true
+        # 给 broker 落盘 persistence（retained 消息）的窗口——脚本 exit 后
+        # s6 即拆容器进程树，不留窗口 mosquitto 可能带着未保存状态被杀
+        sleep 1 2>/dev/null || true
+    fi
+    cleanup_mdns
+    exit 143
+}
+trap cleanup_mdns EXIT
+trap shutdown_handler INT TERM
 
 # mDNS 实现方案（v1.4.2+）：
 #
@@ -392,8 +409,10 @@ if [ "${INSTALL_INTEGRATION}" = "true" ]; then
 
             NEED_UPDATE=false
             if [ -f "${INTEGRATION_DST}/manifest.json" ]; then
-                EXISTING_VERSION=$(cat "${INTEGRATION_DST}/manifest.json" | jq -r '.version // "0"' 2>/dev/null || echo "0")
-                NEW_VERSION=$(cat "${INTEGRATION_SRC}/manifest.json" | jq -r '.version // "0"' 2>/dev/null || echo "0")
+                # v1.6.4：jq 直读文件——旧 cat|jq 管道里 cat 失败被 2>/dev/null 吞、
+                # jq 收空输入 rc=0 输出空串，|| echo "0" 兜底永不触发（管道状态掩蔽）
+                EXISTING_VERSION=$(jq -r '.version // "0"' "${INTEGRATION_DST}/manifest.json" 2>/dev/null || echo "0")
+                NEW_VERSION=$(jq -r '.version // "0"' "${INTEGRATION_SRC}/manifest.json" 2>/dev/null || echo "0")
                 if [ "${NEW_VERSION}" != "${EXISTING_VERSION}" ]; then
                     NEED_UPDATE=true
                     echo "[集成] 版本变化: ${EXISTING_VERSION} → ${NEW_VERSION}，更新集成"
@@ -510,23 +529,44 @@ fi
 # ---------- 7b. Broker 连接数与存活状态后台采集（Web UI 本地读取，不依赖 HA API） ----------
 # 每 5 秒：统计 :2022 上的 ESTABLISHED 连接数写 broker_status.json；
 # 并写 status.json（nginx /api/status 的真实数据源，v1.6.3 取代硬编码 return 200）。
-# 存活判据用 2022 端口 LISTEN（而非 kill -0 PID——PID 在重启后会变，且
-# mosquitto 僵而不死时 PID 存在但端口已丢），并附当前 PID 便于排障。
-# exec 替换主进程后此子进程继续运行（独立进程，被 init 接管）。
+# v1.6.4 根修：HA alpine base 镜像【没有 netstat】（apk 包仅 bash/bind-tools/
+# ca-certificates/curl/jq/libstdc++/tzdata/xz），旧 netstat 判活恒空输出——
+# status.json 永远 stopped、clients 永远 0（双双假状态）。改用 base 必有的
+# /proc/net/tcp{,6} + busybox awk：state 0A=LISTEN、01=ESTABLISHED，
+# 端口比对用 printf '%04X' 动态十六进制（kernel 输出为大写，无硬编码）。
+# host_network 下容器网络命名空间=主机，看到的即真实监听。
+# 本循环是后台子 shell；v1.6.3 起主脚本无 exec 语义（wait 自愈循环常驻），
+# 主脚本退出后由 init 接管继续运行。
+PORT_HEX=$(printf '%04X' "${MQTT_PORT}")
 (
     while true; do
-        CLIENTS=$(netstat -tn 2>/dev/null | grep ':2022' | grep -c 'ESTABLISHED' || true)
-        jq -n --argjson c "${CLIENTS:-0}" '{clients:$c, updated:(now|todate)}' \
-            > /usr/share/nginx/html/broker_status.json 2>/dev/null || true
-        if netstat -tln 2>/dev/null | grep -q ':2022 '; then
+        # 单次扫描同时得到 ESTABLISHED 连接数与 LISTEN 套接字数
+        CONN_STATS=$(awk -v pat=":${PORT_HEX}$" 'FNR>1 && $2 ~ pat {
+                            if ($4 == "01") c++; else if ($4 == "0A") l++
+                        } END { print c+0, l+0 }' \
+                        /proc/net/tcp /proc/net/tcp6 2>/dev/null || echo "0 0")
+        CLIENTS=${CONN_STATS% *}
+        LISTENERS=${CONN_STATS#* }
+        # tmp+mv 原子替换：jq>file 先截断，nginx 高轮询下可能读到半截/空文件。
+        # v1.6.4：写失败必须发声——否则 status.json 冻结在最后成功值，
+        # broker 死后页面永远"运行中"（v1.6.2 硬编码 200 的隐蔽复刻）
+        jq -n --argjson c "${CLIENTS:-0}" \
+            '{clients:$c, connected:$c, updated:(now|todate)}' \
+            > /usr/share/nginx/html/broker_status.json.tmp 2>/dev/null \
+            && mv /usr/share/nginx/html/broker_status.json.tmp /usr/share/nginx/html/broker_status.json 2>/dev/null \
+            || echo "[警告] broker_status.json 写入失败（检查 /usr/share/nginx/html 可写性/磁盘）"
+        # 存活判据：MQTT 端口有 LISTEN 套接字（比 PID 检查更真实——僵而不死时端口已丢）
+        if [ "${LISTENERS:-0}" -gt 0 ] 2>/dev/null; then
             RUNNING=true
         else
             RUNNING=false
         fi
         PID_NOW=$(cat /run/mosquitto.pid 2>/dev/null || echo 0)
-        jq -n --argjson r "${RUNNING}" --argjson p "${PID_NOW:-0}" \
-            '{status:(if $r then "running" else "stopped" end), running:$r, broker:"mosquitto", port:2022, pid:$p, updated:(now|todate)}' \
-            > /usr/share/nginx/html/status.json 2>/dev/null || true
+        jq -n --argjson r "${RUNNING}" --argjson p "${PID_NOW:-0}" --argjson l "${LISTENERS:-0}" --argjson pt "${MQTT_PORT}" \
+            '{status:(if $r then "running" else "stopped" end), running:$r, broker:"mosquitto", port:$pt, pid:$p, listeners:$l, updated:(now|todate)}' \
+            > /usr/share/nginx/html/status.json.tmp 2>/dev/null \
+            && mv /usr/share/nginx/html/status.json.tmp /usr/share/nginx/html/status.json 2>/dev/null \
+            || echo "[警告] status.json 写入失败——页面状态将冻结，重点排查"
         sleep 5
     done
 ) &
@@ -572,8 +612,13 @@ if command -v mosquitto_pub >/dev/null 2>&1; then
         echo "[OK] Mosquitto MQTT 协议验证通过（mosquitto_pub 成功）"
     else
         echo "[警告] mosquitto_pub 测试失败（broker 可能仍在初始化或密码配置有误）"
-        # v1.6.3：只打印用户名与行数（cut 取冒号前），不再 head 完整哈希行
-        echo "[诊断] /etc/mosquitto/passwd 用户: $(cut -d: -f1 /etc/mosquitto/passwd 2>/dev/null | tr '\n' ' ' || echo 文件不存在)"
+        # v1.6.3：只打印用户名，不 head 完整哈希行
+        # v1.6.4：cut|tr||echo 的兜底是死代码（管道 rc 取 tr，恒 0）——改显式存在性判断
+        if [ -f /etc/mosquitto/passwd ]; then
+            echo "[诊断] /etc/mosquitto/passwd 用户: $(cut -d: -f1 /etc/mosquitto/passwd | tr '\n' ' ')"
+        else
+            echo "[诊断] /etc/mosquitto/passwd 文件不存在 ← 重点排查"
+        fi
         echo "[诊断] mosquitto.conf 内容:"
         cat /etc/mosquitto/mosquitto.conf 2>/dev/null | sed 's/^/  /'
     fi

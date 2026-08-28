@@ -11,6 +11,10 @@ FROM ghcr.io/home-assistant/${BUILD_ARCH}-base:latest
 # 先复制 requirements.txt（pip install 需要用）
 COPY requirements.txt /tmp/requirements.txt
 
+# v1.6.4：显式装 openssl CLI——base 镜像只有 libssl 库没有命令行，
+# run.sh 密码哈希的 mosquitto_passwd 兜底路径此前是死路（command not found 被吞）。
+# 注意：RUN 续行体内不能插 # 注释行——sh 会把 `\`+注释行的线拼断，
+# 后续包名/命令脱链成为独立命令造成构建期事故。
 RUN apk add --no-cache \
     mosquitto \
     mosquitto-clients \
@@ -19,6 +23,7 @@ RUN apk add --no-cache \
     nginx \
     python3 \
     py3-pip \
+    openssl \
     && pip3 install --no-cache-dir -r /tmp/requirements.txt \
     || pip3 install --no-cache-dir --break-system-packages -r /tmp/requirements.txt
 
