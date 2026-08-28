@@ -2,19 +2,16 @@ ARG BUILD_ARCH
 # 基础镜像使用 HA 官方 base 镜像（不固定 Alpine 版本号，避免 tag 不存在导致安装失败）
 FROM ghcr.io/home-assistant/${BUILD_ARCH}-base:latest
 
-# 安装依赖包
+# 安装依赖包（v1.6.4 分层重构：此前 apk+pip 挤在同一个 RUN，任何一侧
+# 小改动都令 pip 走网络的层全量重建——Supervisor 源码安装表现为
+# "一直安装不成功"。拆层后各层独立命中缓存。
+# 注意：RUN 续行体内不能插 # 注释行——sh 会把 `\`+注释行的线拼断，
+# 后续包名/命令脱链成为独立命令造成构建期事故）
 # - mosquitto/mosquitto-clients: MQTT broker + 客户端工具
 # - curl/jq: HA API 调用
 # - nginx: Ingress Web UI
 # - python3/py3-pip: 运行 zeroconf mDNS 广播脚本
-# - zeroconf: 纯 Python mDNS 库，不依赖 D-Bus/avahi-daemon，避免 HAOS 端口冲突
-# 先复制 requirements.txt（pip install 需要用）
-COPY requirements.txt /tmp/requirements.txt
-
-# v1.6.4：显式装 openssl CLI——base 镜像只有 libssl 库没有命令行，
-# run.sh 密码哈希的 mosquitto_passwd 兜底路径此前是死路（command not found 被吞）。
-# 注意：RUN 续行体内不能插 # 注释行——sh 会把 `\`+注释行的线拼断，
-# 后续包名/命令脱链成为独立命令造成构建期事故。
+# - openssl: base 镜像只有 libssl 库没有 CLI，run.sh 密码哈希兜底需要
 RUN apk add --no-cache \
     mosquitto \
     mosquitto-clients \
@@ -23,9 +20,17 @@ RUN apk add --no-cache \
     nginx \
     python3 \
     py3-pip \
-    openssl \
-    && pip3 install --no-cache-dir -r /tmp/requirements.txt \
-    || pip3 install --no-cache-dir --break-system-packages -r /tmp/requirements.txt
+    openssl
+
+# zeroconf: 纯 Python mDNS 库，不依赖 D-Bus/avahi（HAOS 端口冲突定案）。
+# pip 多级回退：pypi 直连 → 清华 → 阿里（--timeout 防挂死，国内链路慢时
+# 快速失败立刻切镜像源）。首条不带 --break-system-packages 是 alpine
+# EXTERNALLY-MANAGED 下秒败的兼容位，真实下载从第二条开始
+COPY requirements.txt /tmp/requirements.txt
+RUN pip3 install --no-cache-dir --timeout 30 --retries 2 -r /tmp/requirements.txt \
+    || pip3 install --no-cache-dir --break-system-packages --timeout 30 --retries 2 -r /tmp/requirements.txt \
+    || pip3 install --no-cache-dir --break-system-packages --timeout 60 -i https://pypi.tuna.tsinghua.edu.cn/simple -r /tmp/requirements.txt \
+    || pip3 install --no-cache-dir --break-system-packages --timeout 60 -i https://mirrors.aliyun.com/pypi/simple -r /tmp/requirements.txt
 
 # 复制 mDNS 广播脚本（纯 Python zeroconf，不依赖 avahi/D-Bus）
 COPY mdns_publisher.py /usr/bin/mdns_publisher.py

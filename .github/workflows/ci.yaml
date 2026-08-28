@@ -191,31 +191,32 @@ jobs:
             ${{ needs.prepare.outputs.version }}
             latest
 
-      # v1.6.3：ghcr 包默认 private，匿名拉取 403——CI 推上去的镜像 Supervisor
-      # 根本用不了（config.yaml 无法声明 image），构建纯属白烧 runner。
-      # 用本次构建的 GITHUB_TOKEN（packages:write）把包设为 public；
-      # 成功后即可在 config.yaml 启用 image: ghcr.io/fangwenyi-dev/{arch}-huijian-mqtt-broker。
-      # 失败不阻塞发布（源码构建路径仍可用），但日志必须醒目提示。
-      - name: Make container packages public
+      # v1.6.4 定案：GitHub【没有】改变 package visibility 的 REST API——
+      # PUT/PATCH × /user/ 与 /users/{owner}/ 四种组合实测全 404（端点不存在，
+      # 非 token 权限问题；gh auth status 确认 token 已含 write:packages 依旧 404）。
+      # 唯一途径是 Web UI：Settings → Packages → 选中包 → Danger Zone →
+      # Change visibility → Public。CI 只能提示，无法代办。
+      - name: Check package visibility (manual one-time step)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           set -u
           FAILED=""
           for p in "${IMAGE_NAME}" "amd64-${IMAGE_NAME}" "aarch64-${IMAGE_NAME}"; do
-            if curl -fsS -o /dev/null -X PATCH \
-                 -H "Authorization: Bearer ${GH_TOKEN}" \
-                 -H "Accept: application/vnd.github+json" \
-                 "https://api.github.com/users/${GITHUB_ACTOR}/packages/container/${p}/visibility" \
-                 -d '{"visibility":"public"}'; then
-              echo "✅ ${p} 已设为 public"
+            # 匿名 manifest 探测：200=public 可用；403/404=仍 private
+            T=$(curl -fsS "https://ghcr.io/token?scope=repository:${GITHUB_REPOSITORY_OWNER}/$p:pull" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p' || true)
+            C=$(curl -s -o /dev/null -w "%{http_code}" "https://ghcr.io/v2/${GITHUB_REPOSITORY_OWNER}/$p/manifests/${VERSION:-latest}" -H "Authorization: Bearer ${T:-none}" || echo 000)
+            if [ "$C" = "200" ]; then
+              echo "✅ ${p} 匿名可拉（public）"
             else
-              FAILED="${FAILED} ${p}"
+              FAILED="${FAILED} ${p}(HTTP $C)"
             fi
           done
           if [ -n "${FAILED}" ]; then
-            echo "::warning title=ghcr 包未能公开::以下包设为 public 失败:${FAILED}——config.yaml 的 image: 字段不可启用，用户仍走源码构建路径；可在仓库 Settings 手动公开"
+            echo "::warning title=ghcr 包仍为 private::${FAILED} —— config.yaml 的 image: 字段不可启用。一次性手工修复：打开 https://github.com/users/${GITHUB_REPOSITORY_OWNER}/packages 把三个 *-huijian-mqtt-broker 包 Change visibility 为 Public"
           fi
+
 
   # ========== 3. 创建 GitHub Release ==========
   release:
