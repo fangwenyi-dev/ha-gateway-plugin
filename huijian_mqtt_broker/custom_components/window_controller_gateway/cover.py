@@ -5,6 +5,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.entity import DeviceInfo
+from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.components.cover import (
     CoverEntity,
     CoverEntityFeature,
@@ -20,6 +21,10 @@ from .const import (
     COMMAND_OPEN,
     COMMAND_CLOSE,
     COMMAND_STOP,
+    DEVICE_STATUS_OPEN,
+    DEVICE_STATUS_CLOSED,
+    DEVICE_STATUS_UNKNOWN,
+    DEVICE_STATUS_CONNECTED,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -28,7 +33,7 @@ _LOGGER = logging.getLogger(__name__)
 from .utils import get_entity_registry
 
 
-class WindowControllerCover(WindowControllerBaseEntity, CoverEntity):
+class WindowControllerCover(WindowControllerBaseEntity, RestoreEntity, CoverEntity):
     """开窗器Cover实体 - 供LLM等使用Cover语义控制"""
 
     def __init__(
@@ -78,8 +83,69 @@ class WindowControllerCover(WindowControllerBaseEntity, CoverEntity):
 
     @property
     def is_closed(self):
-        """始终返回None，HA不知道开闭状态，所以所有按钮都可点击"""
+        """v1.6.8：由网关上报缓存推导真实开/闭。
+
+        v1.0.1 起这里写死 return None（本意是防原生卡片按钮变灰），
+        副作用是 HA 标准 state 计算（is_closed=None → state=None）
+        使 cover.state **永远输出 unknown**——历史曲线、自动化触发条件、
+        LLM 语义控制与 Web 管理面板状态行全部失效。现恢复真实语义：
+        窗闭合时原生卡片「关」按钮置灰属 HA 正常行为；Web 面板按钮
+        为自定义控件不受影响。current_cover_position 仍返回 None，
+        避免位置 0/100 端点连带置灰。
+        """
+        device = self.device_manager.get_device(self.device_sn)
+        if device:
+            status = device.get("status")
+            if status == DEVICE_STATUS_CLOSED:
+                return True
+            if status == DEVICE_STATUS_OPEN:
+                return False
+            # v1.6.8（用户定案：状态与位置同步——r_travel 0=关，>0=开）：
+            # 005 只报位置不带 status 字段时，缓存 r_travel 已更新而 status
+            # 仍是 unknown，按同一协议语义直接从位置推导，避免
+            # 「待上报 + 位置 65%」这种自相矛盾的显示
+            r_travel = (device.get("attributes") or {}).get("r_travel")
+            try:
+                if r_travel is not None:
+                    return int(r_travel) <= 0
+            except (ValueError, TypeError):
+                pass
         return None
+
+    async def async_added_to_hass(self):
+        """启动时把上次重启前的开/关状态与位置回填设备缓存（v1.6.8）。
+
+        协议规定网关只能主动推送（002/005），HA 无法主动查询，而
+        device_manager 缓存不跨重启——修复前每次 HA 重启后所有子设备
+        状态都要等下一次网关上报才有值（unknown 窗口最长可达上报周期）。
+        恢复值仅在缓存尚无实时数据时写入；真实上报到达后自然覆盖。
+        """
+        await super().async_added_to_hass()
+        try:
+            last_state = await self.async_get_last_state()
+        except Exception as e:
+            _LOGGER.debug("获取 %s 历史状态失败: %s", self.device_sn, e)
+            return
+        if not last_state or last_state.state not in ("open", "closed"):
+            return
+        device = self.device_manager.get_device(self.device_sn)
+        if device is None:
+            return
+        if device.get("status") not in (None, DEVICE_STATUS_UNKNOWN, DEVICE_STATUS_CONNECTED):
+            return  # 本会话已有实时上报，不覆盖
+        attributes = {}
+        pos = (last_state.attributes or {}).get("position")
+        try:
+            if pos is not None:
+                attributes["r_travel"] = max(0, min(100, int(pos)))
+        except (ValueError, TypeError):
+            pass
+        status = DEVICE_STATUS_OPEN if last_state.state == "open" else DEVICE_STATUS_CLOSED
+        _LOGGER.info(
+            "恢复设备 %s 重启前状态: %s%s", self.device_sn, status,
+            "（位置 %s%%）" % attributes["r_travel"] if "r_travel" in attributes else ""
+        )
+        await self.device_manager.update_device_status(self.device_sn, status, attributes or None)
 
     @property
     def is_closing(self):

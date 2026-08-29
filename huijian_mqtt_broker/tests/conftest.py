@@ -29,6 +29,7 @@ ha_helpers_entity_platform = _pkg("homeassistant.helpers.entity_platform")
 ha_helpers_device_registry = _pkg("homeassistant.helpers.device_registry")
 ha_helpers_entity_registry = _pkg("homeassistant.helpers.entity_registry")
 ha_helpers_config_validation = _pkg("homeassistant.helpers.config_validation")
+ha_helpers_restore_state = _pkg("homeassistant.helpers.restore_state")
 ha_components = _pkg("homeassistant.components")
 ha_components_http = _pkg("homeassistant.components.http")
 ha_components_mqtt = _pkg("homeassistant.components.mqtt")
@@ -156,6 +157,17 @@ ha_components_cover.CoverEntityFeature = type(
 ha_components_cover.CoverDeviceClass = type("CoverDeviceClass", (), {"WINDOW": "window"})
 ha_components_number.NumberEntity = type("NumberEntity", (), {})
 ha_components_number.NumberMode = type("NumberMode", (), {"SLIDER": "slider"})
+
+# ---- restore_state（v1.6.8：RestoreEntity 假基类，模拟真实异步接口契约）----
+class FakeRestoreEntity:
+    async def async_added_to_hass(self):
+        pass
+
+    async def async_get_last_state(self):
+        return None
+
+
+ha_helpers_restore_state.RestoreEntity = FakeRestoreEntity
 
 
 # ---- 加入 custom_components 路径（测试文件在 huijian_mqtt_broker/tests/）----

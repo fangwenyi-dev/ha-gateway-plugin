@@ -14,6 +14,27 @@
 
 
 
+## [1.6.8] - 2026-08-29
+
+### 修复（子设备状态恒显 unknown——v1.0.1 起的历史设计缺陷）
+- `cover.is_closed` 由写死 `return None` 改为按网关上报缓存推导真实开/闭：
+  HA 标准 state 计算在 is_closed=None 时输出 None→`unknown`（官方源码实证），
+  导致 cover.state 恒为 unknown——Web 状态行、历史曲线、自动化条件、
+  LLM 语义控制全部只能拿到 unknown；真实状态此前仅存在于
+  attributes.device_status。现 state 输出真实 open/closed（位置属性仍
+  不出 state，保留原生卡片按钮不因位置 0/100 置灰的原始意图）
+- Cover 实体接入 `RestoreEntity`：协议规定网关只主动推送（002/005），
+  HA 无法查询、device_manager 缓存不跨重启——修复前每次 HA 重启后
+  所有子设备状态直到下次上报都是 unknown。现启动即恢复上次开/关与
+  位置（仅当无实时数据时回填，真实上报到达优先覆盖）
+- Web 状态行三级兜底：cover.state → attributes.device_status →
+  「待上报/离线」，不再向用户暴露英文 unknown/unavailable 裸值
+- 状态与位置同步（用户定案：r_travel 0=关、>0=开）：当 status 仍为
+  unknown/connected 但已有 position 上报时，is_closed 与 Web 状态行均按
+  位置推导，消除「状态: 待上报 + 位置: 65%」的自相矛盾显示
+- 新增 tests/test_cover_state.py：is_closed 推导×5 + 重启回填×5
+  （静默失效面断言，参考 CLAUDE.md v1.6.0 教训）
+
 ## [1.6.7] - 2026-08-29
 
 ### 修复（更新检查版本源）

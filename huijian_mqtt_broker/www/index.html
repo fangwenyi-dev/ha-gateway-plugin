@@ -440,7 +440,7 @@
     </div>
 
     <script>
-        let CURRENT_VERSION = '1.6.7';
+        let CURRENT_VERSION = '1.6.8';
         const DOMAIN = 'window_controller_gateway';
 
         // v1.6.3：页头/页脚的初始版本号不再硬编码——脚本在 body 末尾，
@@ -912,10 +912,20 @@
                 if (coverEntity) {
                     const pos = coverEntity.attributes.position;
                     const state = coverEntity.state;
+                    const devStatus = coverEntity.attributes.device_status;
                     if (state === 'open') statusText = '状态: 打开';
                     else if (state === 'closed' || state === 'close') statusText = '状态: 关闭';
                     else if (state === 'opening') statusText = '状态: 正在打开';
                     else if (state === 'closing') statusText = '状态: 正在关闭';
+                    // v1.6.8：state 为 unknown 时按 device_status 属性兜底，
+                    // 避免直接暴露英文 unknown/unavailable 给用户
+                    else if (devStatus === 'open') statusText = '状态: 打开';
+                    else if (devStatus === 'closed') statusText = '状态: 关闭';
+                    // 用户定案：状态与位置同步——status 缺失但上报了 position 时，
+                    // 按位置推导（0=关闭，>0=打开），避免「待上报 + 位置 65%」矛盾
+                    else if (pos !== undefined && pos !== null && pos !== '') statusText = '状态: ' + (Number(pos) > 0 ? '打开' : '关闭');
+                    else if (state === 'unavailable') statusText = '状态: 离线';
+                    else if (devStatus === 'connected' || state === 'unknown' || devStatus === 'unknown') statusText = '状态: 待上报';
                     else statusText = '状态: ' + state;
                     if (pos !== undefined) statusText += ' | 位置: ' + pos + '%';
                     const slider = document.querySelector('#dev-' + dev.id + ' .position-slider');
