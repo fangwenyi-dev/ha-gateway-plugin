@@ -4,6 +4,9 @@ v1.6.3/v1.6.4 连续修复了 check_gateway_status / start_pairing / rename_devi
 的 error-log-then-return 静默假成功（REST 返回 200，Web UI 弹「已发送/成功」
 假 toast）。本文件钉死"调用即失败 ⇒ 抛 ServiceValidationError"契约，
 防止未来重构把 raise 改回 return。
+
+v1.6.8 追加：refresh_devices / set_position / migrate_devices / transfer_device
+同样必须抛错，不能静默 return 200。
 """
 from types import SimpleNamespace
 
@@ -15,6 +18,10 @@ from custom_components.window_controller_gateway.services import (
     handle_check_gateway_status,
     handle_rename_device,
     handle_start_pairing,
+    handle_refresh_devices,
+    handle_set_position,
+    handle_migrate_devices,
+    handle_transfer_device,
 )
 
 
@@ -56,6 +63,60 @@ class TestFailFastRaises:
         hass = SimpleNamespace(data={})
         with pytest.raises(ServiceValidationError):
             await handle_start_pairing(hass, _call(device_id="no-such"))
+
+    @pytest.mark.asyncio
+    async def test_refresh_devices_missing_device_id(self):
+        with pytest.raises(ServiceValidationError):
+            await handle_refresh_devices(SimpleNamespace(), _call())
+
+    @pytest.mark.asyncio
+    async def test_refresh_devices_gateway_not_found(self):
+        hass = SimpleNamespace(data={})
+        with pytest.raises(ServiceValidationError):
+            await handle_refresh_devices(hass, _call(device_id="no-such"))
+
+    @pytest.mark.asyncio
+    async def test_set_position_missing_device_id(self):
+        with pytest.raises(ServiceValidationError):
+            await handle_set_position(SimpleNamespace(), _call())
+
+    @pytest.mark.asyncio
+    async def test_set_position_missing_position(self):
+        with pytest.raises(ServiceValidationError):
+            await handle_set_position(SimpleNamespace(), _call(device_id="x"))
+
+    @pytest.mark.asyncio
+    async def test_set_position_invalid_position(self):
+        # bool 是 int 子类，type() is int 必须拦截
+        with pytest.raises(ServiceValidationError):
+            await handle_set_position(SimpleNamespace(), _call(device_id="x", position=True))
+        with pytest.raises(ServiceValidationError):
+            await handle_set_position(SimpleNamespace(), _call(device_id="x", position=-1))
+        with pytest.raises(ServiceValidationError):
+            await handle_set_position(SimpleNamespace(), _call(device_id="x", position=101))
+
+    @pytest.mark.asyncio
+    async def test_set_position_device_not_found(self):
+        hass = SimpleNamespace(data={})
+        with pytest.raises(ServiceValidationError):
+            await handle_set_position(hass, _call(device_id="no-such", position=50))
+
+    @pytest.mark.asyncio
+    async def test_migrate_devices_invalid_args(self):
+        hass = SimpleNamespace(data={}, config_entries=SimpleNamespace(async_entries=lambda: []))
+        with pytest.raises(ServiceValidationError):
+            await handle_migrate_devices(hass, _call(old_gateway_sn="short", new_gateway_sn="also"))
+        with pytest.raises(ServiceValidationError):
+            await handle_migrate_devices(hass, _call(old_gateway_sn="SN12345678", new_gateway_sn="SN12345678"))
+
+    @pytest.mark.asyncio
+    async def test_transfer_device_missing_args(self):
+        with pytest.raises(ServiceValidationError):
+            await handle_transfer_device(SimpleNamespace(), _call())
+        with pytest.raises(ServiceValidationError):
+            await handle_transfer_device(SimpleNamespace(), _call(device_id="x"))
+        with pytest.raises(ServiceValidationError):
+            await handle_transfer_device(SimpleNamespace(), _call(new_gateway_sn="y"))
 
 
 class TestValidationErrorContract:

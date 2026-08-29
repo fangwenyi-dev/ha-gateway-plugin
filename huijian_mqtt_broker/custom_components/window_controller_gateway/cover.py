@@ -2,6 +2,7 @@
 import logging
 
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.entity import DeviceInfo
@@ -101,9 +102,10 @@ class WindowControllerCover(WindowControllerBaseEntity, RestoreEntity, CoverEnti
             if status == DEVICE_STATUS_OPEN:
                 return False
             # v1.6.8（用户定案：状态与位置同步——r_travel 0=关，>0=开）：
-            # 005 只报位置不带 status 字段时，缓存 r_travel 已更新而 status
-            # 仍是 unknown，按同一协议语义直接从位置推导，避免
-            # 「待上报 + 位置 65%」这种自相矛盾的显示
+            # 防御性兜底。现行链路里 r_travel 总是与推导出的 status 同时写入
+            # （002 _update_device_attributes 与 005 attrs 分支均如此），此分支
+            # 正常不触发；保留是防固件将来「只推位置不带状态字段」时出现
+            # 「待上报 + 位置 65%」的矛盾显示
             r_travel = (device.get("attributes") or {}).get("r_travel")
             try:
                 if r_travel is not None:
@@ -195,28 +197,37 @@ class WindowControllerCover(WindowControllerBaseEntity, RestoreEntity, CoverEnti
         self.async_write_ha_state()
 
     async def async_open_cover(self, **kwargs) -> None:
-        """打开开窗器"""
+        """打开开窗器（v1.6.9：失败如实上抛，此前吞异常+不查返回值=假成功）"""
         try:
-            await self._get_mqtt_handler().send_command(self.device_sn, COMMAND_OPEN)
-            _LOGGER.info("Cover打开: %s", self.device_sn)
+            success = await self._get_mqtt_handler().send_command(self.device_sn, COMMAND_OPEN)
         except Exception as e:
             _LOGGER.error("Cover打开失败 %s: %s", self.device_sn, e)
+            raise HomeAssistantError(f"打开失败：{e}") from e
+        if not success:
+            raise HomeAssistantError("打开失败：命令未送达（网关或设备离线）")
+        _LOGGER.info("Cover打开: %s", self.device_sn)
 
     async def async_close_cover(self, **kwargs) -> None:
-        """关闭开窗器"""
+        """关闭开窗器（v1.6.9：失败如实上抛）"""
         try:
-            await self._get_mqtt_handler().send_command(self.device_sn, COMMAND_CLOSE)
-            _LOGGER.info("Cover关闭: %s", self.device_sn)
+            success = await self._get_mqtt_handler().send_command(self.device_sn, COMMAND_CLOSE)
         except Exception as e:
             _LOGGER.error("Cover关闭失败 %s: %s", self.device_sn, e)
+            raise HomeAssistantError(f"关闭失败：{e}") from e
+        if not success:
+            raise HomeAssistantError("关闭失败：命令未送达（网关或设备离线）")
+        _LOGGER.info("Cover关闭: %s", self.device_sn)
 
     async def async_stop_cover(self, **kwargs) -> None:
-        """停止开窗器"""
+        """停止开窗器（v1.6.9：失败如实上抛）"""
         try:
-            await self._get_mqtt_handler().send_command(self.device_sn, COMMAND_STOP)
-            _LOGGER.info("Cover停止: %s", self.device_sn)
+            success = await self._get_mqtt_handler().send_command(self.device_sn, COMMAND_STOP)
         except Exception as e:
             _LOGGER.error("Cover停止失败 %s: %s", self.device_sn, e)
+            raise HomeAssistantError(f"停止失败：{e}") from e
+        if not success:
+            raise HomeAssistantError("停止失败：命令未送达（网关或设备离线）")
+        _LOGGER.info("Cover停止: %s", self.device_sn)
 
 async def async_setup_entry(
     hass: HomeAssistant,

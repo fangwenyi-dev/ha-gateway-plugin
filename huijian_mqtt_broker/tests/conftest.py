@@ -77,11 +77,18 @@ ha_const.__version__ = "2026.8.0"
 
 
 # ---- exceptions ----
+class HomeAssistantError(Exception):
+    pass
+
+
 class ConfigEntryNotReady(Exception):
     pass
 
 
 ha_exceptions.ConfigEntryNotReady = ConfigEntryNotReady
+ha_exceptions.HomeAssistantError = HomeAssistantError
+# v1.6.9：cover.py/button.py/gateway.py 硬 import HomeAssistantError（控制命令
+# 假成功根治），假环境必须提供，否则 import 期 AttributeError
 
 
 # ---- config_entries ----
@@ -168,6 +175,24 @@ class FakeRestoreEntity:
 
 
 ha_helpers_restore_state.RestoreEntity = FakeRestoreEntity
+
+# ---- v1.6.9：base_entity 生命周期方法链补 super() 后，真实 HA 里
+# Entity 基类（homeassistant/helpers/entity.py）对两个钩子都有空实现，
+# 假实体类必须同样提供，否则测试 MRO 里 super() 落到 object 抛 AttributeError
+async def _noop_async(self):
+    return None
+
+
+for _fake in (
+    ha_components_button.ButtonEntity,
+    ha_components_binary_sensor.BinarySensorEntity,
+    ha_components_sensor.SensorEntity,
+    ha_components_cover.CoverEntity,
+    ha_components_number.NumberEntity,
+    FakeRestoreEntity,
+):
+    _fake.async_added_to_hass = _noop_async
+    _fake.async_will_remove_from_hass = _noop_async
 
 
 # ---- 加入 custom_components 路径（测试文件在 huijian_mqtt_broker/tests/）----

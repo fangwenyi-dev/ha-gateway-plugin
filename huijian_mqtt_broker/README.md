@@ -1,6 +1,6 @@
 # 慧尖 LoRa 网关一体化插件
 
-[![版本](https://img.shields.io/badge/version-1.6.2-blue)]()
+[![版本](https://img.shields.io/badge/version-1.6.9-blue)]()
 [![HA Add-on](https://img.shields.io/badge/HA-Add--on-green)]()
 
 慧尖开窗器 LoRa 网关的 Home Assistant 一体化插件。**内置 Mosquitto Broker + mDNS 自动发现 + 网关集成，安装一个插件即可获得全部能力**。
@@ -146,96 +146,15 @@ https://github.com/fangwenyi-dev/ha-gateway-plugin
 
 ## 更新日志
 
-### v1.6.1 (2026-08-28)
-- **修复（删除设备后实体残留崩溃）**：实体从注册表删除后 HA 仍轮询 async_update，
-  此时 hass 为 None 导致 'NoneType' object has no attribute 'data' 崩溃。
-  全部实体 async_update 及内部方法加 hass 守卫
-- **修复（移除按钮实体未删除）**：删除按钮改用 unique_id 精确定位删除，
-  不依赖动态添加实体的 entity_id 赋值时机
-- **优化（日志级别）**：自动发现跳过被删设备、手动配对重新添加被删设备的日志降为 debug
-- ⚠️ **需要重启 HA**（集成代码有更新）
+### v1.6.9 (2026-08-29)
+- **修复（假成功根治）**：start_pairing 失败被吞返回 200、set_position
+  fire-and-forget 吞异常、cover 开/关/停与 button/配对按钮不查发送结果——
+  命令未送达时全部如实报错（服务抛 ServiceValidationError，实体抛
+  HomeAssistantError）
+- **修复**：Web 无感刷新补网关级增删检测（此前只检测设备，第二台网关需手动刷新）
+- **修复**：run.sh `/api/ha/` 代理补 no-store；就绪探测端口改用 `$MQTT_PORT`
+- **加固**：CI ghcr 包可见性探测失败改为阻断发布（原仅警告会掩盖"装不上"）；
+  base_entity 生命周期链补 super()；静默更新检查三重限流防 GitHub 匿名限流
+- **文档**：README 更新日志收敛到仓库根 CHANGELOG.md 单一真源
 
-### v1.6.0 (2026-08-28)
-- **修复（删除设备批量报错 'NoneType' object can't be awaited）**：新版 HA 中
-  EntityRegistry/DeviceRegistry 的 async_remove/async_remove_device/async_update_entity
-  等均为同步方法，代码中 await 同步方法导致报错。新增 call_registry_method 兼容层
-  （自动探测同步/异步），全项目 22 处 registry 调用统一修复
-- 修复范围：删除设备/子设备、重命名、设备转移、网关迁移、禁用实体恢复、发现忽略等全部 registry 操作
-- ⚠️ **需要重启 HA**（集成代码有更新）
-
-### v1.5.9 (2026-08-28)
-- **修复（Web 界面"删除"按钮找不到实体）**：删除按钮 unique_id 格式为
-  {gw}_remove_{sn}（remove 在设备 SN 前），与常规实体 {gw}_{sn}_{suffix} 不同，
-  实体查找锚点不匹配。findEntityByUniqueId 改为双锚点匹配（兼容两种布局）
-- ⚠️ **需要重启插件**（Web UI 代码更新）
-
-### v1.5.8 (2026-08-28)
-- **修复（重命名设备报错）**：HA 新版将 EntityRegistry.async_get_entity_id 改为
-  async 方法，项目 12 处调用均未 await 导致 'RegistryEntry' object can't be awaited。
-  新增兼容辅助函数（兼容新旧 HA），统一修复全部调用点
-- **修复（Web 界面"内倒"按钮不发送命令）**：controlDevice 缺少 'a' 命令分支，
-  点内倒落入"未知命令"；新增按 button 实体 unique_id 后缀 _a 精确查找并触发
-- ⚠️ **需要重启 HA**（集成代码有更新）
-
-### v1.5.7 (2026-08-28)
-- **优化（Web 界面滑块始终可用）**：子设备的速度/力度滑块不再因无初始上报数据
-  而禁用——与 HA 集成 number 实体行为一致（始终可拖动设置，有数据时回显当前值）
-- ⚠️ **需要重启插件**（Web UI 代码更新）
-
-### v1.5.6 (2026-08-28)
-- **修复（Web 界面网关状态显示"未知"）**：网关在线状态改为直接读取
-  mqtt_handler.connected（收到网关上报即在线），不再依赖 binary_sensor 实体
-- **修复（Web 界面网关 SN 显示"未知"）**：从设备注册表 identifiers 提取真实 SN
-  更新显示（无 SN 等待模式下 entry.data.gateway_sn 为空，但设备已注册）
-- ⚠️ **需要重启 HA**（api.py 有更新）
-
-### v1.5.5 (2026-08-28)
-- **修复（Web 界面无法控制子设备）**：Web UI 之前用设备 SN 后 6 位模糊匹配实体
-  entity_id，但设备显示名只含 SN 后 4 位（"开窗器 1207-0603 (#01)"），
-  HA 生成的实体名不含后 6 位 → 永远匹配失败（"未找到设备 cover 实体"）
-- **方案**：设备列表 API 现在返回每个设备的精确实体列表（entity_id/domain/unique_id），
-  Web UI 按 unique_id 锚点精确查找，替代脆弱的字符串模糊匹配（控制/状态/滑块/删除全部修复）
-- ⚠️ **需要重启 HA**（api.py 有更新）
-
-### v1.5.4 (2026-08-28)
-- **修复（手动配对重新添加被删设备）**：手动删除过的子设备之前因"设备复活守卫"
-  无条件拦截，即使手动配对（003 绑定确认）也无法重新添加。
-  现修复：手动配对确认（bind_op=bind）允许重新添加并从手动删除列表移除；
-  自动发现（002 上报）仍拦截，保持防复活语义
-- **新增诊断日志**：003 绑定确认打印 id/errcode/sn/bind_op/手动删除列表判定依据
-- **新增回归测试**：5 个 003 绑定确认用例（手动配对重添加/晚到确认阻止/普通添加/解绑/超时清理）
-- ⚠️ **需要重启 HA**（集成代码有更新）
-
-### v1.5.3 (2026-08-27)
-- **修复（一键升级 400/403 根因）**：Supervisor 安全设计禁止插件通过 API 自我更新
-  （`/addons/self/update` 与 `hassio.addon_update` 均不可行），
-  「一键升级」改为跳转 Supervisor 加载项页面，以管理员身份点击「更新」（唯一可靠路径）
-- ⚠️ **需要重启插件**（Web UI 代码更新）
-
-### v1.5.2 (2026-08-27)
-- **Web UI 视觉体验优化**：精简布局、优化控件样式与交互细节
-- **README 精简优化**：文档结构整理，更清晰易读
-- ⚠️ **需要重启插件**（Web UI 代码更新）
-
-### v1.5.1 (2026-08-27)
-- **修复**：一键升级失败时区分 400/403 错误，新增「打开 Supervisor 加载项页面」引导
-- **修复**：密码兜底格式无效 — 统一改用 `openssl passwd -6`（SHA-512 crypt）
-- **修复**：接管用户已有 MQTT 配置前发送持久化通知，不再静默切断
-- **修复**：设备显示编号竞态 — 新增原子自增计数器
-- **修复**：无 SN 等待模式不再 forward 空平台
-- **修复**：网关/传感器超时改用 `time.monotonic()` 单调时钟（NTP 校时不再误判离线）
-
-### v1.4.8–v1.4.10 (2026-08-27)
-- **安全加固**：ACL 分离用户 — `huijian`（网关用户）与 `ha_mqtt`（HA MQTT 集成专用）权限分离
-- **兼容性**：删除死导入、清理未使用变量、修正最低版本声明
-- **修复**：一键升级 403 → 改用 `hassio.addon_update`（HA Core 调用，不受自我更新限制）
-
-### v1.4.2–v1.4.7 (2026-08-27)
-- **重构**：用 Python zeroconf 替代 avahi 体系，彻底修复 mDNS（不依赖 D-Bus / avahi-daemon）
-- **安全**：移除 `full_access` 权限，提升安全评分
-- **修复**：mDNS 多个兼容性问题
-
-### v1.3.0–v1.3.5 (2026-08-26 ~ 2026-08-27)
-- 一体化插件架构：内置 Mosquitto Broker + 网关集成 + mDNS 广播
-- Web UI 全面升级：网关配对、子设备控制、版本检查/更新
-- MQTT broker 自动配置 + 持久化数据备份恢复机制
+完整历史见仓库根 [CHANGELOG.md](../CHANGELOG.md)。

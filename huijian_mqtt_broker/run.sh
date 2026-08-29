@@ -235,6 +235,9 @@ server {
         proxy_read_timeout 30s;
         proxy_connect_timeout 5s;
         proxy_ssl_verify off;
+        # v1.6.9：补 no-store（此前唯一漏网：设备/实体/条目 JSON 无缓存头，
+        # 会被浏览器启发式缓存 → UI 显示陈旧数据）
+        add_header Cache-Control "no-store" always;
     }
 
     # v1.6.3：删除 /api/supervisor/ 死代理。Supervisor 安全设计禁止插件经 API
@@ -605,10 +608,11 @@ for i in 1 2 3 4 5; do
         [ -s /etc/mosquitto/acl ] && echo "  acl: 存在且非空" || echo "  acl: 缺失或为空 ← 重点排查"
         exit 1
     fi
-    # 尝试 TCP 连接到 localhost:2022
+    # 尝试 TCP 连接到 localhost:${MQTT_PORT}
     # v1.6.3：/dev/tcp 是 bashism，base 镜像的 sh（BusyBox ash）不支持，
     # 旧写法恒失败、就绪检查形同虚设——改用 bash -c
-    if timeout 1 bash -c "echo >/dev/tcp/127.0.0.1/2022" 2>/dev/null; then
+    # v1.6.9：端口改用 $MQTT_PORT（原硬编码 2022 与配置变量不一致）
+    if timeout 1 bash -c "echo >/dev/tcp/127.0.0.1/${MQTT_PORT}" 2>/dev/null; then
         MOSQUITTO_READY=true
         break
     fi
@@ -616,14 +620,14 @@ for i in 1 2 3 4 5; do
 done
 
 if [ "${MOSQUITTO_READY}" = "true" ]; then
-    echo "[OK] Mosquitto TCP 端口 2022 已就绪"
+    echo "[OK] Mosquitto TCP 端口 ${MQTT_PORT} 已就绪"
 else
     echo "[警告] Mosquitto TCP 端口5秒内未就绪，继续启动..."
 fi
 
 # 等待 Mosquitto MQTT 协议响应（用 mosquitto_pub 测试）
 if command -v mosquitto_pub >/dev/null 2>&1; then
-    if mosquitto_pub -h 127.0.0.1 -p 2022 -u "${USERNAME}" -P "${PASSWORD}" -t "test/ping" -m "ok" 2>/dev/null; then
+    if mosquitto_pub -h 127.0.0.1 -p "${MQTT_PORT}" -u "${USERNAME}" -P "${PASSWORD}" -t "test/ping" -m "ok" 2>/dev/null; then
         echo "[OK] Mosquitto MQTT 协议验证通过（mosquitto_pub 成功）"
     else
         echo "[警告] mosquitto_pub 测试失败（broker 可能仍在初始化或密码配置有误）"

@@ -440,7 +440,7 @@
     </div>
 
     <script>
-        let CURRENT_VERSION = '1.6.8';
+        let CURRENT_VERSION = '1.6.9';
         const DOMAIN = 'window_controller_gateway';
 
         // v1.6.3：页头/页脚的初始版本号不再硬编码——脚本在 body 末尾，
@@ -472,10 +472,11 @@
                 }
             } catch (e) { console.log('版本获取失败:', e); }
             await refreshAll();
-            // v1.6.4：自动静默检查一次更新（只点亮徽章不打扰），
-            // 之后每 10 分钟复查——GitHub 匿名限流 60/h/IP，此频率安全
+            // v1.6.4：自动静默检查一次更新（只点亮徽章不打扰）。
+            // v1.6.9：间隔 10→30 分钟；函数内含跨标签页去重 + 不可见跳过，
+            // 多标签/后台页不再叠加 GitHub 匿名限流（60/h/IP）压力
             silentUpdateCheck();
-            setInterval(silentUpdateCheck, 10 * 60 * 1000);
+            setInterval(silentUpdateCheck, 30 * 60 * 1000);
         }
 
         // ========== 刷新所有 ==========
@@ -491,11 +492,28 @@
             const container = document.getElementById('gatewayContainer');
             if (!container) return;
             const gwItems = container.querySelectorAll('.gateway-item');
-            if (gwItems.length === 0) {
-                // 页面上还没有网关卡片，走完整加载
-                await loadGateways();
+            // v1.6.9（外部审计确认）：网关级增删也要被检测——此前只在卡片为
+            // 0 时重建，HA 里新增第二台网关页面永远不出现（与 v1.6.6 设备级
+            // 自动增删不对称）。比对 config_entries 集合，不一致才整建。
+            // 拉取失败则退回旧逻辑（空列表时重建），绝不清空已有界面
+            try {
+                const resp = await haApi('/config/config_entries/entry?domain=' + DOMAIN);
+                if (resp.ok) {
+                    const entries = await resp.json();
+                    const ids = new Set(entries.map(e => e.entry_id));
+                    const rendered = new Set(Array.from(gwItems).map(el => el.id.replace('gw-', '')));
+                    let same = ids.size === rendered.size;
+                    if (same) for (const id of ids) { if (!rendered.has(id)) { same = false; break; } }
+                    if (!same) { await loadGateways(); return; }
+                    if (ids.size === 0) return; // 无网关且无卡片：无事可做
+                } else if (gwItems.length === 0) {
+                    await loadGateways(); return;
+                }
+            } catch (e) {
+                if (gwItems.length === 0) await loadGateways();
                 return;
             }
+            if (gwItems.length === 0) return;
             for (const gwItem of gwItems) {
                 const entryId = gwItem.id.replace('gw-', '');
                 const gatewaySn = GATEWAY_SN_BY_ENTRY[entryId] || '';
@@ -1189,10 +1207,25 @@
         // 静默自动检查（init 时一次 + 每 10 分钟一次）：只更新徽章，
         // 不弹卡片不打扰；任何失败仅 console，不污染页面
         async function silentUpdateCheck() {
+            // v1.6.9：三重限流（此前 10min×每标签页×双源都打 GitHub，多标签
+            // 页逼近匿名 60/h/IP 限流）。① 跨标签页去重——localStorage 时间戳，
+            // 5 分钟内其它标签已查过就跳过；② 页面不可见跳过（同 silentRefresh）；
+            // ③ 复查间隔 10→30 分钟（升级徽章无需 10 分钟新鲜度）。
+            // localStorage 读写包 try/catch：HA ingress 为三方 iframe，
+            // 个别浏览器存储策略会直接抛异常，限流优化不能反杀检查本身
+            if (document.hidden) return;
+            try {
+                const last = Number(localStorage.getItem('huijian_last_update_check') || 0);
+                if (Date.now() - last < 5 * 60 * 1000) return;
+                localStorage.setItem('huijian_last_update_check', String(Date.now()));
+            } catch (e) { /* 存储不可用则退化为不去重 */ }
             try {
                 const { latestVersion } = await fetchLatestRelease();
                 renderUpdateBadge(latestVersion);
-            } catch (e) { console.log('自动检查更新失败:', e.message); }
+            } catch (e) {
+                console.log('自动检查更新失败:', e.message);
+                // 失败也保留时间戳，避免限流/断网时其他标签立刻重试放大压力
+            }
         }
 
         async function checkForUpdates() {

@@ -4,6 +4,7 @@ import asyncio
 import threading
 
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.components.binary_sensor import (
     BinarySensorEntity,
     BinarySensorDeviceClass
@@ -168,8 +169,10 @@ class GatewayPairingButton(ButtonEntity):
             # 使用命令管理器发送，统一处理命令ID、连接检查等
             success = await self.mqtt_handler.send_command(self.gateway_sn, "start_pairing")
             if not success:
+                # v1.6.9：配对按钮失败如实上抛（此前 error+return=假成功，
+                # 与 services.start_pairing 同族——HA 卡片点击报"启动配对失败"）
                 _LOGGER.error("发送配对命令失败")
-                return
+                raise HomeAssistantError("启动配对失败：命令未送达（网关离线）")
             
             # 更新配对状态
             self.mqtt_handler.pairing_active = True
@@ -195,8 +198,12 @@ class GatewayPairingButton(ButtonEntity):
             
             # 延迟执行超时回调
             self.mqtt_handler.pairing_timeout_handle = self.hass.loop.call_later(GATEWAY_PAIRING_TIMEOUT, pairing_timeout)
+        except HomeAssistantError:
+            # v1.6.9：命令未送达的假成功根治——不链式穿透下面的兜底 except
+            raise
         except Exception as e:
             _LOGGER.error("触发网关配对模式失败: %s", e)
+            raise HomeAssistantError(f"启动配对失败：{e}") from e
 
 class GatewayDeviceRemoveButton(ButtonEntity):
     """网关设备删除按键"""

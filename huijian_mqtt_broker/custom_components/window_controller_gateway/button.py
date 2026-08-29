@@ -1,6 +1,7 @@
 """开窗器网关按钮平台"""
 import logging
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.entity import DeviceInfo, EntityCategory
@@ -131,12 +132,15 @@ class BaseWindowControllerButton(WindowControllerBaseEntity, ButtonEntity):
         )
     
     async def async_press(self) -> None:
-        """按下按键，执行命令"""
+        """按下按键，执行命令（v1.6.9：失败如实上抛，此前吞异常+不查返回值=假成功）"""
         try:
-            await self._get_mqtt_handler().send_command(self.device_sn, self.command)
-            _LOGGER.info("已触发设备 %s 的%s命令", self.device_sn, self._attr_name)
+            success = await self._get_mqtt_handler().send_command(self.device_sn, self.command)
         except Exception as e:
             _LOGGER.error("触发设备%s命令失败: %s", self._attr_name, e)
+            raise HomeAssistantError(f"{self._attr_name} 执行失败：{e}") from e
+        if not success:
+            raise HomeAssistantError(f"{self._attr_name} 失败：命令未送达（网关或设备离线）")
+        _LOGGER.info("已触发设备 %s 的%s命令", self.device_sn, self._attr_name)
 
 
 class WindLockModeButton(WindowControllerBaseEntity, ButtonEntity):
@@ -191,12 +195,15 @@ class WindLockModeButton(WindowControllerBaseEntity, ButtonEntity):
         )
 
     async def async_press(self) -> None:
-        """按下按键，发送风锁模式命令"""
+        """按下按键，发送风锁模式命令（v1.6.9：失败如实上抛）"""
         try:
-            await self._get_mqtt_handler().send_command(self.device_sn, self.command)
-            _LOGGER.info("已触发设备 %s 的%s", self.device_sn, self._attr_name)
+            success = await self._get_mqtt_handler().send_command(self.device_sn, self.command)
         except Exception as e:
             _LOGGER.error("触发设备%s失败: %s", self._attr_name, e)
+            raise HomeAssistantError(f"{self._attr_name} 失败：{e}") from e
+        if not success:
+            raise HomeAssistantError(f"{self._attr_name} 失败：命令未送达（网关或设备离线）")
+        _LOGGER.info("已触发设备 %s 的%s", self.device_sn, self._attr_name)
 
 
 def _create_wind_lock_buttons(hass, device_manager, mqtt_handler, gateway_sn, device_sn, device_name, entry_id):

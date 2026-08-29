@@ -205,21 +205,33 @@ jobs:
           VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           set -u
-          FAILED=""
-          for p in "${IMAGE_NAME}" "amd64-${IMAGE_NAME}" "aarch64-${IMAGE_NAME}"; do
-            T=$(curl -fsS "https://ghcr.io/token?service=ghcr.io&scope=repository:${GITHUB_REPOSITORY_OWNER}/$p:pull" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p' || true)
-            C=$(curl -s -o /dev/null -w "%{http_code}" \
-                 -H "Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json" \
-                 "https://ghcr.io/v2/${GITHUB_REPOSITORY_OWNER}/$p/manifests/${VERSION:-latest}" \
-                 -H "Authorization: Bearer ${T:-none}" || echo 000)
-            if [ "$C" = "200" ]; then
-              echo "✅ ${p} 匿名可拉（public）"
-            else
-              FAILED="${FAILED} ${p}(HTTP $C)"
-            fi
-          done
+          check_pull() {
+            FAILED=""
+            for p in "${IMAGE_NAME}" "amd64-${IMAGE_NAME}" "aarch64-${IMAGE_NAME}"; do
+              T=$(curl -fsS "https://ghcr.io/token?service=ghcr.io&scope=repository:${GITHUB_REPOSITORY_OWNER}/$p:pull" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p' || true)
+              C=$(curl -s -o /dev/null -w "%{http_code}" \
+                   -H "Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json" \
+                   "https://ghcr.io/v2/${GITHUB_REPOSITORY_OWNER}/$p/manifests/${VERSION:-latest}" \
+                   -H "Authorization: Bearer ${T:-none}" || echo 000)
+              if [ "$C" = "200" ]; then
+                echo "✅ ${p} 匿名可拉（public）"
+              else
+                FAILED="${FAILED} ${p}(HTTP $C)"
+              fi
+            done
+          }
+          check_pull
           if [ -n "${FAILED}" ]; then
-            echo "::warning title=ghcr 包不可匿名拉取::${FAILED} —— image 路线安装会失败。修复：gh api -X DELETE /user/packages/container/<pkg> 删包后重推 CI 自动按仓库 public 重建（详见本文件上方注释）"
+            # v1.6.9：复测一次再定罪——排除 ghcr 传播延迟/瞬时网络导致的误报
+            echo "⏳ 首轮失败，15 秒后复测：${FAILED}"
+            sleep 15
+            check_pull
+          fi
+          if [ -n "${FAILED}" ]; then
+            # v1.6.9（外部审计确认）：由 ::warning 升级为阻断——config.yaml 已启用
+            # image: 路由，包不可匿名拉取时用户安装必失败，绿 CI 是掩盖故障
+            echo "::error title=ghcr 包不可匿名拉取::${FAILED} —— image 路线安装会失败。修复：gh api -X DELETE /user/packages/container/<pkg> 删包后重推 CI 自动按仓库 public 重建（详见本文件上方注释）"
+            exit 1
           fi
 
 

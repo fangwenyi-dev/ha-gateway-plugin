@@ -81,11 +81,18 @@ class WindowControllerBaseEntity:
         return self.mqtt_handler
     
     async def async_added_to_hass(self) -> None:
-        """实体添加到Home Assistant时调用"""
-        # 基类提供基本实现，子类可以重写
+        """实体添加到Home Assistant时调用
+
+        v1.6.9：链补 await super()——此前基类定义该方法却在此断链，
+        子类 MRO 里挂在 async_added_to_hass 上的 mixin 钩子会被静默跳过。
+        当前 HA 的 RestoreEntity 实际走 async_internal_added_to_hass
+        （平台必调路径）故功能无损，本链为防御未来 HA 重构/新 mixin 的
+        静默失效面（真实 Entity 基类有空实现，链式调用安全）。
+        """
         _LOGGER.debug("实体已添加到Home Assistant: %s (%s)", self.device_name, self.device_sn)
-    
+        await super().async_added_to_hass()
+
     async def async_will_remove_from_hass(self) -> None:
-        """实体从Home Assistant移除时调用"""
-        # 基类提供基本实现，子类可以重写
+        """实体从Home Assistant移除时调用（v1.6.9 同理由链补齐）"""
         _LOGGER.debug("实体将从Home Assistant移除: %s (%s)", self.device_name, self.device_sn)
+        await super().async_will_remove_from_hass()

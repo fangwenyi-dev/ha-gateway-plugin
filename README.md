@@ -6,7 +6,7 @@
 
 | 插件 | 版本 | 说明 |
 |------|------|------|
-| [慧尖 LoRa 网关](./huijian_mqtt_broker/) | v1.3.2 | 内置 Mosquitto Broker + mDNS 广播 + 网关集成，安装即用 |
+| [慧尖 LoRa 网关](./huijian_mqtt_broker/) | v1.6.9 | 内置 Mosquitto Broker + mDNS 广播 + 网关集成，安装即用 |
 
 ## 安装方法
 
@@ -86,33 +86,10 @@ LoRa 网关 (MQTT 客户端)
 
 ## 更新日志
 
-### v1.3.3 (2026-08-27)
-- **修复**：mqtt_bootstrap `ConfigEntry.hass` AttributeError（HA 新版本兼容性）
-- ⚠️ **需要重启 HA**（集成代码有更新）
+### 慧尖 LoRa 网关插件
+- **v1.6.9 (2026-08-29)**：生命周期链/MRO 加固、Web 更新检查限流、run.sh 端口变量一致性、README 收敛
+- **v1.6.8**：子设备状态恒显 unknown 修复（is_closed 真实推导 + 状态与位置同步 + RestoreEntity 重启回填）
+- **v1.6.7**：服务状态单行横排磁贴、双源升级检查、深色/浅色主题打磨
+- **v1.6.6**：子设备自动增删检测、缓存 no-store 修复版本显示滞后
 
-### v1.3.2 (2026-08-27)
-- **P1 修复**：18 处 async 操作补全 await，修复删除设备/重命名/转移后实体残留
-- **P1 修复**：persist.py 添加 .bak 备份恢复，JSON 损坏时自动恢复
-- **P1 修复**：device_manager.setup() 异常不再吞掉，改为 raise ConfigEntryNotReady
-- **修复**：button.py _fix_entity_categories / _cleanup_unsupported_buttons 改为 async
-- ⚠️ **需要重启 HA**（集成代码有更新）
-
-### v1.3.1 (2026-08-27)
-- 修复 Mosquitto 启动崩溃问题
-- Web UI 新增网关配对、子设备控制、状态显示
-- Web UI 新增版本检查/更新功能
-- MQTT broker 自动配置修复
-- ⚠️ **需要重启 HA**（集成代码有更新）
-
-### v1.3.0 (2026-08-26)
-- 一体化插件架构：内置 Mosquitto Broker + 网关集成
-- mDNS 广播 `huijian.local`
-- HA MQTT 集成自动配置
-- Web UI 全面升级
-- ⚠️ **需要重启 HA**（首次安装或集成代码有更新）
-
-## ⚠️ 安全提醒
-
-- **修改默认密码**：插件默认 MQTT 密码为 `huijian2022`，仅供初次测试。**生产环境请务必在插件配置中修改 `username` 和 `password`**。
-- **备份数据**：升级或重新安装插件前，建议备份 HA 配置目录。网关持久化数据存储在 `window_controller_gateway_data.json` 中，升级时会自动备份恢复。
-- **full_access 权限**：插件需要 `full_access: true` 权限以运行 avahi-daemon（mDNS 广播），这是 HA 插件系统的正常行为。
+完整历史见 [CHANGELOG.md](CHANGELOG.md)。

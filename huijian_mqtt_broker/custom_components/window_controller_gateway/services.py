@@ -112,12 +112,22 @@ async def handle_start_pairing(hass: HomeAssistant, call: ServiceCall) -> None:
             _LOGGER.info("配对模式已超时，恢复正常状态")
 
         mqtt_handler.pairing_timeout_handle = hass.loop.call_later(duration, pairing_timeout)
+    except ServiceValidationError:
+        # v1.6.9（外部审计确认，高严重度）：:88 的 raise 位于 try 内，此前被
+        # 末尾 except Exception 捕获仅记日志 → REST 200 → Web 弹「配对模式已
+        # 启动」假成功，而 pairing_active/超时定时器根本没设置。这是 v1.6.4
+        # 假成功根治漏掉的一条路径（rename 已有同款保护，此处对齐）
+        raise
     except (ConnectionError, TimeoutError) as e:
+        # v1.6.9：同族收口——send_command 抛连接类异常同样=未送达，如实报错
         _LOGGER.error("网关 %s 连接或超时错误: %s", gateway_sn, e)
+        raise ServiceValidationError(f"启动配对失败：网关连接或超时（{e}）") from e
     except (KeyError, AttributeError) as e:
         _LOGGER.error("网关 %s MQTT处理器未找到或配置错误: %s", gateway_sn, e)
+        raise ServiceValidationError(f"启动配对失败：处理器配置错误（{e}）") from e
     except Exception as e:
         _LOGGER.error("网关 %s 执行配对命令失败: %s", gateway_sn, e)
+        raise ServiceValidationError(f"启动配对失败：{e}") from e
 
 async def handle_rename_device(hass: HomeAssistant, call: ServiceCall) -> None:
     """处理重命名设备服务调用"""
@@ -167,12 +177,12 @@ async def handle_refresh_devices(hass: HomeAssistant, call: ServiceCall) -> None
 
     if not device_id:
         _LOGGER.error("刷新设备服务调用失败：未指定设备ID")
-        return
+        raise ServiceValidationError("刷新设备：未指定 device_id")
 
     gateway_data, gateway_sn = find_gateway_by_device_id(hass, device_id)
     if not gateway_data:
         _LOGGER.error("未找到设备ID %s 对应的网关", device_id)
-        return
+        raise ServiceValidationError(f"未找到设备ID {device_id} 对应的网关")
 
     # 协议说明：002 是网关主动发起，HA 无法主动触发设备发现
     # 设备列表更新依赖网关定期主动上报 002 消息
@@ -189,49 +199,50 @@ async def handle_set_position(hass: HomeAssistant, call: ServiceCall) -> None:
 
     if not device_id:
         _LOGGER.error("设置位置服务调用失败：未指定设备ID")
-        return
+        raise ServiceValidationError("设置位置：未指定 device_id")
 
     if position is None:
         _LOGGER.error("设置位置服务调用失败：未指定位置")
-        return
+        raise ServiceValidationError("设置位置：未指定 position")
 
     # 加强位置参数验证（type() is int 排除 bool：Python 中 bool 是 int 子类，
     # isinstance(True, int) 为 True，会导致 position: true 被静默转为位置 1）
     if type(position) is not int or position < 0 or position > 100:
         _LOGGER.error("设置位置服务调用失败：位置必须是0-100之间的整数")
-        return
+        raise ServiceValidationError("设置位置：position 必须是 0-100 之间的整数")
 
     _LOGGER.info("收到设置位置请求，设备ID: %s，位置: %d", device_id, position)
     
     device, gateway_data, gateway_sn = find_device_by_device_id(hass, device_id)
     if not device or not gateway_data:
         _LOGGER.error("未找到设备ID %s 对应的设备", device_id)
-        return
+        raise ServiceValidationError(f"未找到设备ID {device_id} 对应的设备")
 
     mqtt_handler = gateway_data.get("mqtt_handler")
     if not mqtt_handler:
         _LOGGER.error("未找到MQTT处理器")
-        return
+        raise ServiceValidationError("未找到该网关的 MQTT 处理器")
 
-    # 使用异步任务执行，减少阻塞
-    async def set_position_async():
-        try:
-            await mqtt_handler.send_command(
-                device["sn"], 
-                "set_position", 
-                {"position": position}
-            )
-            _LOGGER.info("已为设备 %s 设置位置: %d", device["sn"], position)
-        except (ConnectionError, TimeoutError) as e:
-            _LOGGER.error("设备 %s 连接或超时错误: %s", device["sn"], e)
-        except (KeyError, AttributeError) as e:
-            _LOGGER.error("设备 %s MQTT处理器配置错误: %s", device["sn"], e)
-        except Exception as e:
-            _LOGGER.error("设置设备位置失败: %s", e)
-    
-    # 创建异步任务，立即返回
-    hass.async_create_task(set_position_async())
-    _LOGGER.info("设置位置服务调用已提交，设备ID: %s，位置: %d", device_id, position)
+    # v1.6.9（外部审计确认，中严重度）：原为 fire-and-forget 且内部把
+    # ConnectionError/TimeoutError/Exception 全吞成日志——broker 掉线/设备离线
+    # 时前端永远收 200「已提交」假成功。改为同步 await、失败如实抛错
+    # （send_command 为 QoS1 发布语义，返回 False 即链路未送达，无 ack 误判）
+    try:
+        success = await mqtt_handler.send_command(
+            device["sn"],
+            "set_position",
+            {"position": position}
+        )
+    except (ConnectionError, TimeoutError) as e:
+        _LOGGER.error("设备 %s 设置位置连接或超时: %s", device["sn"], e)
+        raise ServiceValidationError(f"设置位置失败：网关连接或超时（{e}）") from e
+    except Exception as e:
+        _LOGGER.error("设置设备位置失败: %s", e)
+        raise ServiceValidationError(f"设置位置失败：{e}") from e
+    if not success:
+        _LOGGER.error("设备 %s 设置位置命令未送达", device["sn"])
+        raise ServiceValidationError("设置位置失败：命令未送达（网关或设备离线）")
+    _LOGGER.info("已为设备 %s 设置位置: %d", device["sn"], position)
 
 async def handle_check_gateway_status(hass: HomeAssistant, call: ServiceCall) -> None:
     """处理检查网关状态服务调用"""
@@ -285,29 +296,29 @@ async def handle_migrate_devices(hass: HomeAssistant, call: ServiceCall) -> None
     # 添加更严格的参数验证
     if not isinstance(old_gateway_sn, str) or len(old_gateway_sn) < 10:
         _LOGGER.error("旧网关SN格式无效: %s", old_gateway_sn)
-        return
+        raise ServiceValidationError("迁移设备：old_gateway_sn 格式无效，长度必须 >= 10")
     
     if not isinstance(new_gateway_sn, str) or len(new_gateway_sn) < 10:
         _LOGGER.error("新网关SN格式无效: %s", new_gateway_sn)
-        return
+        raise ServiceValidationError("迁移设备：new_gateway_sn 格式无效，长度必须 >= 10")
     
     # 验证SN格式：与 config_flow.py 的 validate_gateway_sn 保持一致，允许所有字母和数字
     if not re.match(r'^[a-zA-Z0-9]+$', old_gateway_sn):
         _LOGGER.error("旧网关SN格式无效，只允许字母和数字: %s", old_gateway_sn)
-        return
+        raise ServiceValidationError("迁移设备：old_gateway_sn 只允许字母和数字")
     
     if not re.match(r'^[a-zA-Z0-9]+$', new_gateway_sn):
         _LOGGER.error("新网关SN格式无效，只允许字母和数字: %s", new_gateway_sn)
-        return
+        raise ServiceValidationError("迁移设备：new_gateway_sn 只允许字母和数字")
     
     if not isinstance(remove_old_gateway, bool):
         _LOGGER.error("remove_old_gateway参数必须是布尔值: %s", remove_old_gateway)
-        return
+        raise ServiceValidationError("迁移设备：remove_old_gateway 必须是布尔值")
 
     # 检查新旧网关是否相同
     if old_gateway_sn.lower() == new_gateway_sn.lower():
         _LOGGER.error("新旧网关不能相同: %s", old_gateway_sn)
-        return
+        raise ServiceValidationError("迁移设备：新旧网关不能相同")
 
     _LOGGER.info("开始设备迁移，新网关: %s, 旧网关: %s", new_gateway_sn, old_gateway_sn)
 
@@ -323,7 +334,7 @@ async def handle_migrate_devices(hass: HomeAssistant, call: ServiceCall) -> None
 
     if not old_gateway_entry or not new_gateway_entry:
         _LOGGER.error("网关不存在，旧网关SN: %s, 新网关SN: %s", old_gateway_sn, new_gateway_sn)
-        return
+        raise ServiceValidationError(f"迁移设备：网关不存在，旧网关SN: {old_gateway_sn}, 新网关SN: {new_gateway_sn}")
 
     _LOGGER.info("找到网关条目，旧网关: %s, 新网关: %s", old_gateway_entry.entry_id, new_gateway_entry.entry_id)
 
@@ -339,7 +350,7 @@ async def handle_migrate_devices(hass: HomeAssistant, call: ServiceCall) -> None
 
     if not old_manager or not new_manager:
         _LOGGER.error("设备管理器不存在")
-        return
+        raise ServiceValidationError("迁移设备：设备管理器不存在")
 
     # 3. 执行迁移
     try:
@@ -492,7 +503,7 @@ async def handle_transfer_device(hass: HomeAssistant, call: ServiceCall) -> None
 
     if not device_id or not new_gateway_sn:
         _LOGGER.error("转移设备服务调用失败：参数不完整")
-        return
+        raise ServiceValidationError("转移设备：device_id 与 new_gateway_sn 均不可为空")
 
     _LOGGER.info("收到转移设备请求，设备ID: %s，目标网关: %s", device_id, new_gateway_sn)
 
@@ -539,7 +550,7 @@ async def handle_transfer_device(hass: HomeAssistant, call: ServiceCall) -> None
 
     if not device_sn:
         _LOGGER.error("未找到设备ID %s 对应的设备SN", device_id)
-        return
+        raise ServiceValidationError(f"转移设备：未找到设备ID {device_id} 对应的设备SN")
 
     # 查找任意一个设备管理器实例来执行转移
     device_manager = None
@@ -550,7 +561,7 @@ async def handle_transfer_device(hass: HomeAssistant, call: ServiceCall) -> None
 
     if not device_manager:
         _LOGGER.error("未找到可用的设备管理器")
-        return
+        raise ServiceValidationError("转移设备：未找到可用的设备管理器")
 
     # 执行转移
     try:

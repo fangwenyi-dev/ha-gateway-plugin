@@ -14,6 +14,52 @@
 
 
 
+## [1.6.9] - 2026-08-29
+
+### 修复（外部深度审计终审确认的 5 项真实 bug + 1 项横向扫描同族）
+- **start_pairing 假成功（高）**：services.py 内 try 块的 `raise
+  ServiceValidationError`（命令未送达）被末尾 `except Exception` 吞掉 →
+  REST 200、Web 弹「配对模式已启动」但 pairing_active/超时定时器从未设置。
+  补 `except ServiceValidationError: raise`（rename 已有同款保护，v1.6.4
+  根治漏掉此路径）；连接/超时/配置类异常分支同族收口如实抛错
+- **set_position 假成功（中）**：原 fire-and-forget `async_create_task` +
+  内部把全部异常吞成日志 → broker 掉线时永远 200「已提交」。改为同步
+  await send_command，未送达（返回 False，QoS1 发布语义无 ack 误判）或
+  异常均抛 ServiceValidationError
+- **控制实体假成功同族 5 处（中）**：cover 开/关/停、button 按压（普通+
+  风锁）、gateway 配对按钮——send_command 返回值不检查且异常仅日志，
+  HA 原生卡片/Web 控制全部假成功。统一改为查返回值+抛 HomeAssistantError
+  （number 滑块已有回退可见反馈，不改）
+- **Web 网关级增删检测（中低）**：silentRefresh 此前仅在卡片为 0 时重建，
+  HA 中新增第二台网关页面永不出现（与 v1.6.6 设备级自动增删不对称）。
+  每轮比对 config_entries 集合，不一致才整建；API 失败退回旧行为
+- **run.sh `/api/ha/` 补 no-store（低）**：此前唯一无缓存头的代理块，
+  HA Core REST 的 JSON 响应可被浏览器启发式缓存 → UI 显示陈旧
+- **CI 包可见性检查升级为阻断（中）**：ci.yaml 的匿名拉取探测失败时仅
+  ::warning，绿 CI 掩盖「用户装不上」。改为 15 秒复测一次仍失败 ⇒
+  ::error + exit 1 阻断发布
+
+### 加固（审计低危项）
+- `base_entity` 两个生命周期方法补 `await super()` 链（断链曾静默跳过
+  mixin 钩子；当前 HA 走 async_internal_* 功能无损，防御性修复）；
+  conftest 假实体同步补空实现镜像真实契约
+- Web `silentUpdateCheck` 三重限流：localStorage 跨标签页去重（5 分钟）+
+  document.hidden 跳过 + 间隔 10→30 分钟（v1.6.7 双源合并后多标签轮询
+  有触发 GitHub 匿名限流 60/h/IP 的现实风险）
+- `cover.is_closed` 位置兜底分支注释纠偏（002/005 现行链路 r_travel 总与
+  推导 status 同写，该分支为防御性冗余）
+- README 收敛：两份 README 重复且过期的更新日志改为最新摘要 + 指向
+  CHANGELOG.md 单一真源；徽章/版本表同步
+
+### 已知取舍（评估后不改）
+- restore 注入与实时上报的微竞态（一个事件循环 tick 窗口，下次上报自愈）
+- restore 回填显示重启前状态，期间手拨窗户会短暂失真（协议不能主动查询，
+  HA RestoreEntity 通用行为）
+
+### 测试
+- 新增 tests/test_command_failfast.py：16 例钉死「未送达/异常 ⇒ 必须抛错、
+  成功 ⇒ 不抛且副作用正确」契约（覆盖上述全部 7 处修复路径）
+
 ## [1.6.8] - 2026-08-29
 
 ### 修复（子设备状态恒显 unknown——v1.0.1 起的历史设计缺陷）
