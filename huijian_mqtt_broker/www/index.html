@@ -223,10 +223,10 @@
     <div class="header">
         <div>
             <h1>慧尖 LoRa 网关</h1>
-            <div class="ver" id="addonVersion">v1.5.1</div>
+            <div class="ver" id="addonVersion"></div>
         </div>
         <div class="actions">
-            <button class="btn btn-primary" onclick="checkForUpdates()">检查更新</button>
+            <button class="btn btn-primary" id="checkUpdateBtn" onclick="checkForUpdates()">检查更新</button>
             <button class="btn btn-primary" onclick="refreshAll()">刷新</button>
         </div>
     </div>
@@ -308,6 +308,9 @@
 
         // ========== 初始化 ==========
         async function init() {
+            // 静态徽章先落当前内置版本（防 /api/version 失败时页面顶部空白/陈旧）
+            document.getElementById('addonVersion').textContent = 'v' + CURRENT_VERSION;
+            document.getElementById('footerVersion').textContent = 'v' + CURRENT_VERSION;
             try {
                 const verResp = await fetch(INGRESS_BASE + 'api/version');
                 if (verResp.ok) {
@@ -318,6 +321,10 @@
                 }
             } catch (e) { console.log('版本获取失败:', e); }
             await refreshAll();
+            // v1.6.4：自动静默检查一次更新（只点亮徽章不打扰），
+            // 之后每 10 分钟复查——GitHub 匿名限流 60/h/IP，此频率安全
+            silentUpdateCheck();
+            setInterval(silentUpdateCheck, 10 * 60 * 1000);
         }
 
         // ========== 刷新所有 ==========
@@ -938,42 +945,75 @@
         }
 
         // ========== 检查更新 ==========
+        // v1.6.4：拆出 fetchLatestRelease() 核心——自动静默检查与手动检查
+        // 共用同一数据源逻辑。更新源优先 Gitee（无限流），无 Release 数据
+        // （实测 200+[]）或网络异常回退 GitHub；取版本号最大者（不信
+        // /releases/latest 的过期数据）。tag 必须匹配 数字.数字[.数字...]，
+        // 防 1.6.4-beta 之类后缀让 compareVersions 出 NaN。
+        async function fetchLatestRelease() {
+            let releases = null;
+            try {
+                const giteeResp = await fetch(INGRESS_BASE + 'api/gitee/repos/fangwenyi-dev/ha-gateway-plugin/releases?per_page=100');
+                if (giteeResp.ok) {
+                    const giteeData = await giteeResp.json();
+                    // v1.6.3：Gitee 对无 Release 的仓库返回 200 + []，
+                    // 旧代码把空数组当有效数据，跳过 GitHub 回退直接报「未找到 Release」
+                    releases = (Array.isArray(giteeData) && giteeData.length > 0) ? giteeData : null;
+                }
+            } catch (e) { /* Gitee 网络异常，尝试 GitHub */ }
+            if (!releases) {
+                const ghResp = await fetch(INGRESS_BASE + 'api/github/repos/fangwenyi-dev/ha-gateway-plugin/releases?per_page=100');
+                if (!ghResp.ok) throw new Error('更新源不可用 (HTTP ' + ghResp.status + ')');
+                releases = await ghResp.json();
+                if (!Array.isArray(releases)) throw new Error('GitHub 返回数据异常');
+            }
+            let latestVersion = '0.0.0';
+            let latestRelease = null;
+            for (const r of releases) {
+                const ver = (r.tag_name || '').replace(/^v/, '');
+                if (/^\d+(\.\d+)+$/.test(ver) && compareVersions(ver, latestVersion) > 0) {
+                    latestVersion = ver;
+                    latestRelease = r;
+                }
+            }
+            if (!latestRelease) throw new Error('未找到任何 Release');
+            return { latestVersion, latestRelease };
+        }
+
+        // 头部「检查更新」按钮徽章：发现新版变绿显示「⬆️ 有可用升级 vX.Y.Z」
+        function renderUpdateBadge(latestVersion) {
+            const btn = document.getElementById('checkUpdateBtn');
+            if (!btn) return;
+            if (latestVersion && compareVersions(latestVersion, CURRENT_VERSION) > 0) {
+                btn.textContent = '⬆️ 有可用升级 v' + latestVersion;
+                btn.classList.remove('btn-primary');
+                btn.classList.add('btn-success');
+                btn.title = '点击查看详情与升级引导';
+            } else {
+                btn.textContent = '检查更新';
+                btn.classList.remove('btn-success');
+                btn.classList.add('btn-primary');
+                btn.title = '';
+            }
+        }
+
+        // 静默自动检查（init 时一次 + 每 10 分钟一次）：只更新徽章，
+        // 不弹卡片不打扰；任何失败仅 console，不污染页面
+        async function silentUpdateCheck() {
+            try {
+                const { latestVersion } = await fetchLatestRelease();
+                renderUpdateBadge(latestVersion);
+            } catch (e) { console.log('自动检查更新失败:', e.message); }
+        }
+
         async function checkForUpdates() {
             const card = document.getElementById('updateCard');
             const content = document.getElementById('updateContent');
             card.style.display = 'block';
             content.innerHTML = '<div class="loading"><div class="spinner"></div><p>正在检查更新...</p></div>';
             try {
-                // 更新源：优先 Gitee（默认，无速率限制），失败时回退 GitHub。
-                // 不使用 /releases/latest 端点（Gitee 可能返回过期数据），
-                // 改为获取所有 releases 取版本号最大的。
-                let releases = null;
-                try {
-                    const giteeResp = await fetch(INGRESS_BASE + 'api/gitee/repos/fangwenyi-dev/ha-gateway-plugin/releases?per_page=100');
-                    if (giteeResp.ok) {
-                        const giteeData = await giteeResp.json();
-                        // v1.6.3：Gitee 对无 Release 的仓库返回 200 + []，
-                        // 旧代码把空数组当有效数据，跳过 GitHub 回退直接报「未找到 Release」
-                        releases = (Array.isArray(giteeData) && giteeData.length > 0) ? giteeData : null;
-                    }
-                } catch (e) { /* Gitee 网络异常，尝试 GitHub */ }
-                if (!releases) {
-                    const ghResp = await fetch(INGRESS_BASE + 'api/github/repos/fangwenyi-dev/ha-gateway-plugin/releases?per_page=100');
-                    if (!ghResp.ok) throw new Error('更新源不可用 (HTTP ' + ghResp.status + ')');
-                    releases = await ghResp.json();
-                    if (!Array.isArray(releases)) throw new Error('GitHub 返回数据异常');
-                }
-                // 找版本号最大的 release
-                let latestVersion = '0.0.0';
-                let latestRelease = null;
-                for (const r of releases) {
-                    const ver = (r.tag_name || '').replace(/^v/, '');
-                    if (ver && compareVersions(ver, latestVersion) > 0) {
-                        latestVersion = ver;
-                        latestRelease = r;
-                    }
-                }
-                if (!latestRelease) throw new Error('未找到任何 Release');
+                const { latestVersion, latestRelease } = await fetchLatestRelease();
+                renderUpdateBadge(latestVersion);
                 const hasUpdate = compareVersions(latestVersion, CURRENT_VERSION) > 0;
                 if (hasUpdate) {
                     const body = latestRelease.body || '暂无变更日志';
@@ -990,7 +1030,7 @@
                 } else {
                     content.innerHTML = '<div class="update-box" style="background:linear-gradient(135deg,var(--green-bg),#d1fae5);"><div class="update-info">' +
                         '<div class="update-title" style="color:#065f46;">已是最新版本 v' + CURRENT_VERSION + '</div>' +
-                        '<div class="update-desc">Gitee 最新版本: v' + escapeHtml(latestVersion) + '</div></div></div>';
+                        '<div class="update-desc">发布源最新版本: v' + escapeHtml(latestVersion) + '</div></div></div>';
                 }
             } catch (e) {
                 content.innerHTML = '<div class="update-box" style="background:var(--red-bg);"><div class="update-info">' +
