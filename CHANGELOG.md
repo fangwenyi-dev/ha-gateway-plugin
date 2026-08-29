@@ -14,6 +14,40 @@
 
 
 
+## [1.6.7] - 2026-08-29
+
+### 修复（更新检查版本源）
+- `fetchLatestRelease` 由「Gitee 有数据就只用 Gitee」改为 **Gitee+GitHub
+  双源并集取最大版本号**：gitee Release 不由 CI 自动创建、最大版本会陈旧
+  （2026-08-29 实测停在 v1.3.0），旧逻辑会把真新版误判「已是最新版本」、
+  升级徽章永不点亮；现单源失败/陈旧均不再影响判定（GitHub 条目先入列，
+  同版本优先其 html_url 详情链接）
+
+### 优化（Web 界面视觉全面翻新，纯展示层零逻辑改动）
+- 设计系统升级：新色板与分层阴影、统一 16px 圆角、背景柔光径向渐变、
+  数字等宽（tabular-nums）显示；字体栈补 PingFang/雅黑中文回退
+- 头部：品牌区（📡 磨砂图标块 + 标题 + 版本药丸徽章）、双径向高光渐变；
+  favicon/theme-color；刷新按钮加 ⟳ 图标
+- 服务状态：改**单行横排**（● 状态灯 + 名称 + 右对齐状态值）——解决堆叠
+  瓦片卡片过高问题，整卡高度约减半；灯保留呼吸涟漪动画、按 ok/err/warn
+  整卡染色（CSS :has，不动 setStatusDot 的 DOM 契约）；手机端自动改纵向
+  单列堆叠保证可读；该卡内边距收紧（.card-dense）
+- 网关卡片：左侧渐变强调条 + 📡 头像；SN 改芯片样式；徽章前置状态圆点；
+  「状态/改名」按钮内联色改 .btn-slate 类，「配对/内倒/内倒模式」等
+  全部改渐变按钮类
+- 子设备卡片：入场 fadeUp 动画（v1.6.6 新增设备自动出现时正好淡入）、
+  hover 抬升；状态行改独立小面板；网格改 auto-fill minmax(280px) 自适应
+- 滑块：完全自定义外观（轨道圆角、白底彩环滑块、按压缩放），位置/速度/
+  力度分别用靛/紫/青强调色；数值改芯片式回显
+- 更新卡片与 Toast：update-ok/update-err 类化（去内联色）；Toast 加
+  ✅/⚠️/⏳ 图标、上滑动画、毛玻璃
+- 新增深色模式：@media (prefers-color-scheme: dark) 全变量覆盖，
+  跟随浏览器/HA 主题自动切换；内联硬编码色全部清为类，深色无漏网
+- 无障碍与偏好：focus-visible 焦点环、prefers-reduced-motion 降级、
+  ::selection 配色
+- 约束保持：所有 JS DOM 契约不变（id/class 选择器、slider.nextElementSibling、
+  badge className 覆写、.device-item 增删检测、setStatusDot 结构）
+
 ## [1.6.6] - 2026-08-29
 
 ### 修复（Web 界面设备列表不自动更新）

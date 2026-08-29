@@ -3,249 +3,398 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#4f46e5">
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='0.9em' font-size='90'%3E%F0%9F%93%A1%3C/text%3E%3C/svg%3E">
     <title>慧尖 LoRa 网关</title>
     <style>
         :root {
             --primary: #4f46e5;
-            --primary-dark: #3730a3;
+            --primary-dark: #4338ca;
+            --primary-deep: #312e81;
             --primary-light: #818cf8;
             --primary-bg: #eef2ff;
-            --bg: #f8fafc;
+            --violet: #8b5cf6;
+            --cyan: #0891b2;
+            --bg: #f4f6fc;
             --card-bg: #ffffff;
-            --text: #1e293b;
-            --text-muted: #64748b;
+            --text: #0f172a;
+            --text-muted: #5b6b81;
             --text-light: #94a3b8;
-            --border: #e2e8f0;
+            --border: #e6eaf2;
+            --border-strong: #d7deea;
             --green: #10b981;
-            --green-bg: #ecfdf5;
+            --green-deep: #059669;
+            --green-bg: #e8faf1;
             --red: #ef4444;
-            --red-bg: #fef2f2;
+            --red-bg: #fdecec;
             --yellow: #f59e0b;
-            --yellow-bg: #fffbeb;
+            --yellow-bg: #fff6e0;
             --blue: #3b82f6;
-            --blue-bg: #eff6ff;
+            --blue-bg: #e8f1ff;
             --slate: #64748b;
-            --slate-bg: #f1f5f9;
-            --radius: 14px;
-            --radius-sm: 10px;
-            --shadow: 0 1px 3px rgba(0,0,0,0.05), 0 1px 2px rgba(0,0,0,0.03);
-            --shadow-md: 0 4px 6px -1px rgba(0,0,0,0.07), 0 2px 4px -2px rgba(0,0,0,0.04);
-            --shadow-lg: 0 10px 15px -3px rgba(0,0,0,0.08), 0 4px 6px -4px rgba(0,0,0,0.05);
+            --slate-bg: #eef1f6;
+            --tile-bg: #f8fafd;
+            --radius: 16px;
+            --radius-sm: 11px;
+            --shadow: 0 1px 2px rgba(15,23,42,.04), 0 2px 8px rgba(15,23,42,.05);
+            --shadow-md: 0 4px 6px -2px rgba(15,23,42,.06), 0 12px 24px -8px rgba(15,23,42,.10);
+            --shadow-lg: 0 8px 16px -6px rgba(15,23,42,.10), 0 24px 48px -12px rgba(15,23,42,.16);
+        }
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --primary-bg: #232a4d;
+                --bg: #0e1320;
+                --card-bg: #1a2233;
+                --text: #e7ecf7;
+                --text-muted: #9aa7bd;
+                --text-light: #67758f;
+                --border: #273148;
+                --border-strong: #354363;
+                --green-bg: #0d2a23;
+                --red-bg: #2d1519;
+                --yellow-bg: #2c2212;
+                --blue-bg: #12203a;
+                --slate-bg: #222a3c;
+                --tile-bg: #151d2e;
+                --shadow: 0 1px 2px rgba(0,0,0,.35), 0 2px 10px rgba(0,0,0,.30);
+                --shadow-md: 0 4px 8px -2px rgba(0,0,0,.40), 0 14px 28px -8px rgba(0,0,0,.45);
+                --shadow-lg: 0 8px 18px -6px rgba(0,0,0,.50), 0 26px 52px -12px rgba(0,0,0,.55);
+            }
         }
         * { margin: 0; padding: 0; box-sizing: border-box; }
+        html { scroll-behavior: smooth; }
         body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
-            background: var(--bg); color: var(--text); padding: 12px; max-width: 1100px; margin: 0 auto;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+            background:
+                radial-gradient(900px 420px at 88% -80px, rgba(79,70,229,.10), transparent 60%),
+                radial-gradient(700px 380px at -10% 30%, rgba(8,145,178,.07), transparent 55%),
+                var(--bg);
+            color: var(--text); padding: 14px; max-width: 1140px; margin: 0 auto;
             -webkit-font-smoothing: antialiased;
         }
+        ::selection { background: var(--primary-light); color: #fff; }
         /* ===== Header ===== */
         .header {
-            background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
-            color: white; padding: 14px 18px; border-radius: var(--radius); margin-bottom: 10px;
-            display: flex; justify-content: space-between; align-items: center;
-            box-shadow: var(--shadow-md);
+            position: relative; overflow: hidden;
+            background: linear-gradient(130deg, #5b52f0 0%, var(--primary) 45%, var(--primary-deep) 100%);
+            color: white; padding: 18px 22px; border-radius: var(--radius); margin-bottom: 12px;
+            display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;
+            box-shadow: var(--shadow-md), inset 0 1px 0 rgba(255,255,255,.18);
         }
-        .header h1 { font-size: 17px; font-weight: 700; letter-spacing: -0.02em; }
-        .header .ver { font-size: 11px; opacity: 0.8; margin-top: 2px; }
-        .header .actions { display: flex; gap: 8px; }
+        .header::after {
+            content: ''; position: absolute; inset: 0; pointer-events: none;
+            background:
+                radial-gradient(340px 140px at 85% 0%, rgba(255,255,255,.22), transparent 70%),
+                radial-gradient(220px 120px at 12% 120%, rgba(255,255,255,.10), transparent 70%);
+        }
+        .brand { display: flex; align-items: center; gap: 13px; position: relative; z-index: 1; }
+        .brand-logo {
+            width: 46px; height: 46px; flex-shrink: 0; border-radius: 14px;
+            display: flex; align-items: center; justify-content: center; font-size: 23px;
+            background: rgba(255,255,255,.16); border: 1px solid rgba(255,255,255,.28);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,.35), 0 4px 14px rgba(0,0,0,.18);
+            backdrop-filter: blur(4px);
+        }
+        .brand-text { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+        .header h1 { font-size: 18px; font-weight: 700; letter-spacing: -0.02em; }
+        .header .ver {
+            display: inline-flex; align-items: center; gap: 5px; width: fit-content;
+            font-size: 10.5px; font-weight: 600; opacity: .95; padding: 2px 9px;
+            border-radius: 99px; background: rgba(255,255,255,.14); border: 1px solid rgba(255,255,255,.22);
+            font-family: "SF Mono", Consolas, monospace; letter-spacing: .02em;
+        }
+        .header .actions { display: flex; gap: 8px; position: relative; z-index: 1; flex-wrap: wrap; }
+        /* ===== Buttons ===== */
         .btn {
-            padding: 8px 16px; border-radius: 8px; border: none; font-size: 13px;
-            cursor: pointer; font-weight: 600; transition: all .15s; display: inline-flex;
-            align-items: center; gap: 5px; white-space: nowrap;
+            padding: 8px 16px; border-radius: 10px; border: none; font-size: 13px;
+            cursor: pointer; font-weight: 600; transition: transform .12s, box-shadow .15s, filter .15s, background .15s;
+            display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; user-select: none;
         }
-        .btn:active { transform: scale(0.97); }
-        .btn-primary { background: white; color: var(--primary); }
-        .btn-primary:hover { background: #f0f0ff; box-shadow: 0 2px 8px rgba(0,0,0,0.12); }
-        .btn-success { background: var(--green); color: white; }
-        .btn-success:hover { background: #059669; box-shadow: 0 2px 8px rgba(16,185,129,0.3); }
-        .btn-danger { background: var(--red); color: white; }
-        .btn-danger:hover { background: #dc2626; box-shadow: 0 2px 8px rgba(239,68,68,0.3); }
-        .btn-warn { background: var(--yellow); color: white; }
-        .btn-warn:hover { background: #d97706; }
-        .btn-sm { padding: 8px 14px; font-size: 12px; min-height: 36px; }
-        .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+        .btn:hover { filter: brightness(1.05); }
+        .btn:active { transform: scale(0.96); }
+        .btn:focus-visible { outline: 2px solid var(--primary-light); outline-offset: 2px; }
+        .btn-primary { background: rgba(255,255,255,.94); color: var(--primary-dark); box-shadow: 0 2px 10px rgba(0,0,0,.14); }
+        .btn-primary:hover { background: #fff; box-shadow: 0 4px 16px rgba(0,0,0,.2); }
+        .btn-success { background: linear-gradient(180deg, #14c892, var(--green-deep)); color: white; box-shadow: 0 2px 8px rgba(16,185,129,.32); }
+        .btn-success:hover { box-shadow: 0 4px 14px rgba(16,185,129,.45); }
+        .btn-danger { background: linear-gradient(180deg, #f87171, #dc2626); color: white; box-shadow: 0 2px 8px rgba(239,68,68,.30); }
+        .btn-danger:hover { box-shadow: 0 4px 14px rgba(239,68,68,.42); }
+        .btn-warn { background: linear-gradient(180deg, #fbbf24, #d97706); color: white; box-shadow: 0 2px 8px rgba(245,158,11,.30); }
+        .btn-warn:hover { box-shadow: 0 4px 14px rgba(245,158,11,.42); }
+        .btn-slate { background: linear-gradient(180deg, #7c8aa0, var(--slate)); color: white; }
+        .btn-tilt { background: linear-gradient(180deg, #818cf8, #4f46e5); color: white; box-shadow: 0 2px 8px rgba(99,102,241,.35); }
+        .btn-mode-a { background: linear-gradient(180deg, #6366f1, #4338ca); color: white; }
+        .btn-mode-b { background: linear-gradient(180deg, #475569, #334155); color: white; }
+        .btn-sm { padding: 8px 14px; font-size: 12px; min-height: 36px; border-radius: 9px; }
+        .btn:disabled { opacity: .4; cursor: not-allowed; box-shadow: none; }
         /* ===== Card ===== */
         .card {
-            background: var(--card-bg); border-radius: var(--radius); padding: 14px 16px;
-            box-shadow: var(--shadow); margin-bottom: 10px;
+            background: var(--card-bg); border-radius: var(--radius); padding: 16px 18px;
+            box-shadow: var(--shadow); margin-bottom: 12px;
             border: 1px solid var(--border);
         }
         .card-title {
-            font-size: 11px; font-weight: 700; color: var(--text-light); margin-bottom: 12px;
-            text-transform: uppercase; letter-spacing: 0.06em;
-            display: flex; align-items: center; gap: 6px;
+            font-size: 11.5px; font-weight: 700; color: var(--text-light); margin-bottom: 13px;
+            text-transform: uppercase; letter-spacing: .08em;
+            display: flex; align-items: center; gap: 8px;
+        }
+        /* v1.6.7：紧凑卡（服务状态）——压掉标题与内边距的冗余高度 */
+        .card-dense { padding: 12px 16px; }
+        .card-dense .card-title { margin-bottom: 9px; }
+        .card-title::before {
+            content: ''; width: 4px; height: 14px; border-radius: 4px; flex-shrink: 0;
+            background: linear-gradient(180deg, var(--primary-light), var(--primary));
         }
         /* ===== Status Grid ===== */
-        .status-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+        .status-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+        /* v1.6.7：单行横排「● 名称 …… 状态」——原上下堆叠瓦片过高，
+           整卡占屏近 1/4；现高度约减半，状态值右对齐便于扫读 */
         .status-item {
-            display: flex; flex-direction: column; align-items: center; text-align: center;
-            padding: 10px 6px; border-radius: var(--radius-sm); background: var(--bg); transition: all .2s;
-            border: 1px solid transparent;
+            display: flex; flex-direction: row; align-items: center; gap: 8px;
+            padding: 10px 14px; border-radius: var(--radius-sm); background: var(--tile-bg);
+            border: 1px solid var(--border); transition: all .2s; position: relative; min-width: 0;
         }
-        .status-item:hover { border-color: var(--border); }
-        .status-item .dot { width: 10px; height: 10px; border-radius: 50%; margin-bottom: 6px; }
+        .status-item:hover { transform: translateY(-1px); box-shadow: var(--shadow-md); }
+        .status-item:has(.dot-ok)  { border-color: rgba(16,185,129,.45); background: linear-gradient(90deg, var(--green-bg) 0%, var(--tile-bg) 45%); }
+        .status-item:has(.dot-err) { border-color: rgba(239,68,68,.45);  background: linear-gradient(90deg, var(--red-bg) 0%, var(--tile-bg) 45%); }
+        .status-item:has(.dot-warn){ border-color: rgba(245,158,11,.45); background: linear-gradient(90deg, var(--yellow-bg) 0%, var(--tile-bg) 45%); }
+        .status-item .dot { width: 10px; height: 10px; border-radius: 50%; position: relative; flex-shrink: 0; }
         .dot-ok { background: var(--green); box-shadow: 0 0 0 4px var(--green-bg); }
         .dot-err { background: var(--red); box-shadow: 0 0 0 4px var(--red-bg); }
         .dot-warn { background: var(--yellow); box-shadow: 0 0 0 4px var(--yellow-bg); }
-        .status-item .label { font-size: 10px; color: var(--text-muted); margin-bottom: 2px; }
-        .status-item .value { font-size: 13px; font-weight: 700; }
+        @keyframes ripple { 0% { box-shadow: 0 0 0 0 rgba(16,185,129,.45); } 100% { box-shadow: 0 0 0 9px rgba(16,185,129,0); } }
+        .dot-ok::after, .dot-online::after {
+            content: ''; position: absolute; inset: 0; border-radius: 50%; animation: ripple 2.4s ease-out infinite;
+        }
+        .status-item .label { font-size: 12px; color: var(--text-muted); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .status-item .value { font-size: 12.5px; font-weight: 700; font-variant-numeric: tabular-nums; margin-left: auto; white-space: nowrap; padding-left: 6px; }
         /* ===== Gateway ===== */
         .gateway-item {
-            border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 16px; margin-bottom: 12px;
-            transition: all .2s;
+            border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 16px 18px; margin-bottom: 12px;
+            transition: all .2s; background: var(--card-bg); position: relative; overflow: hidden;
+        }
+        .gateway-item::before {
+            content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+            background: linear-gradient(180deg, var(--primary-light), var(--primary));
         }
         .gateway-item:hover { border-color: var(--primary-light); box-shadow: var(--shadow-md); }
-        .gateway-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
-        .gateway-name { font-size: 16px; font-weight: 700; }
-        .gateway-sn { font-size: 11px; color: var(--text-light); margin-left: 8px; font-family: "SF Mono", Consolas, monospace; }
-        .device-list { margin-top: 10px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+        .gateway-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; gap: 8px; flex-wrap: wrap; }
+        .gw-id { display: flex; align-items: center; gap: 11px; min-width: 0; }
+        .gw-avatar {
+            width: 38px; height: 38px; flex-shrink: 0; border-radius: 11px; font-size: 19px;
+            display: flex; align-items: center; justify-content: center;
+            background: var(--primary-bg); border: 1px solid rgba(79,70,229,.18);
+        }
+        .gw-meta { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+        .gateway-name { font-size: 15.5px; font-weight: 700; letter-spacing: -.01em; }
+        .gateway-sn {
+            font-size: 10.5px; color: var(--text-muted); width: fit-content;
+            font-family: "SF Mono", Consolas, monospace; background: var(--slate-bg);
+            padding: 1px 8px; border-radius: 6px; border: 1px solid var(--border);
+        }
+        .device-list { margin-top: 12px; display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; }
+        @keyframes fadeUp { from { opacity: 0; transform: translateY(8px) scale(.99); } to { opacity: 1; transform: none; } }
         .device-item {
             display: flex; flex-direction: column;
-            padding: 12px 14px; border-radius: var(--radius-sm); background: var(--bg);
-            gap: 10px; transition: all .15s;
-            border: 1px solid transparent;
+            padding: 13px 15px; border-radius: var(--radius-sm); background: var(--tile-bg);
+            gap: 10px; transition: box-shadow .18s, border-color .18s, transform .18s;
+            border: 1px solid var(--border); animation: fadeUp .35s ease both;
         }
-        .device-item:hover { background: var(--slate-bg); border-color: var(--border); }
-        .device-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-        .device-info { flex: 1; min-width: 100px; }
-        .device-name { font-size: 14px; font-weight: 600; }
-        .device-sn { font-size: 10px; color: var(--text-light); font-family: "SF Mono", Consolas, monospace; }
-        .device-status { font-size: 11px; margin-top: 3px; color: var(--text-muted); }
+        .device-item:hover { border-color: var(--primary-light); box-shadow: var(--shadow-md); transform: translateY(-1px); }
+        .device-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+        .device-info { flex: 1; min-width: 0; }
+        .device-name { font-size: 14px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .device-sn { font-size: 10.5px; color: var(--text-light); font-family: "SF Mono", Consolas, monospace; margin-top: 2px; }
+        .device-status {
+            font-size: 11px; margin-top: 6px; color: var(--text-muted);
+            background: var(--card-bg); border: 1px solid var(--border); border-radius: 7px;
+            padding: 4px 8px; font-variant-numeric: tabular-nums; line-height: 1.5;
+        }
         .device-actions { display: flex; gap: 4px; flex-shrink: 0; }
-        .device-actions .btn-sm { padding: 6px 10px; font-size: 11px; min-height: 30px; }
+        .device-actions .btn-sm { padding: 5px 10px; font-size: 11px; min-height: 28px; }
         .control-section { display: flex; flex-direction: column; gap: 8px; }
         .control-row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
-        .control-row .btn-sm { flex: 1; min-width: 60px; text-align: center; justify-content: center; }
-        .section-label { font-size: 10px; color: var(--text-light); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 2px; }
-        .slider-group { display: flex; flex-direction: column; gap: 6px; }
-        .slider-row { display: flex; align-items: center; gap: 8px; }
+        .control-row .btn-sm { flex: 1; min-width: 58px; text-align: center; justify-content: center; }
+        .section-label { font-size: 10px; color: var(--text-light); font-weight: 600; text-transform: uppercase; letter-spacing: .05em; margin-bottom: 2px; }
+        /* ===== Sliders ===== */
+        .slider-group { display: flex; flex-direction: column; gap: 7px; }
+        .slider-row { display: flex; align-items: center; gap: 9px; }
         .slider-row .slider-label { width: 32px; flex-shrink: 0; }
         .slider-row input[type="range"] { flex: 1; }
-        .slider-row .slider-value { min-width: 36px; text-align: right; flex-shrink: 0; }
-        .position-slider, .speed-slider, .strength-slider { width: 100%; height: 22px; }
+        .slider-row .slider-value { min-width: 44px; text-align: right; flex-shrink: 0; }
+        .slider-label { font-size: 10.5px; color: var(--text-muted); font-weight: 600; }
+        .slider-value {
+            font-size: 10.5px; min-width: 30px; text-align: right; color: var(--text);
+            font-weight: 700; background: var(--card-bg); border: 1px solid var(--border);
+            padding: 2px 6px; border-radius: 6px; font-variant-numeric: tabular-nums;
+        }
+        input[type="range"] {
+            -webkit-appearance: none; appearance: none;
+            width: 100%; height: 6px; border-radius: 99px; cursor: pointer;
+            background: var(--border-strong); color: var(--primary); outline-offset: 4px;
+        }
+        .speed-slider { color: var(--violet); }
+        .strength-slider { color: var(--cyan); }
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none; appearance: none;
+            width: 19px; height: 19px; border-radius: 50%;
+            background: #fff; border: 2.5px solid currentColor;
+            box-shadow: 0 1px 5px rgba(15,23,42,.28); transition: transform .12s, box-shadow .12s;
+        }
+        input[type="range"]::-moz-range-thumb {
+            width: 15px; height: 15px; border-radius: 50%;
+            background: #fff; border: 2.5px solid currentColor;
+            box-shadow: 0 1px 5px rgba(15,23,42,.28);
+        }
+        input[type="range"]:hover::-webkit-slider-thumb { transform: scale(1.12); }
+        input[type="range"]:active::-webkit-slider-thumb { transform: scale(1.22); box-shadow: 0 2px 10px rgba(15,23,42,.35); }
+        input[type="range"]:focus-visible { outline: 2px solid var(--primary-light); }
         /* ===== Device online dot ===== */
-        .dev-name { display: flex; align-items: center; gap: 6px; }
-        .dev-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+        .dev-name { display: flex; align-items: center; gap: 7px; min-width: 0; }
+        .dev-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex-shrink: 0; position: relative; }
         .dot-online { background: var(--green); box-shadow: 0 0 0 3px var(--green-bg); }
         .dot-offline { background: var(--red); box-shadow: 0 0 0 3px var(--red-bg); }
-        /* ===== Device sliders ===== */
-        .slider-label { font-size: 10px; color: var(--text-muted); }
-        .slider-value { font-size: 11px; min-width: 30px; text-align: right; }
         /* ===== Badge ===== */
         .badge {
-            display: inline-flex; align-items: center; padding: 3px 10px; border-radius: 20px;
-            font-size: 11px; font-weight: 600;
+            display: inline-flex; align-items: center; gap: 5px; padding: 3.5px 11px; border-radius: 20px;
+            font-size: 11px; font-weight: 700; letter-spacing: .02em; white-space: nowrap;
         }
-        .badge-ok { background: var(--green-bg); color: #065f46; }
-        .badge-warn { background: var(--yellow-bg); color: #92400e; }
-        .badge-err { background: var(--red-bg); color: #991b1b; }
+        .badge::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+        .badge-ok { background: var(--green-bg); color: #067a55; }
+        .badge-warn { background: var(--yellow-bg); color: #b45309; }
+        .badge-err { background: var(--red-bg); color: #c53030; }
         .badge-info { background: var(--primary-bg); color: var(--primary-dark); }
         .badge-gray { background: var(--slate-bg); color: var(--text-muted); }
         /* ===== Update ===== */
         .update-box {
-            background: linear-gradient(135deg, var(--primary-bg) 0%, #dbeafe 100%);
-            border-radius: var(--radius-sm); padding: 18px; margin-top: 10px;
+            background: linear-gradient(135deg, var(--primary-bg) 0%, var(--blue-bg) 100%);
+            border-radius: var(--radius-sm); padding: 16px 18px; margin-top: 4px;
             display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;
-            border: 1px solid #c7d2fe;
+            border: 1px solid rgba(99,102,241,.28);
         }
+        .update-box.update-ok { background: linear-gradient(135deg, var(--green-bg) 0%, var(--tile-bg) 100%); border-color: rgba(16,185,129,.35); }
+        .update-box.update-err { background: linear-gradient(135deg, var(--red-bg) 0%, var(--tile-bg) 100%); border-color: rgba(239,68,68,.35); }
         .update-info { flex: 1; min-width: 200px; }
         .update-title { font-size: 15px; font-weight: 700; color: var(--primary); }
+        .update-ok .update-title { color: var(--green-deep); }
+        .update-err .update-title { color: #c53030; }
         .update-desc { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
         /* ===== Misc ===== */
-        .loading { text-align: center; padding: 20px; color: var(--text-muted); }
+        .loading { text-align: center; padding: 26px; color: var(--text-muted); font-size: 12.5px; }
         .spinner {
-            display: inline-block; width: 24px; height: 24px;
-            border: 3px solid var(--border); border-top: 3px solid var(--primary);
-            border-radius: 50%; animation: spin 0.8s linear infinite;
+            display: inline-block; width: 26px; height: 26px; margin-bottom: 8px;
+            border: 3px solid var(--border-strong); border-top: 3px solid var(--primary);
+            border-right: 3px solid var(--primary-light);
+            border-radius: 50%; animation: spin .7s linear infinite;
         }
         @keyframes spin { to { transform: rotate(360deg); } }
         .toast {
-            position: fixed; bottom: 24px; right: 24px; padding: 13px 22px;
+            position: fixed; bottom: 22px; right: 22px; padding: 12px 18px;
             border-radius: var(--radius-sm); color: white; font-size: 13px; z-index: 9999;
-            animation: slideIn .3s ease; max-width: 360px; box-shadow: var(--shadow-lg);
-            font-weight: 600;
+            animation: slideUp .28s cubic-bezier(.2,.9,.3,1.2); max-width: min(400px, calc(100vw - 40px));
+            box-shadow: var(--shadow-lg); font-weight: 600;
+            background-color: var(--slate); backdrop-filter: blur(6px);
+            display: flex; align-items: center; gap: 8px;
         }
-        @keyframes slideIn { from { transform: translateX(400px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
-        .toast-ok { background: var(--green); }
-        .toast-err { background: var(--red); }
-        .toast-warn { background: var(--yellow); }
+        .toast::before { font-size: 14px; }
+        @keyframes slideUp { from { transform: translateY(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+        .toast-ok { background: rgba(5,150,105,.95); }
+        .toast-ok::before { content: '✅'; }
+        .toast-err { background: rgba(220,38,38,.95); }
+        .toast-err::before { content: '⚠️'; }
+        .toast-warn { background: rgba(217,119,6,.95); }
+        .toast-warn::before { content: '⏳'; }
         .info-box {
             background: var(--primary-bg); border-left: 4px solid var(--primary);
-            padding: 14px 16px; border-radius: var(--radius-sm); margin-top: 10px;
+            padding: 14px 16px; border-radius: 0 var(--radius-sm) var(--radius-sm) 0; margin-top: 12px;
         }
-        .info-box h3 { font-size: 12px; color: var(--primary); margin-bottom: 6px; font-weight: 700; }
-        .info-box p { font-size: 12px; color: var(--text-muted); line-height: 1.7; }
+        .info-box h3 { font-size: 12px; color: var(--primary-dark); margin-bottom: 6px; font-weight: 700; }
+        .info-box p { font-size: 12px; color: var(--text-muted); line-height: 1.8; }
         .info-box code {
-            background: white; padding: 2px 7px; border-radius: 5px;
+            background: var(--card-bg); padding: 2px 7px; border-radius: 6px;
             font-family: "SF Mono", Consolas, monospace; font-size: 11px; color: var(--text);
             border: 1px solid var(--border);
         }
         /* ===== Connection info grid ===== */
-        .conn-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
+        .conn-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 4px; }
         .conn-item {
-            background: var(--bg); border-radius: var(--radius-sm); padding: 12px 14px;
-            border: 1px solid var(--border);
+            background: var(--tile-bg); border-radius: var(--radius-sm); padding: 12px 14px;
+            border: 1px solid var(--border); transition: border-color .18s;
         }
-        .conn-label { font-size: 11px; color: var(--text-muted); margin-bottom: 4px; }
-        .conn-value { font-size: 14px; font-weight: 700; }
-        .footer { text-align: center; padding: 20px; color: var(--text-light); font-size: 11px; }
-        .empty-state { text-align: center; padding: 36px; color: var(--text-muted); }
-        .empty-state .icon { font-size: 40px; margin-bottom: 10px; }
+        .conn-item:hover { border-color: var(--primary-light); }
+        .conn-label { font-size: 10.5px; color: var(--text-muted); margin-bottom: 4px; font-weight: 600; letter-spacing: .03em; }
+        .conn-value { font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums; }
+        .conn-value.dim { font-size: 12px; font-weight: 500; color: var(--text-muted); }
+        .footer { text-align: center; padding: 22px 10px 10px; color: var(--text-light); font-size: 11px; }
+        .empty-state { text-align: center; padding: 40px 20px; color: var(--text-muted); }
+        .empty-state .icon {
+            font-size: 38px; margin-bottom: 12px;
+            width: 74px; height: 74px; line-height: 74px; margin-left: auto; margin-right: auto;
+            border-radius: 50%; background: var(--tile-bg); border: 1px solid var(--border);
+        }
         .empty-state .hint { font-size: 12px; margin-top: 8px; color: var(--text-light); }
-        @media (max-width: 900px) {
-            .device-list { grid-template-columns: repeat(2, 1fr); }
-        }
+        .empty-hint { font-size: 12px; color: var(--text-light); padding: 10px 8px; text-align: center; }
+        .err-text { font-size: 12px; color: var(--red); }
         @media (max-width: 640px) {
             body { padding: 8px; }
-            .header { padding: 12px 14px; }
+            .header { padding: 14px 16px; }
             .header h1 { font-size: 16px; }
             .header .actions { gap: 6px; }
             .header .btn { padding: 6px 12px; font-size: 12px; }
-            .status-grid { grid-template-columns: repeat(3, 1fr); gap: 6px; }
-            .status-item { padding: 8px 4px; }
-            .status-item .dot { width: 8px; height: 8px; margin-bottom: 4px; }
-            .status-item .label { font-size: 9px; }
-            .status-item .value { font-size: 11px; }
+            .brand-logo { width: 40px; height: 40px; font-size: 20px; }
+            /* 手机端单行瓦片改为纵向堆叠——1/3 宽横排放不下「灯+名+状态」 */
+            .status-grid { grid-template-columns: 1fr; gap: 6px; }
+            .status-item { padding: 9px 12px; }
+            .status-item .dot { width: 9px; height: 9px; }
+            .status-item .label { font-size: 11.5px; }
+            .status-item .value { font-size: 12px; }
             .conn-grid { grid-template-columns: 1fr; }
             .device-list { grid-template-columns: 1fr; }
-            .device-item { padding: 10px 12px; }
+            .device-item { padding: 11px 12px; }
             .control-row { gap: 4px; }
-            .control-row .btn-sm { flex: 1; min-width: 56px; padding: 7px 8px; font-size: 12px; min-height: 32px; }
-            .device-actions .btn-sm { padding: 6px 8px; font-size: 11px; }
+            .control-row .btn-sm { flex: 1; min-width: 54px; padding: 7px 8px; font-size: 12px; min-height: 32px; }
+            .device-actions .btn-sm { padding: 5px 8px; font-size: 11px; }
             .slider-row { gap: 6px; }
             .slider-row .slider-label { width: 28px; }
             .gateway-header { flex-wrap: wrap; gap: 8px; }
             .gateway-name { font-size: 15px; }
+            .toast { left: 12px; right: 12px; bottom: 12px; max-width: none; justify-content: center; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
         }
     </style>
 </head>
 <body>
     <div class="header">
-        <div>
-            <h1>慧尖 LoRa 网关</h1>
-            <div class="ver" id="addonVersion"></div>
+        <div class="brand">
+            <span class="brand-logo">📡</span>
+            <div class="brand-text">
+                <h1>慧尖 LoRa 网关</h1>
+                <span class="ver" id="addonVersion"></span>
+            </div>
         </div>
         <div class="actions">
             <button class="btn btn-primary" id="checkUpdateBtn" onclick="checkForUpdates()">检查更新</button>
-            <button class="btn btn-primary" onclick="refreshAll()">刷新</button>
+            <button class="btn btn-primary" onclick="refreshAll()">⟳ 刷新</button>
         </div>
     </div>
 
-    <div class="card">
+    <div class="card card-dense">
         <div class="card-title">服务状态</div>
         <div class="status-grid" id="statusGrid">
             <div class="status-item">
-                <div class="dot dot-warn"></div>
+                <span class="dot dot-warn"></span>
                 <span class="label">MQTT Broker</span>
                 <span class="value" id="mqttStatus">检测中</span>
             </div>
             <div class="status-item">
-                <div class="dot dot-warn"></div>
+                <span class="dot dot-warn"></span>
                 <span class="label">网关集成</span>
                 <span class="value" id="integrationStatus">检测中</span>
             </div>
             <div class="status-item">
-                <div class="dot dot-warn"></div>
+                <span class="dot dot-warn"></span>
                 <span class="label">HA MQTT</span>
                 <span class="value" id="haMqttStatus">检测中</span>
             </div>
@@ -268,7 +417,7 @@
             </div>
             <div class="conn-item">
                 <div class="conn-label">MQTT 凭据</div>
-                <div class="conn-value" style="font-size:12px;color:var(--text-muted);">请在 插件 → 配置 标签页中查看/修改</div>
+                <div class="conn-value dim">请在 插件 → 配置 标签页中查看/修改</div>
             </div>
         </div>
         <div class="info-box">
@@ -291,7 +440,7 @@
     </div>
 
     <script>
-        let CURRENT_VERSION = '1.6.6';
+        let CURRENT_VERSION = '1.6.7';
         const DOMAIN = 'window_controller_gateway';
 
         // v1.6.3：页头/页脚的初始版本号不再硬编码——脚本在 body 末尾，
@@ -454,13 +603,13 @@
             // SN 不再烘焙进 onclick——按钮触发时实时读 GATEWAY_SN_BY_ENTRY，
             // 避免渲染时 SN 未知/变更导致把「未知」当真实 SN 发给服务（假成功）
             return '<div class="gateway-item" id="gw-' + safeEntryId + '">' +
-                '<div class="gateway-header"><div>' +
+                '<div class="gateway-header"><div class="gw-id"><span class="gw-avatar">📡</span><div class="gw-meta">' +
                 '<span class="gateway-name">' + safeName + '</span>' +
                 '<span class="gateway-sn">SN: ' + safeSn + '</span>' +
-                '</div><div>' +
+                '</div></div><div style="display:flex;align-items:center;gap:8px;">' +
                 '<span class="badge badge-info" id="gw-status-' + safeEntryId + '">检测中</span>' +
-                '<button class="btn btn-success btn-sm" onclick="startPairing(\'' + jsAttr(entryId) + '\')" style="margin-left:8px;">配对</button>' +
-                '<button class="btn btn-sm" style="background:var(--slate);color:white;" onclick="checkGatewayStatus(\'' + jsAttr(entryId) + '\')" title="检查网关连接状态">状态</button>' +
+                '<button class="btn btn-success btn-sm" onclick="startPairing(\'' + jsAttr(entryId) + '\')">🔗 配对</button>' +
+                '<button class="btn btn-slate btn-sm" onclick="checkGatewayStatus(\'' + jsAttr(entryId) + '\')" title="检查网关连接状态">状态</button>' +
                 '</div></div>' +
                 '<div class="device-list" id="devices-' + safeEntryId + '"><div class="loading"><div class="spinner" style="width:16px;height:16px;"></div></div></div>' +
                 '</div>';
@@ -475,7 +624,7 @@
                 if (!resp.ok) throw new Error('HA API ' + resp.status);
                 const devices = await resp.json();
                 if (!devices || devices.length === 0) {
-                    deviceListEl.innerHTML = '<p style="font-size:12px;color:var(--text-muted);padding:8px;">暂无子设备，点击「配对」按钮添加</p>';
+                    deviceListEl.innerHTML = '<p class="empty-hint">暂无子设备，点击「配对」按钮添加</p>';
                     updateGatewayStatus(statusEl, 'offline');
                     return;
                 }
@@ -515,7 +664,7 @@
                     }
                     updateGatewayStatus(statusEl, gwStatus);
                     if (subDevices.length === 0) {
-                        deviceListEl.innerHTML = '<p style="font-size:12px;color:var(--text-muted);padding:8px;">暂无子设备，点击「配对」按钮添加</p>';
+                        deviceListEl.innerHTML = '<p class="empty-hint">暂无子设备，点击「配对」按钮添加</p>';
                         return;
                     }
                     let html = '';
@@ -530,7 +679,7 @@
                         updateGatewayStatus(statusEl, 'unknown');
                     }
                     if (subDevices.length === 0) {
-                        deviceListEl.innerHTML = '<p style="font-size:12px;color:var(--text-muted);padding:8px;">暂无子设备，点击「配对」按钮添加</p>';
+                        deviceListEl.innerHTML = '<p class="empty-hint">暂无子设备，点击「配对」按钮添加</p>';
                         return;
                     }
                     let html = '';
@@ -538,7 +687,7 @@
                     deviceListEl.innerHTML = html;
                 }
             } catch (e) {
-                deviceListEl.innerHTML = '<p style="font-size:12px;color:var(--red);">加载设备失败: ' + escapeHtml(e.message) + '</p>';
+                deviceListEl.innerHTML = '<p class="err-text">加载设备失败: ' + escapeHtml(e.message) + '</p>';
             }
         }
 
@@ -668,7 +817,7 @@
                 '<div class="device-sn">SN: ' + safeSn + '</div>' +
                 '<div class="device-status" id="dev-state-' + safeDevId + '">状态: 加载中' + (batteryText ? ' | 电压: ' + batteryText : '') + '</div></div>' +
                 '<div class="device-actions">' +
-                '<button class="btn btn-sm" style="background:var(--slate);color:white;" onclick="renameDevice(\'' + jsAttr(devId) + '\',\'' + jsAttr(entryId) + '\',\'' + jsAttr(devName) + '\')" title="重命名设备">改名</button>' +
+                '<button class="btn btn-slate btn-sm" onclick="renameDevice(\'' + jsAttr(devId) + '\',\'' + jsAttr(entryId) + '\',\'' + jsAttr(devName) + '\')" title="重命名设备">改名</button>' +
                 '<button class="btn btn-danger btn-sm" title="移除设备" onclick="controlDevice(\'' + jsAttr(devId) + '\',\'remove\',\'' + jsAttr(entryId) + '\')">移除</button>' +
                 '</div></div>';
 
@@ -679,7 +828,7 @@
                 '<button class="btn btn-danger btn-sm" onclick="controlDevice(\'' + jsAttr(devId) + '\',\'close\',\'' + jsAttr(entryId) + '\')">关</button>' +
                 '<button class="btn btn-warn btn-sm" onclick="controlDevice(\'' + jsAttr(devId) + '\',\'stop\',\'' + jsAttr(entryId) + '\')">停</button>';
             if (supportsWindLock) {
-                html += '<button class="btn btn-sm" style="background:#6366f1;color:white;" onclick="controlDevice(\'' + jsAttr(devId) + '\',\'a\',\'' + jsAttr(entryId) + '\')">内倒</button>';
+                html += '<button class="btn btn-tilt btn-sm" onclick="controlDevice(\'' + jsAttr(devId) + '\',\'a\',\'' + jsAttr(entryId) + '\')">内倒</button>';
             }
             html += '</div>';
 
@@ -705,8 +854,8 @@
             // === 模式切换区（仅 5005）：内倒模式 / 平开模式 ===
             if (supportsWindLock) {
                 html += '<div class="control-row">' +
-                    '<button class="btn btn-sm" style="background:#4f46e5;color:white;flex:1;" onclick="controlDevice(\'' + jsAttr(devId) + '\',\'wind_lock_tilt\',\'' + jsAttr(entryId) + '\')">内倒模式</button>' +
-                    '<button class="btn btn-sm" style="background:#4338ca;color:white;flex:1;" onclick="controlDevice(\'' + jsAttr(devId) + '\',\'wind_lock_flat\',\'' + jsAttr(entryId) + '\')">平开模式</button>' +
+                    '<button class="btn btn-mode-a btn-sm" style="flex:1;" onclick="controlDevice(\'' + jsAttr(devId) + '\',\'wind_lock_tilt\',\'' + jsAttr(entryId) + '\')">内倒模式</button>' +
+                    '<button class="btn btn-mode-b btn-sm" style="flex:1;" onclick="controlDevice(\'' + jsAttr(devId) + '\',\'wind_lock_flat\',\'' + jsAttr(entryId) + '\')">平开模式</button>' +
                     '</div>';
             }
 
@@ -971,30 +1120,35 @@
 
         // ========== 检查更新 ==========
         // v1.6.4：拆出 fetchLatestRelease() 核心——自动静默检查与手动检查
-        // 共用同一数据源逻辑。更新源优先 Gitee（无限流），无 Release 数据
-        // （实测 200+[]）或网络异常回退 GitHub；取版本号最大者（不信
-        // /releases/latest 的过期数据）。tag 必须匹配 数字.数字[.数字...]，
+        // 共用同一数据源逻辑。v1.6.7 起：Gitee+GitHub 双源并集取版本号最大者
+        // （不信 /releases/latest 的过期数据；也不单信 Gitee——其 Release 需
+        // 手动同步、版本会陈旧），tag 必须匹配 数字.数字[.数字...]，
         // 防 1.6.4-beta 之类后缀让 compareVersions 出 NaN。
         async function fetchLatestRelease() {
-            let releases = null;
+            // v1.6.7：双源并集取最大。旧逻辑「Gitee 有数据就只用 Gitee」有洞：
+            // gitee Release 并非 CI 自动创建（只有 GitHub 有），gitee 最大版本
+            // 会陈旧（2026-08-29 实测停在 1.3.0），把「最新发布版」误判成旧值、
+            // 升级徽章永不点亮。现两源都拉、合并取最大版本号，单源失败不互碍。
+            // GitHub 先入列：同版本时优先取其条目（html_url 详情页更全）。
+            const all = [];
+            try {
+                const ghResp = await fetch(INGRESS_BASE + 'api/github/repos/fangwenyi-dev/ha-gateway-plugin/releases?per_page=100', { cache: 'no-store' });
+                if (ghResp.ok) {
+                    const d = await ghResp.json();
+                    if (Array.isArray(d)) all.push(...d);
+                }
+            } catch (e) { /* GitHub 限流/异常，Gitee 仍可独立工作 */ }
             try {
                 const giteeResp = await fetch(INGRESS_BASE + 'api/gitee/repos/fangwenyi-dev/ha-gateway-plugin/releases?per_page=100', { cache: 'no-store' });
                 if (giteeResp.ok) {
-                    const giteeData = await giteeResp.json();
-                    // v1.6.3：Gitee 对无 Release 的仓库返回 200 + []，
-                    // 旧代码把空数组当有效数据，跳过 GitHub 回退直接报「未找到 Release」
-                    releases = (Array.isArray(giteeData) && giteeData.length > 0) ? giteeData : null;
+                    const d = await giteeResp.json();
+                    if (Array.isArray(d)) all.push(...d);
                 }
-            } catch (e) { /* Gitee 网络异常，尝试 GitHub */ }
-            if (!releases) {
-                const ghResp = await fetch(INGRESS_BASE + 'api/github/repos/fangwenyi-dev/ha-gateway-plugin/releases?per_page=100', { cache: 'no-store' });
-                if (!ghResp.ok) throw new Error('更新源不可用 (HTTP ' + ghResp.status + ')');
-                releases = await ghResp.json();
-                if (!Array.isArray(releases)) throw new Error('GitHub 返回数据异常');
-            }
+            } catch (e) { /* Gitee 网络异常，GitHub 仍可独立工作 */ }
+            if (all.length === 0) throw new Error('更新源不可用（Gitee/GitHub 均无数据）');
             let latestVersion = '0.0.0';
             let latestRelease = null;
-            for (const r of releases) {
+            for (const r of all) {
                 const ver = (r.tag_name || '').replace(/^v/, '');
                 if (/^\d+(\.\d+)+$/.test(ver) && compareVersions(ver, latestVersion) > 0) {
                     latestVersion = ver;
@@ -1053,13 +1207,13 @@
                         '提示：Supervisor 安全设计禁止插件通过 API 自我更新（一键升级会返回 403/400）。' +
                         '请使用上方按钮跳转到 Supervisor 加载项页面，以管理员身份点击「更新」。</div>';
                 } else {
-                    content.innerHTML = '<div class="update-box" style="background:linear-gradient(135deg,var(--green-bg),#d1fae5);"><div class="update-info">' +
-                        '<div class="update-title" style="color:#065f46;">已是最新版本 v' + CURRENT_VERSION + '</div>' +
+                    content.innerHTML = '<div class="update-box update-ok"><div class="update-info">' +
+                        '<div class="update-title">✅ 已是最新版本 v' + CURRENT_VERSION + '</div>' +
                         '<div class="update-desc">发布源最新版本: v' + escapeHtml(latestVersion) + '</div></div></div>';
                 }
             } catch (e) {
-                content.innerHTML = '<div class="update-box" style="background:var(--red-bg);"><div class="update-info">' +
-                    '<div class="update-title" style="color:#991b1b;">检查更新失败</div>' +
+                content.innerHTML = '<div class="update-box update-err"><div class="update-info">' +
+                    '<div class="update-title">检查更新失败</div>' +
                     '<div class="update-desc">' + escapeHtml(e.message) + '</div></div></div>';
             }
         }
