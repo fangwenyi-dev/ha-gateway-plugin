@@ -218,6 +218,11 @@ server {
         root /usr/share/nginx/html;
         index index.html;
         try_files \$uri \$uri/ /index.html;
+        # v1.6.6：静态页必须 no-store——插件更新后 ingress 会话 token 路径
+        # 不变，浏览器对无 Cache-Control 的 index.html 做启发式缓存，
+        # 导致容器已是新版、页面却停留在旧版（1.6.5 更新后 Web 显示
+        # 1.6.4 实锤）。UI 只有单个 html+几个 json，无缓存代价。
+        add_header Cache-Control "no-store" always;
     }
 
     # 代理 HA Supervisor API — token 在此注入，前端无需携带
@@ -247,13 +252,17 @@ server {
         try_files /status.json =404;
     }
 
+    # v1.6.6：version.json / integration.json 是容器启动时生成的事实文件，
+    # 同样补 no-store（此前无任何缓存头，会被启发式缓存）
     location /api/version {
+        add_header Cache-Control "no-store" always;
         root /usr/share/nginx/html;
         try_files /version.json =404;
     }
 
     # 集成安装状态 — 插件本地事实（integration.json 由本脚本写入），不依赖 HA API
     location = /api/integration {
+        add_header Cache-Control "no-store" always;
         root /usr/share/nginx/html;
         try_files /integration.json =404;
     }
@@ -266,12 +275,16 @@ server {
     }
 
     # 代理 GitHub API（检查更新用），避免 Ingress iframe 中 CSP 拦截外部请求
+    # v1.6.6：GitHub 上游自带 Cache-Control（public, max-age=60）会透传给
+    # iframe 浏览器、拖慢「有可用升级」发现——hide 后统一改 no-store
     location /api/github/ {
         proxy_pass https://api.github.com/;
         proxy_set_header Host api.github.com;
         proxy_ssl_server_name on;
         proxy_read_timeout 15s;
         proxy_connect_timeout 10s;
+        proxy_hide_header Cache-Control;
+        add_header Cache-Control "no-store" always;
     }
 
     # 代理 Gitee API（默认更新源，无速率限制）
@@ -281,6 +294,8 @@ server {
         proxy_ssl_server_name on;
         proxy_read_timeout 15s;
         proxy_connect_timeout 10s;
+        proxy_hide_header Cache-Control;
+        add_header Cache-Control "no-store" always;
     }
 }
 NGINXEOF

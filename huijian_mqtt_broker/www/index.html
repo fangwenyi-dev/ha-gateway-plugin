@@ -291,7 +291,7 @@
     </div>
 
     <script>
-        let CURRENT_VERSION = '1.6.5';
+        let CURRENT_VERSION = '1.6.6';
         const DOMAIN = 'window_controller_gateway';
 
         // v1.6.3：页头/页脚的初始版本号不再硬编码——脚本在 body 末尾，
@@ -312,7 +312,9 @@
             document.getElementById('addonVersion').textContent = 'v' + CURRENT_VERSION;
             document.getElementById('footerVersion').textContent = 'v' + CURRENT_VERSION;
             try {
-                const verResp = await fetch(INGRESS_BASE + 'api/version');
+                // v1.6.6：显式禁缓存——插件更新后浏览器启发式缓存仍供旧
+                // version.json/index.html 导致页面版本号陈旧（1.6.4→1.6.5 实锤）
+                const verResp = await fetch(INGRESS_BASE + 'api/version', { cache: 'no-store' });
                 if (verResp.ok) {
                     const verData = await verResp.json();
                     CURRENT_VERSION = verData.addon_version || CURRENT_VERSION;
@@ -356,7 +358,7 @@
         async function checkServiceStatus() {
             // 1. MQTT Broker 状态 — nginx 直接返回，不依赖 HA API
             try {
-                const resp = await fetch(INGRESS_BASE + 'api/status');
+                const resp = await fetch(INGRESS_BASE + 'api/status', { cache: 'no-store' });
                 if (resp.ok) {
                     const data = await resp.json();
                     if (data.status === 'running') {
@@ -373,7 +375,7 @@
             // 2. 网关集成检测 — 插件本地事实（run.sh 安装集成后写入 integration.json），
             //    不经 /api/ha/ 代理调 HA Core API（Core 会拒绝插件 token，报 401）
             try {
-                const resp = await fetch(INGRESS_BASE + 'api/integration');
+                const resp = await fetch(INGRESS_BASE + 'api/integration', { cache: 'no-store' });
                 if (!resp.ok) {
                     setStatusDot('integrationStatus', 'err', 'HTTP ' + resp.status);
                 } else {
@@ -386,7 +388,7 @@
             }
             // 3. HA MQTT 连接检测 — broker 实际连接数（broker_status.json 由后台循环刷新）
             try {
-                const resp = await fetch(INGRESS_BASE + 'api/broker');
+                const resp = await fetch(INGRESS_BASE + 'api/broker', { cache: 'no-store' });
                 if (!resp.ok) {
                     setStatusDot('haMqttStatus', 'err', 'HTTP ' + resp.status);
                 } else {
@@ -407,7 +409,7 @@
 
         // ========== HA API 调用 ==========
         async function haApi(path, method = 'GET', body = null) {
-            const opts = { method, headers: { 'Content-Type': 'application/json' } };
+            const opts = { method, headers: { 'Content-Type': 'application/json' }, cache: 'no-store' };
             if (body) opts.body = JSON.stringify(body);
             return await fetch(INGRESS_BASE + 'api/ha/' + path.replace(/^\//, ''), opts);
         }
@@ -550,7 +552,14 @@
                 const resp = await haApi('/window_controller_gateway/devices?config_entry_id=' + entryId);
                 if (!resp.ok) return;
                 const devices = await resp.json();
-                if (!devices || devices.length === 0) return;
+                if (!devices || devices.length === 0) {
+                    // v1.6.6：服务端一个设备都没有、页面上却还渲染着设备行
+                    // （整体被移除等）→ 升级为完整重建，否则残留行永不消失
+                    if (deviceListEl.querySelector('.device-item')) {
+                        await loadGatewayDevices(entryId, GATEWAY_SN_BY_ENTRY[entryId] || gatewaySn);
+                    }
+                    return;
+                }
                 let subDevices = [];
                 let gwDevice = null;
                 for (const dev of devices) {
@@ -565,6 +574,22 @@
                     GATEWAY_SN_BY_ENTRY[entryId] = gwSn;
                     const snEl = document.querySelector('#gw-' + entryId + ' .gateway-sn');
                     if (snEl) snEl.textContent = 'SN: ' + gwSn;
+                }
+                // v1.6.6：无感刷新兼管设备集合变化检测。旧逻辑只更新页面上
+                // 已有的 dev-* 元素（新子设备没有对应 DOM，循环直接跳过），
+                // 导致「集成里已出现的新设备，Web 界面永远等不到，只能手动
+                // 刷新」。现在每轮比对服务端设备 id 集合与已渲染集合，
+                // 有增/删即升级为 loadGatewayDevices 完整重建（该方法会
+                // 重建设备列表 DOM 并渲染新行）。
+                const serverIds = subDevices.map(d => d.id).sort().join(',');
+                // .device-item 行 id 形如 dev-<rawId>；DOM 读取 el.id 返回
+                // 属性解析后的原始 id（escapeHtml 编码已在解析时还原），
+                // 与服务端 d.id 直接可比
+                const renderedIds = Array.from(deviceListEl.querySelectorAll('.device-item'))
+                    .map(el => el.id.slice('dev-'.length)).sort().join(',');
+                if (serverIds !== renderedIds) {
+                    await loadGatewayDevices(entryId, gwSn || gatewaySn);
+                    return;
                 }
                 try {
                     const stateResp = await haApi('/states');
@@ -953,7 +978,7 @@
         async function fetchLatestRelease() {
             let releases = null;
             try {
-                const giteeResp = await fetch(INGRESS_BASE + 'api/gitee/repos/fangwenyi-dev/ha-gateway-plugin/releases?per_page=100');
+                const giteeResp = await fetch(INGRESS_BASE + 'api/gitee/repos/fangwenyi-dev/ha-gateway-plugin/releases?per_page=100', { cache: 'no-store' });
                 if (giteeResp.ok) {
                     const giteeData = await giteeResp.json();
                     // v1.6.3：Gitee 对无 Release 的仓库返回 200 + []，
@@ -962,7 +987,7 @@
                 }
             } catch (e) { /* Gitee 网络异常，尝试 GitHub */ }
             if (!releases) {
-                const ghResp = await fetch(INGRESS_BASE + 'api/github/repos/fangwenyi-dev/ha-gateway-plugin/releases?per_page=100');
+                const ghResp = await fetch(INGRESS_BASE + 'api/github/repos/fangwenyi-dev/ha-gateway-plugin/releases?per_page=100', { cache: 'no-store' });
                 if (!ghResp.ok) throw new Error('更新源不可用 (HTTP ' + ghResp.status + ')');
                 releases = await ghResp.json();
                 if (!Array.isArray(releases)) throw new Error('GitHub 返回数据异常');

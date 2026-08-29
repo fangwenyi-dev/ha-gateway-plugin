@@ -14,6 +14,30 @@
 
 
 
+## [1.6.6] - 2026-08-29
+
+### 修复（Web 界面设备列表不自动更新）
+- **新配对子设备最迟 30 秒自动出现**：无感刷新（updateGatewayDevices）此前
+  只更新页面上已存在的 `dev-*` 元素状态，新子设备没有对应 DOM、循环直接
+  跳过——集成里早已注册的新设备在 Web 界面上永远等不到，只能手动点
+  「刷新」或重载页面。现在每轮比对服务端设备 id 集合与已渲染集合，
+  有新增/移除即升级为 loadGatewayDevices 完整重建（平时依然无闪烁）
+- 同理修复反向场景：设备被整体移除后，页面残留行此前会永久滞留
+
+### 修复（Web 界面版本陈旧：插件 1.6.5、页面显示 1.6.4）
+- 根因：ingress 会话 token 路径在插件更新前后不变，而 nginx 对
+  `index.html`/`/api/version`/`/api/integration` 从不发送 Cache-Control，
+  浏览器启发式缓存持续供应旧版页面与旧 version.json（CI/ghcr 已核实
+  1.6.5 镜像内文件均为新）
+- nginx（run.sh 动态生成版与 ingress.conf 兜底版同步）：静态页与本地 json
+  端点全部 `Cache-Control: no-store`；GitHub/Gitee 代理端 hide 上游自带
+  Cache-Control（GitHub API 默认 public max-age=60 会透传进 iframe）后
+  统一 no-store，「有可用升级」发现不再被上游缓存拖慢
+- 前端 fetch 双保险：haApi、/api/version、/api/status、/api/integration、
+  /api/broker、更新检查请求全部显式 `cache: 'no-store'`
+- 注意：本次修复要生效一次的前提是更新到 1.6.6 后硬刷新一次（Ctrl+F5）
+  ——缓存里躺着的旧页面自身没有这些修复，它救不了自己
+
 ## [1.6.5] - 2026-08-29
 
 ### 新增（Web UI 升级提醒自动化）
