@@ -501,7 +501,10 @@ class WindowControllerMQTTHandler:
             params: 额外参数
             
         Returns:
-            bool: 发送是否成功
+            bool: 是否成功送达 broker。语义边界（审计 B6，v1.6.10 明确）：
+            True = QoS1 publish 被 broker 接收，不代表设备已收到/执行
+            （执行实据靠 005 上报）；False = 确定未送达，调用方必须按失败
+            处理并抛错——这是 v1.6.9 failfast 契约的适用范围。
         """
         try:
             # 验证参数
@@ -858,6 +861,34 @@ class WindowControllerMQTTHandler:
                 except Exception as e:
                     _LOGGER.error("调用网关状态回调失败: %s", e)
     
+    def abort_pairing_if_active(self) -> None:
+        """v1.6.10（审计 B2）：配对启动失败时清理上一次配对残留。
+
+        start_pairing（服务）与 GatewayPairingButton（按钮）都先 cancel 旧的
+        超时定时器"接管句柄"再发送命令；若发送失败抛错，pairing_active 还是
+        上次成功置的 True，而唯一能清它的定时器已被取消——网关卡片永久卡
+        "配对中"。所有失败路径必须经本方法：复位标志、通知、恢复状态机。
+        幂等，可安全重复调用。
+        """
+        if self.pairing_timeout_handle:
+            try:
+                self.pairing_timeout_handle.cancel()
+            except Exception:
+                pass
+            self.pairing_timeout_handle = None
+        if self.pairing_active:
+            self.pairing_active = False
+            self._notify_status_change()
+            if self.hass is not None and self.device_manager is not None:
+                try:
+                    self.hass.async_create_task(
+                        self.device_manager.update_gateway_status(
+                            "online" if self.connected else "offline"
+                        )
+                    )
+                except Exception as e:
+                    _LOGGER.warning("配对中止后恢复网关状态失败: %s", e)
+
     def _notify_device_status_change(self, device_sn):
         """通知设备状态变化 - 确保在事件循环线程中执行回调"""
         if device_sn in self._status_callbacks:
@@ -1373,6 +1404,11 @@ class WindowControllerMQTTHandler:
                     self.pairing_timeout_handle = None
                 self.pairing_active = False
                 self._notify_status_change()
+                # v1.6.10（审计 N1，P2）：状态字段还停在 start_pairing 置的
+                # "pairing"——超时定时器刚被 cancel，_TIMEOUT/_handle_ctype_001
+                # 两条恢复路径都不再触发，「配对中」要等下次 002 心跳才消失。
+                # 成功路径就地恢复（收到绑定确认即在线）
+                await self.device_manager.update_gateway_status("online")
                 _LOGGER.info("设备绑定成功: %s, 名称: %s", device_sn, device_name)
         elif errcode == 0 and not device_sn:
             _LOGGER.warning("设备操作成功但未返回设备SN: %s", payload)

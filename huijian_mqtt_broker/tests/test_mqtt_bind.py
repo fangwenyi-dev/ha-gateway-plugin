@@ -31,6 +31,7 @@ class _MockDeviceManager:
         self.devices = devices if devices is not None else {}
         self._manually_removed_devices = set(manually_removed or [])
         self.added = []  # 记录 add_device 调用
+        self.status_updates = []  # v1.6.10(N1)：记录 update_gateway_status 调用
         self.saved_removed = []  # 记录手动删除列表保存调用
         self._next_number = 1
 
@@ -47,6 +48,9 @@ class _MockDeviceManager:
         n = self._next_number
         self._next_number += 1
         return n
+
+    async def update_gateway_status(self, status):
+        self.status_updates.append(status)
 
     def _save_manually_removed_devices(self):
         self.saved_removed.append(set(self._manually_removed_devices))
@@ -157,6 +161,19 @@ async def test_unbind_confirmation_not_added():
     await handler._handle_ctype_003(_bind_payload(7), "003", _bind_payload(7)["data"])
 
     assert dm.added == [], f"解绑确认不得添加设备，实际 added={dm.added}"
+
+
+@pytest.mark.asyncio
+async def test_bind_success_restores_gateway_status_n1():
+    """审计 N1（v1.6.10）：绑定成功路径 cancel 了超时定时器（唯一自动恢复者），
+    若不同步 update_gateway_status，网关状态将卡 "pairing" 直到下次 002。"""
+    dm = _MockDeviceManager(devices={})
+    handler = _make_handler(dm)
+    handler.pairing_active = True
+    handler.pairing_timeout_handle = types.SimpleNamespace(cancel=lambda: None)
+    handler._record_bind_op(11, "bind")
+    await handler._handle_ctype_003(_bind_payload(11), "003", _bind_payload(11)["data"])
+    assert dm.status_updates == ["online"], "成功分支必须恢复状态机（N1 回归钉）"
 
 
 @pytest.mark.asyncio

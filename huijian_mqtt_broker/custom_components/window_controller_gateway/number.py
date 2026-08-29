@@ -181,12 +181,22 @@ class WindowControllerRangeNumber(WindowControllerBaseEntity, NumberEntity):
                 # 静默跳过本地持久化即可。
                 if self.hass is None:
                     return
-                # 本地记录设定值：重新进入界面/HA 重启后仍回显上次设定位置
-                setpoints = self.hass.data.setdefault(DOMAIN, {}).setdefault(DEVICE_SETPOINTS, {})
-                setpoints.setdefault(self.device_sn, {})[self._param_key] = value
-                # 触发持久化保存（save_persistent_data 内部有防抖，连续操作只落盘一次）
-                from .persist import save_persistent_data
-                self.hass.async_create_task(save_persistent_data(self.hass))
+                # v1.6.10（审计 N9）：命令已送达=成功。本地簿记（setpoints 写入/
+                # 持久化 create_task——如 hass 关闭期抛 RuntimeError）失败此前会
+                # 落入外层 except 触发 _revert_to_saved，把已生效的滑块错误回弹。
+                # 独立 try 降级为告警，不回退
+                try:
+                    # 本地记录设定值：重新进入界面/HA 重启后仍回显上次设定位置
+                    setpoints = self.hass.data.setdefault(DOMAIN, {}).setdefault(DEVICE_SETPOINTS, {})
+                    setpoints.setdefault(self.device_sn, {})[self._param_key] = value
+                    # 触发持久化保存（save_persistent_data 内部有防抖，连续操作只落盘一次）
+                    from .persist import save_persistent_data
+                    self.hass.async_create_task(save_persistent_data(self.hass))
+                except Exception as pe:
+                    _LOGGER.warning(
+                        "设备 %s %s设定值本地保存失败（命令已送达，不回退显示）: %s",
+                        self.device_sn, self._entity_label, pe,
+                    )
                 _LOGGER.info("设备 %s %s设置为 %d%%", self.device_sn, self._entity_label, value)
             else:
                 _LOGGER.warning("设备 %s %s设置命令发送失败，不保存设定值", self.device_sn, self._entity_label)

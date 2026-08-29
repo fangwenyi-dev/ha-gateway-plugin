@@ -171,7 +171,10 @@ class GatewayPairingButton(ButtonEntity):
             if not success:
                 # v1.6.9：配对按钮失败如实上抛（此前 error+return=假成功，
                 # 与 services.start_pairing 同族——HA 卡片点击报"启动配对失败"）
+                # v1.6.10（审计 B2）：抛前先清上次配对残留（旧定时器已在
+                # 本 try 开头被 cancel，不清则永久卡「配对中」）
                 _LOGGER.error("发送配对命令失败")
+                self.mqtt_handler.abort_pairing_if_active()
                 raise HomeAssistantError("启动配对失败：命令未送达（网关离线）")
             
             # 更新配对状态
@@ -202,6 +205,10 @@ class GatewayPairingButton(ButtonEntity):
             # v1.6.9：命令未送达的假成功根治——不链式穿透下面的兜底 except
             raise
         except Exception as e:
+            # v1.6.10（审计 B2）：发送成功后、置位/挂定时器前抛错（如
+            # create_task/call_later 异常）同样会留 pairing_active 残留——
+            # 幂等清理助手，未处于配对中时为 no-op
+            self.mqtt_handler.abort_pairing_if_active()
             _LOGGER.error("触发网关配对模式失败: %s", e)
             raise HomeAssistantError(f"启动配对失败：{e}") from e
 

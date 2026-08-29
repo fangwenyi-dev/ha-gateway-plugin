@@ -19,6 +19,8 @@ from custom_components.window_controller_gateway.services import (
     ServiceValidationError,
     handle_start_pairing,
     handle_set_position,
+    handle_transfer_device,
+    handle_check_gateway_status,
 )
 from custom_components.window_controller_gateway.cover import WindowControllerCover
 from custom_components.window_controller_gateway.button import BaseWindowControllerButton
@@ -33,6 +35,7 @@ class RecHandler:
         self.pairing_timeout_handle = None
         self.pairing_active = False
         self.notified = 0
+        self.aborted = 0
         self._result = result
         self._exc = exc
         self.calls = []
@@ -45,6 +48,15 @@ class RecHandler:
 
     def _notify_status_change(self):
         self.notified += 1
+
+    def abort_pairing_if_active(self):
+        # 镜像真实 MqttHandler.abort_pairing_if_active（v1.6.10 审计 B2）
+        self.aborted += 1
+        if self.pairing_timeout_handle is not None:
+            self.pairing_timeout_handle = None
+        if self.pairing_active:
+            self.pairing_active = False
+            self.notified += 1
 
 
 class _FakeLoop:
@@ -189,3 +201,163 @@ class TestSetPositionFailfast:
 
 async def _noop_coro():
     return None
+
+
+# ================= v1.6.10 审计批次（B1/B2/B3）=================
+
+
+class TestStartPairingStuckRecovery:
+    """审计 B2（P1）：再次点配对时旧超时定时器先被 cancel；若发送失败抛错，
+    pairing_active 残留上次成功置的 True 且无人再清 → 网关永久卡「配对中」。
+    契约：start_pairing 所有失败路径必须先调 abort_pairing_if_active 复位。"""
+
+    def _patch(self, monkeypatch, handler, dm=None):
+        data = {"mqtt_handler": handler}
+        if dm is not None:
+            data["device_manager"] = dm
+        monkeypatch.setattr(services_mod, "find_gateway_by_device_id",
+                            lambda hass, did: (data, "GW1"))
+
+    @pytest.mark.asyncio
+    async def test_second_click_failure_resets_leftover(self, monkeypatch):
+        # 第一次配对成功：pairing_active=True 且挂了超时句柄
+        handler = RecHandler(result=True)
+        self._patch(monkeypatch, handler,
+                    dm=SimpleNamespace(update_gateway_status=lambda s: _noop_coro()))
+        await handle_start_pairing(_FakeHass(), _call(device_id="x"))
+        assert handler.pairing_active is True
+        assert handler.pairing_timeout_handle is not None
+        # 第二次点击时链路断（网关已离线）：raise + 残留必须被清理
+        handler._result = False
+        with pytest.raises(ServiceValidationError):
+            await handle_start_pairing(_FakeHass(), _call(device_id="x"))
+        assert handler.aborted >= 1
+        assert handler.pairing_active is False, "配对中状态卡死回归"
+
+    @pytest.mark.asyncio
+    async def test_send_exception_path_also_resets(self, monkeypatch):
+        handler = RecHandler(exc=ConnectionError("down"))
+        handler.pairing_active = True  # 上次成功的残留
+        self._patch(monkeypatch, handler)
+        with pytest.raises(ServiceValidationError):
+            await handle_start_pairing(_FakeHass(), _call(device_id="x"))
+        assert handler.aborted >= 1
+        assert handler.pairing_active is False
+
+
+class TestAbortPairingHelper:
+    """真实 MqttHandler.abort_pairing_if_active 单元语义（幂等、双态）。"""
+
+    def _bare_handler(self, active, with_handle):
+        from custom_components.window_controller_gateway.mqtt_handler import (
+            WindowControllerMQTTHandler as MqttHandler,
+        )
+        h = MqttHandler.__new__(MqttHandler)  # 绕开 __init__，仅测助手方法
+        h.pairing_active = active
+        cancelled = []
+        h.pairing_timeout_handle = (
+            SimpleNamespace(cancel=lambda: cancelled.append(1)) if with_handle else None
+        )
+        h._status_callbacks = {}
+        h.hass = None            # hass/device_manager 缺席 → 跳过错落恢复分支
+        h.device_manager = None
+        h.connected = False
+        return h, cancelled
+
+    def test_active_path_cancels_and_resets(self):
+        h, cancelled = self._bare_handler(active=True, with_handle=True)
+        h.abort_pairing_if_active()
+        assert cancelled == [1]
+        assert h.pairing_timeout_handle is None
+        assert h.pairing_active is False
+
+    def test_noop_when_not_active(self):
+        h, cancelled = self._bare_handler(active=False, with_handle=False)
+        h.abort_pairing_if_active()  # 不得抛
+        assert cancelled == []
+        assert h.pairing_active is False
+
+    def test_idempotent_double_call(self):
+        h, cancelled = self._bare_handler(active=True, with_handle=True)
+        h.abort_pairing_if_active()
+        h.abort_pairing_if_active()  # 第二次仅重复 cancel 判定（handle 已 None）
+        assert cancelled == [1]
+        assert h.pairing_active is False
+
+
+class _TransferDM:
+    def __init__(self, result=None, exc=None):
+        self.result, self.exc = result, exc
+        self.called = None
+
+    async def transfer_device(self, sn, gsn):
+        self.called = (sn, gsn)
+        if self.exc is not None:
+            raise self.exc
+        return self.result
+
+
+class TestTransferDeviceFailfast:
+    """审计 B1（P1）：transfer 已注册可达，执行 False/异常此前仅日志 → 200 假成功。"""
+
+    def _hass(self, dm):
+        return SimpleNamespace(data={services_mod.DOMAIN: {
+            # 方法1解析：device_id 直接命中映射表
+            "device_to_gateway_mapping": {"SN0123456789A": "GW1"},
+            "entry1": {"device_manager": dm},
+        }})
+
+    @pytest.mark.asyncio
+    async def test_execution_false_raises(self):
+        dm = _TransferDM(result=False)
+        with pytest.raises(ServiceValidationError):
+            await handle_transfer_device(
+                self._hass(dm), _call(device_id="SN0123456789A", new_gateway_sn="GW2"))
+        assert dm.called == ("SN0123456789A", "GW2")
+
+    @pytest.mark.asyncio
+    async def test_execution_exception_raises(self):
+        dm = _TransferDM(exc=RuntimeError("boom"))
+        with pytest.raises(ServiceValidationError):
+            await handle_transfer_device(
+                self._hass(dm), _call(device_id="SN0123456789A", new_gateway_sn="GW2"))
+
+    @pytest.mark.asyncio
+    async def test_success_no_raise(self):
+        dm = _TransferDM(result=True)
+        await handle_transfer_device(
+            self._hass(dm), _call(device_id="SN0123456789A", new_gateway_sn="GW2"))
+        assert dm.called == ("SN0123456789A", "GW2")
+
+
+class _CheckH:
+    def __init__(self, exc=None, connected=True):
+        self.exc, self.connected = exc, connected
+
+    async def check_connection(self):
+        if self.exc is not None:
+            raise self.exc
+        return self.connected
+
+
+class TestCheckGatewayStatusFailfast:
+    """审计 B3（P2）：check 执行异常此前仅日志 → 200「已发送」。
+    注意语义边界：check_connection 返回 False 是合法检查结果（离线），不抛。"""
+
+    def _hass(self, h):
+        return SimpleNamespace(data={services_mod.DOMAIN: {
+            "entry1": {
+                "gateway_sn": "GW1",
+                "mqtt_handler": h,
+                "device_manager": SimpleNamespace(get_gateway_info=lambda: {"name": "G"}),
+            },
+        }})
+
+    @pytest.mark.asyncio
+    async def test_exception_raises(self):
+        with pytest.raises(ServiceValidationError):
+            await handle_check_gateway_status(self._hass(_CheckH(exc=ConnectionError())), _call(gateway_sn="gw1"))
+
+    @pytest.mark.asyncio
+    async def test_offline_result_no_raise(self):
+        await handle_check_gateway_status(self._hass(_CheckH(connected=False)), _call(gateway_sn="GW1"))

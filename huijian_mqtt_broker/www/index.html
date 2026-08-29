@@ -440,7 +440,7 @@
     </div>
 
     <script>
-        let CURRENT_VERSION = '1.6.9';
+        let CURRENT_VERSION = '1.6.10';
         const DOMAIN = 'window_controller_gateway';
 
         // v1.6.3：页头/页脚的初始版本号不再硬编码——脚本在 body 末尾，
@@ -463,7 +463,7 @@
             try {
                 // v1.6.6：显式禁缓存——插件更新后浏览器启发式缓存仍供旧
                 // version.json/index.html 导致页面版本号陈旧（1.6.4→1.6.5 实锤）
-                const verResp = await fetch(INGRESS_BASE + 'api/version', { cache: 'no-store' });
+                const verResp = await fetchT(INGRESS_BASE + 'api/version', { cache: 'no-store' }, 8000);
                 if (verResp.ok) {
                     const verData = await verResp.json();
                     CURRENT_VERSION = verData.addon_version || CURRENT_VERSION;
@@ -486,7 +486,13 @@
         }
 
         // ========== 无感刷新（只更新状态值，不重建 DOM）==========
+        // v1.6.10（审计 N6）：带超时仍可能上一周期未走完被 30s 定时器再入，
+        // 并发周期会交错写 DOM/集合比对误判——防重入：忙则跳过本周期
+        let _silentRefreshing = false;
         async function silentRefresh() {
+            if (_silentRefreshing) return;
+            _silentRefreshing = true;
+            try {
             await checkServiceStatus();
             // 遍历页面上已有的网关卡片，只更新设备状态
             const container = document.getElementById('gatewayContainer');
@@ -495,7 +501,10 @@
             // v1.6.9（外部审计确认）：网关级增删也要被检测——此前只在卡片为
             // 0 时重建，HA 里新增第二台网关页面永远不出现（与 v1.6.6 设备级
             // 自动增删不对称）。比对 config_entries 集合，不一致才整建。
-            // 拉取失败则退回旧逻辑（空列表时重建），绝不清空已有界面
+            // v1.6.10（审计 B5）：检测拉取失败不得阻断本轮设备状态刷新——
+            // 此前 catch 里直接 return，config_entries 一次瞬断让整页窗口状态
+            // 少刷一周期。现改为 needRebuild 标志：失败=跳过重建判定、继续更新
+            let needRebuild = false;
             try {
                 const resp = await haApi('/config/config_entries/entry?domain=' + DOMAIN);
                 if (resp.ok) {
@@ -504,20 +513,23 @@
                     const rendered = new Set(Array.from(gwItems).map(el => el.id.replace('gw-', '')));
                     let same = ids.size === rendered.size;
                     if (same) for (const id of ids) { if (!rendered.has(id)) { same = false; break; } }
-                    if (!same) { await loadGateways(); return; }
-                    if (ids.size === 0) return; // 无网关且无卡片：无事可做
+                    if (!same) needRebuild = true;
                 } else if (gwItems.length === 0) {
-                    await loadGateways(); return;
+                    needRebuild = true; // 无卡片可更新：退回重建（旧行为）
                 }
             } catch (e) {
-                if (gwItems.length === 0) await loadGateways();
-                return;
+                if (gwItems.length === 0) needRebuild = true;
+                // 有卡片：检测失败视为"无增删"，继续走下方状态更新
             }
-            if (gwItems.length === 0) return;
+            if (needRebuild) { await loadGateways(); return; }
+            if (gwItems.length === 0) return; // 无网关且无卡片：无事可做
             for (const gwItem of gwItems) {
                 const entryId = gwItem.id.replace('gw-', '');
                 const gatewaySn = GATEWAY_SN_BY_ENTRY[entryId] || '';
                 await updateGatewayDevices(entryId, gatewaySn);
+            }
+            } finally {
+                _silentRefreshing = false;
             }
         }
 
@@ -525,7 +537,7 @@
         async function checkServiceStatus() {
             // 1. MQTT Broker 状态 — nginx 直接返回，不依赖 HA API
             try {
-                const resp = await fetch(INGRESS_BASE + 'api/status', { cache: 'no-store' });
+                const resp = await fetchT(INGRESS_BASE + 'api/status', { cache: 'no-store' }, 8000);
                 if (resp.ok) {
                     const data = await resp.json();
                     if (data.status === 'running') {
@@ -542,7 +554,7 @@
             // 2. 网关集成检测 — 插件本地事实（run.sh 安装集成后写入 integration.json），
             //    不经 /api/ha/ 代理调 HA Core API（Core 会拒绝插件 token，报 401）
             try {
-                const resp = await fetch(INGRESS_BASE + 'api/integration', { cache: 'no-store' });
+                const resp = await fetchT(INGRESS_BASE + 'api/integration', { cache: 'no-store' }, 8000);
                 if (!resp.ok) {
                     setStatusDot('integrationStatus', 'err', 'HTTP ' + resp.status);
                 } else {
@@ -555,7 +567,7 @@
             }
             // 3. HA MQTT 连接检测 — broker 实际连接数（broker_status.json 由后台循环刷新）
             try {
-                const resp = await fetch(INGRESS_BASE + 'api/broker', { cache: 'no-store' });
+                const resp = await fetchT(INGRESS_BASE + 'api/broker', { cache: 'no-store' }, 8000);
                 if (!resp.ok) {
                     setStatusDot('haMqttStatus', 'err', 'HTTP ' + resp.status);
                 } else {
@@ -574,11 +586,25 @@
             el.parentElement.querySelector('.dot').className = 'dot dot-' + status;
         }
 
+        // ========== 带超时的 fetch 封装（v1.6.10，审计 N6）==========
+        // 此前全部请求无 AbortController：HA Core 挂起时一次刷新周期可无限
+        // 卡住并与 30s 定时器叠跑竞态。超时后 abort 真正终止请求并抛
+        // AbortError，由既有 catch 统一呈现。默认 12s：HA REST 慢查询容忍
+        // 上限；本地 nginx 静态 JSON 8s；外部更新源（github/gitee 经代理）20s
+        function fetchT(url, opts = {}, timeoutMs = 12000) {
+            const ctrl = new AbortController();
+            // abort 带 reason：超时被 catch 后 toast 显示人话而非
+            // "signal is aborted without reason"
+            const timer = setTimeout(() => ctrl.abort('请求超时'), timeoutMs);
+            return fetch(url, Object.assign({}, opts, { signal: ctrl.signal }))
+                .finally(() => clearTimeout(timer));
+        }
+
         // ========== HA API 调用 ==========
         async function haApi(path, method = 'GET', body = null) {
             const opts = { method, headers: { 'Content-Type': 'application/json' }, cache: 'no-store' };
             if (body) opts.body = JSON.stringify(body);
-            return await fetch(INGRESS_BASE + 'api/ha/' + path.replace(/^\//, ''), opts);
+            return await fetchT(INGRESS_BASE + 'api/ha/' + path.replace(/^\//, ''), opts);
         }
 
         // ========== 加载网关列表 ==========
@@ -1160,14 +1186,14 @@
             // GitHub 先入列：同版本时优先取其条目（html_url 详情页更全）。
             const all = [];
             try {
-                const ghResp = await fetch(INGRESS_BASE + 'api/github/repos/fangwenyi-dev/ha-gateway-plugin/releases?per_page=100', { cache: 'no-store' });
+                const ghResp = await fetchT(INGRESS_BASE + 'api/github/repos/fangwenyi-dev/ha-gateway-plugin/releases?per_page=100', { cache: 'no-store' }, 20000);
                 if (ghResp.ok) {
                     const d = await ghResp.json();
                     if (Array.isArray(d)) all.push(...d);
                 }
             } catch (e) { /* GitHub 限流/异常，Gitee 仍可独立工作 */ }
             try {
-                const giteeResp = await fetch(INGRESS_BASE + 'api/gitee/repos/fangwenyi-dev/ha-gateway-plugin/releases?per_page=100', { cache: 'no-store' });
+                const giteeResp = await fetchT(INGRESS_BASE + 'api/gitee/repos/fangwenyi-dev/ha-gateway-plugin/releases?per_page=100', { cache: 'no-store' }, 20000);
                 if (giteeResp.ok) {
                     const d = await giteeResp.json();
                     if (Array.isArray(d)) all.push(...d);

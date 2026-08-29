@@ -14,6 +14,66 @@
 
 
 
+## [1.6.10] - 2026-08-30
+
+### 修复（v1.6.9 回归检查 + 第二轮外部审计 12 项 + 第三轮审计 4 项确认修复）
+- **绑定成功后状态卡「配对中」（N1，P2）**：_handle_ctype_003 成功分支清了
+  pairing_active、取消了超时定时器（唯一自动恢复者），却没复位
+  device_manager 的 gateway_status（start_pairing 置的 "pairing"）——
+  「配对中」要等下次 002 心跳才消失。成功路径就地 `update_gateway_status
+  ("online")`
+- **Web 全部请求零超时（N6，P2 健壮性）**：新增 `fetchT()` 统一
+  AbortController 封装（HA API 12s / 本地 nginx 8s / github+gitee 更新源
+  20s，abort 带「请求超时」reason），并给 silentRefresh 加防重入锁——
+  HA Core 挂起不再无限卡住刷新周期或造成并发周期交错写 DOM
+- **transfer_device 后置失败不可见（N8）**：映射更新后的注册表重挂/实体
+  重链/旧实体清理/双端 reload 四个失败点补 exc_info 堆栈 + post_failures
+  计数，尾部明确告警「映射已转移但 N 个注册表步骤失败，重载条目可修复」
+  （映射=事实来源，return True 语义不变）
+- **number 簿记失败错误回弹（N9）**：命令已送达后 setpoints 写入/持久化
+  create_task 抛错（如 hass 关闭期 RuntimeError）此前落入外层 except
+  触发 _revert_to_saved，把已生效滑块回弹。簿记独立 try，仅告警不回退；
+  未送达回退语义保持（新用例钉桩）
+- **二次配对卡死（B2，P1）**：start_pairing/配对按钮先 cancel 旧超时定时器
+  再发送，若发送失败抛错，上次成功残留的 pairing_active 再无定时器可清 →
+  网关卡片永久显示「配对中」。新增幂等助手
+  `WindowControllerMQTTHandler.abort_pairing_if_active()`，services 四条失败
+  分支与 gateway 按钮两条失败分支全部先清理再上抛
+- **transfer_device 假成功（B1，P1）**：执行块 `transfer_device` 返回 False
+  仅日志 → REST 200（校验/查找路径 v1.6.9 已收口，执行块漏网；服务已注册，
+  dev tools/自动化可达）。失败/异常均抛 ServiceValidationError
+- **check_gateway_status 吞异常（B3）**：执行异常仅日志 → 200「已发送」。
+  同族收口抛错（is_connected=False 是合法检查结果，不抛）
+- **migrate_devices 契约收口（B4）**：执行失败仅发事件照常返回——服务当前
+  未注册（dead code），但按契约补 raise，防止将来重新注册复活假成功
+- **silentRefresh 阻断回归（B5，v1.6.9 引入）**：config_entries 瞬断时
+  catch 直接 return → 跳过本轮全部设备状态刷新（窗口状态少刷 30s 周期）。
+  改为 needRebuild 标志：检测失败仅跳过增删判定，设备更新照常
+- **ingress.conf 兜底模板漂移（B9）**：v1.6.9 只给 run.sh 动态生成版的
+  `/api/ha/` 加 no-store，Dockerfile COPY 的兜底模板漏同步（调试模式下
+  仍供出可缓存响应）。两处已一致
+
+### 澄清（非 bug，语义边界写明）
+- **send_command True 的边界（B6）**：True 仅表示 QoS1 publish 被 broker
+  接收，不代表设备执行——执行实据靠 005 上报。docstring 已明确，failfast
+  契约的适用范围据此界定
+
+### 已知取舍（记录在案，本批不改）
+- 004 响应 errcode≠0 无命令级 ack 回传 UI（B8）：需要请求-响应关联机制，
+  属架构增强，非缺陷修复
+- cover 恢复注入可能回填过期开/关状态（B7）：自愈依赖下次 005，锁不值得
+- 默认凭据 huijian/huijian2022（B10）：改动会毁掉存量安装，文档已警告
+- base 镜像 :latest 浮动标签（B11）：hassio base 跟踪 Alpine 源，pin 旧版
+  反有 apk 仓库轮换导致构建失败的风险（本项目已实证镜像轮换之痛）
+- /api/ha/ 对 172.30.32.0/24 内其他加载项可达（B12）：token 仅
+  homeassistant_api 范围，run.sh 已留 TODO 待实机取证收紧
+
+### 测试
+- 新增 13 用例（stuck-recovery×2、abort 助手单元×3、transfer×3、
+  check_status×2、N1 绑定状态恢复×1、N9 簿记不回退×2），全量 106 passed；
+  JS node --check、bash -n、py_compile 全绿；无头 Edge 渲染断言 8/8
+
+
 ## [1.6.9] - 2026-08-29
 
 ### 修复（外部深度审计终审确认的 5 项真实 bug + 1 项横向扫描同族）

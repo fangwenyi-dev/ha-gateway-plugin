@@ -117,15 +117,22 @@ async def handle_start_pairing(hass: HomeAssistant, call: ServiceCall) -> None:
         # 末尾 except Exception 捕获仅记日志 → REST 200 → Web 弹「配对模式已
         # 启动」假成功，而 pairing_active/超时定时器根本没设置。这是 v1.6.4
         # 假成功根治漏掉的一条路径（rename 已有同款保护，此处对齐）
+        # v1.6.10（审计 B2）：上抛前先清理上次配对残留——本 try 开头已把旧
+        # 超时定时器 cancel，若此时 pairing_active 仍为 True 将无人复位，
+        # 网关永久卡「配对中」
+        mqtt_handler.abort_pairing_if_active()
         raise
     except (ConnectionError, TimeoutError) as e:
         # v1.6.9：同族收口——send_command 抛连接类异常同样=未送达，如实报错
+        mqtt_handler.abort_pairing_if_active()  # v1.6.10（审计 B2）
         _LOGGER.error("网关 %s 连接或超时错误: %s", gateway_sn, e)
         raise ServiceValidationError(f"启动配对失败：网关连接或超时（{e}）") from e
     except (KeyError, AttributeError) as e:
+        mqtt_handler.abort_pairing_if_active()  # v1.6.10（审计 B2）
         _LOGGER.error("网关 %s MQTT处理器未找到或配置错误: %s", gateway_sn, e)
         raise ServiceValidationError(f"启动配对失败：处理器配置错误（{e}）") from e
     except Exception as e:
+        mqtt_handler.abort_pairing_if_active()  # v1.6.10（审计 B2）
         _LOGGER.error("网关 %s 执行配对命令失败: %s", gateway_sn, e)
         raise ServiceValidationError(f"启动配对失败：{e}") from e
 
@@ -281,11 +288,16 @@ async def handle_check_gateway_status(hass: HomeAssistant, call: ServiceCall) ->
         _LOGGER.info("网关 %s 状态检查结果: 在线=%s, 信息=%s", 
                     gateway_info.get("name"), is_connected, gateway_info)
     except (ConnectionError, TimeoutError) as e:
+        # v1.6.10（审计 B3）：执行异常此前仅日志 → 200「已发送」假成功，
+        # 与 v1.6.9 契约同族收口（is_connected=False 是合法检查结果，不抛）
         _LOGGER.error("网关 %s 连接或超时错误: %s", resolved_sn, e)
+        raise ServiceValidationError(f"状态检查失败：网关连接或超时（{e}）") from e
     except (KeyError, AttributeError) as e:
         _LOGGER.error("网关 %s 配置错误: %s", resolved_sn, e)
+        raise ServiceValidationError(f"状态检查失败：配置错误（{e}）") from e
     except Exception as e:
         _LOGGER.error("检查网关状态失败: %s", e)
+        raise ServiceValidationError(f"状态检查失败：{e}") from e
 
 async def handle_migrate_devices(hass: HomeAssistant, call: ServiceCall) -> None:
     """完善的设备迁移服务"""
@@ -495,6 +507,10 @@ async def handle_migrate_devices(hass: HomeAssistant, call: ServiceCall) -> None
                 "message": f"迁移失败: {str(e)}"
             }
         )
+        # v1.6.10（审计 B4）：本服务当前未注册（register 已注释禁用，dead code），
+        # 但按契约收口执行失败路径——事件保留供进度监听，同时如实抛错，
+        # 防止将来重新注册时把"假成功"复活
+        raise ServiceValidationError(f"迁移设备失败：{e}") from e
 
 async def handle_transfer_device(hass: HomeAssistant, call: ServiceCall) -> None:
     """处理转移设备服务调用"""
@@ -569,9 +585,19 @@ async def handle_transfer_device(hass: HomeAssistant, call: ServiceCall) -> None
         if success:
             _LOGGER.info("设备 %s 已成功转移到网关 %s", device_sn, new_gateway_sn)
         else:
+            # v1.6.10（审计 B1，P1 级）：v1.6.9 只把校验/查找路径改成了 raise，
+            # 执行块未动——transfer_device 返回 False（映射缺失/目标不可达）时
+            # 仅日志 → REST 200 假成功。服务已注册（dev tools/自动化可达），
+            # 按项目自身"假成功根治"契约收口
             _LOGGER.error("设备 %s 转移失败", device_sn)
+            raise ServiceValidationError(
+                f"转移设备失败：{device_sn} 不在映射表或目标网关 {new_gateway_sn} 不可用"
+            )
+    except ServiceValidationError:
+        raise
     except Exception as e:
         _LOGGER.error("转移设备失败: %s", e)
+        raise ServiceValidationError(f"转移设备失败：{e}") from e
 
 
 def register_services(hass: HomeAssistant) -> bool:

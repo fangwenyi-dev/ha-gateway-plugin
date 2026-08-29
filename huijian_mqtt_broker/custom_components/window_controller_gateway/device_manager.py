@@ -964,6 +964,10 @@ class WindowControllerDeviceManager:
             self._save_manually_removed_devices()
             _LOGGER.info("设备 %s 已从手动删除列表中移除", device_sn)
         
+        # v1.6.10（审计 N8）：映射已更新=转移事实成立，return True 不算假成功；
+        # 但注册表重挂/重载失败此前"静默可见性为零"，计数+堆栈+尾告警使其可排查
+        post_failures = 0
+
         # 5. 更新设备注册表中的关联
         try:
             from .utils import call_registry_method as _call_reg
@@ -980,7 +984,8 @@ class WindowControllerDeviceManager:
                 )
                 _LOGGER.info("已更新设备 %s 的注册表关联到网关 %s", device_sn, new_gateway_sn)
         except Exception as e:
-            _LOGGER.error("更新设备注册表失败: %s", e)
+            _LOGGER.error("更新设备注册表失败: %s", e, exc_info=True)
+            post_failures += 1
         
         # 6. 更新实体关联到目标网关的配置条目
         try:
@@ -1011,7 +1016,8 @@ class WindowControllerDeviceManager:
                             )
                             _LOGGER.debug("已更新实体 %s 的配置条目关联", entity_id)
         except Exception as e:
-            _LOGGER.error("更新实体关联失败: %s", e)
+            _LOGGER.error("更新实体关联失败: %s", e, exc_info=True)
+            post_failures += 1
 
         # 6.1 删除旧网关前缀的实体（含删除按钮 {old_gw}_remove_{sn}），
         # 避免转移后 reload 时旧前缀与新前缀实体并存（同一设备两套实体）
@@ -1026,7 +1032,8 @@ class WindowControllerDeviceManager:
                     await _call_reg(entity_registry.async_remove, entity_id)
                     _LOGGER.info("转移时删除旧前缀实体: %s", entity_id)
         except Exception as e:
-            _LOGGER.error("删除旧前缀实体失败: %s", e)
+            _LOGGER.error("删除旧前缀实体失败: %s", e, exc_info=True)
+            post_failures += 1
         
         # 7. 清除冲突通知（如果有）
         try:
@@ -1045,8 +1052,14 @@ class WindowControllerDeviceManager:
                 await self.hass.config_entries.async_reload(old_entry_id)
             await self.hass.config_entries.async_reload(target_entry_id)
         except Exception as e:
-            _LOGGER.error("重新加载网关失败: %s", e)
+            _LOGGER.error("重新加载网关失败: %s", e, exc_info=True)
+            post_failures += 1
         
+        if post_failures:
+            _LOGGER.warning(
+                "设备 %s 映射已转移（%s -> %s），但 %d 个注册表/重载步骤失败——"
+                "实体可能暂留旧网关条目下，重载相关配置条目或重启 HA 可修复",
+                device_sn, old_gateway_sn, new_gateway_sn, post_failures)
         _LOGGER.info("设备 %s 转移完成: %s -> %s", device_sn, old_gateway_sn, new_gateway_sn)
         return True
 
