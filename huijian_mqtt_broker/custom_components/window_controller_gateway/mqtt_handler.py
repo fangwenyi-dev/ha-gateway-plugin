@@ -267,7 +267,13 @@ class WindowControllerMQTTHandler:
 
                     # 消息去重检查 - 使用 ctype + id + sn 作为唯一标识
                     msg_key = f"{ctype}_{payload.get('id', 0)}_{response_sn}"
-                    current_time = time.time()
+                    # v1.6.11（审计 #5）：去重时间轴换 monotonic——time.time()
+                    # 遇 NTP 回跳会令剪枝条件（current_time - v < duration）
+                    # 长期为真，旧条目滞留到时钟追平。该字典唯一喂入点在此，
+                    # 与 _dispatch_with_dedup 的剪枝同一时基，整体切换安全；
+                    # 网关超时判定（_check_gateway_timeout）本就独立用
+                    # monotonic，互不掺混
+                    current_time = time.monotonic()
                     
                     # 如果是来自其他网关的消息，触发网关发现
                     if response_sn.lower() != self.gateway_sn.lower():
@@ -705,6 +711,13 @@ class WindowControllerMQTTHandler:
                 # 标记连接为断开
                 self.connected = False
                 self._notify_status_change()
+                # v1.6.11（审计 #4）：其余置 connected=False 的失败点
+                # （check_connection 两分支/重连放弃）都同步
+                # update_gateway_status("offline")，唯独此处漏网——双状态源
+                # 就此分叉（gateway_status 恒 "online" 直到超时巡检）。对齐
+                self._schedule_async_task(
+                    self.device_manager.update_gateway_status("offline")
+                )
                 return False
         except Exception as e:
             _LOGGER.error("发送MQTT命令失败: %s\n命令: %s\n设备: %s", e, command, device_sn)
@@ -1397,19 +1410,27 @@ class WindowControllerMQTTHandler:
                 device_name = get_device_display_name(self.gateway_sn, device_sn, device_number)
                 # 手动配对时使用 is_manual_pairing=True，跳过手动删除列表检查
                 await self.device_manager.add_device(device_sn, device_name, DEVICE_TYPE_WINDOW_OPENER, is_manual_pairing=True)
-                # 配对成功后立即退出配对模式，UI 可以立刻从"配对中"恢复
-                # 同时取消配对超时定时器，避免超时回调冗余触发
-                if self.pairing_timeout_handle:
-                    self.pairing_timeout_handle.cancel()
-                    self.pairing_timeout_handle = None
-                self.pairing_active = False
-                self._notify_status_change()
-                # v1.6.10（审计 N1，P2）：状态字段还停在 start_pairing 置的
-                # "pairing"——超时定时器刚被 cancel，_TIMEOUT/_handle_ctype_001
-                # 两条恢复路径都不再触发，「配对中」要等下次 002 心跳才消失。
-                # 成功路径就地恢复（收到绑定确认即在线）
-                await self.device_manager.update_gateway_status("online")
-                _LOGGER.info("设备绑定成功: %s, 名称: %s", device_sn, device_name)
+                # v1.6.11（审计 #2）：配对会话退出必须限定在"我们自己发起的
+                # 绑定确认"（bind_op=="bind"，_bind_ops 记账过）。此前无条件
+                # 退出：迟到/非请求的 003（id 无记账、设备恰好不在列表）会
+                # cancel 掉**当前**配对会话的定时器并提前关窗。设备添加本身
+                # 保留（收到 errcode=0 的绑定确认即事实），会话与状态恢复
+                # 交由真正的发起方确认或超时回调处理
+                if bind_op == "bind":
+                    # 配对成功后立即退出配对模式，UI 可以立刻从"配对中"恢复
+                    # 同时取消配对超时定时器，避免超时回调冗余触发
+                    if self.pairing_timeout_handle:
+                        self.pairing_timeout_handle.cancel()
+                        self.pairing_timeout_handle = None
+                    self.pairing_active = False
+                    self._notify_status_change()
+                    # v1.6.10（审计 N1，P2）：状态字段还停在 start_pairing 置的
+                    # "pairing"——超时定时器刚被 cancel，_TIMEOUT/_handle_ctype_001
+                    # 两条恢复路径都不再触发，「配对中」要等下次 002 心跳才消失。
+                    # 成功路径就地恢复（收到绑定确认即在线）
+                    await self.device_manager.update_gateway_status("online")
+                _LOGGER.info("设备绑定成功: %s, 名称: %s (会话退出=%s)",
+                             device_sn, device_name, bind_op == "bind")
         elif errcode == 0 and not device_sn:
             _LOGGER.warning("设备操作成功但未返回设备SN: %s", payload)
         else:

@@ -109,7 +109,11 @@ class WindowControllerCover(WindowControllerBaseEntity, RestoreEntity, CoverEnti
             r_travel = (device.get("attributes") or {}).get("r_travel")
             try:
                 if r_travel is not None:
-                    return int(r_travel) <= 0
+                    # v1.6.11（外部审计 #2）：int() 截断会把 0.5 判成"关"
+                    # （int(0.5)=0 ≤0），违反用户定案的">0=打开"语义。协议
+                    # 规定整数 0-100，但 JSON 可携浮点——用 float 直比，
+                    # 非数值串由既有 except (ValueError, TypeError) 落 None
+                    return float(r_travel) <= 0
             except (ValueError, TypeError):
                 pass
         return None

@@ -93,6 +93,14 @@ class TestStatePositionSync:
         c2 = _make_cover_attrs(DEVICE_STATUS_CONNECTED, {"r_travel": "88"})
         assert c2.is_closed is False
 
+    def test_fractional_travel_not_truncated_to_closed(self):
+        # v1.6.11（外部审计 #2）：int(0.5)=0 曾把微开判成"关"——float 直比
+        assert _make_cover_attrs(DEVICE_STATUS_UNKNOWN, {"r_travel": 0.5}).is_closed is False
+        assert _make_cover_attrs(DEVICE_STATUS_UNKNOWN, {"r_travel": "20.5"}).is_closed is False
+        # 负值（协议外输入）仍归"关"（≤0），非数值串落 None 不误判
+        assert _make_cover_attrs(DEVICE_STATUS_UNKNOWN, {"r_travel": -0.3}).is_closed is True
+        assert _make_cover_attrs(DEVICE_STATUS_UNKNOWN, {"r_travel": "abc"}).is_closed is None
+
     def test_explicit_status_takes_precedence_over_position(self):
         # status 已明确 closed 时即便 position 脏值仍以 status 为准
         c = _make_cover_attrs(DEVICE_STATUS_CLOSED, {"r_travel": 50})

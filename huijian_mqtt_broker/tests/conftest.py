@@ -60,6 +60,9 @@ class HomeAssistant:
 
 ha_core.HomeAssistant = HomeAssistant
 ha_core.ServiceCall = type("ServiceCall", (), {})
+# v1.6.11：config_flow 首次被测试导入（审计 #6 钉桩）——homeassistant.core.callback
+# 是恒等标记装饰器，真实实现即返回原函数
+ha_core.callback = lambda func: func
 
 
 # ---- const ----
@@ -103,6 +106,18 @@ class ConfigEntry:
 ha_config_entries.ConfigEntry = ConfigEntry
 ha_config_entries.SOURCE_DISCOVERY = "discovery"
 ha_config_entries.SOURCE_USER = "user"
+
+
+# v1.6.11（审计 #6 钉桩）：config_flow.py 首次被测试导入——类定义
+# `class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN)` 需要能消化
+# domain= 关键字基类（真实 HA 靠 __init_subclass__），OptionsFlow 为普通基类
+class _ConfigFlowBase:
+    def __init_subclass__(cls, **kwargs):
+        pass
+
+
+ha_config_entries.ConfigFlow = _ConfigFlowBase
+ha_config_entries.OptionsFlow = type("OptionsFlow", (), {})
 
 
 # ---- data_entry_flow ----

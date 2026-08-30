@@ -3,15 +3,51 @@
 所有版本变更记录在此文件中。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.6.11] - 2026-08-30
 
+### 修复（第三轮外部审计 7 项：5 项落地，2 项裁决误报/维持不改）
+- **迟到 003 掐掉当前配对会话（#2）**：_handle_ctype_003 成功分支无条件
+  取消配对定时器并退出会话——id 无记账（_bind_ops.pop 一次性消费后）且
+  设备恰好不在列表时（如刚删设备的迟到绑定确认撞上新一轮配对），会误关
+  当前配对窗口。会话退出/状态恢复现限定 `bind_op == "bind"`（只允许我们
+  记账发起的确认结束会话）；设备添加保留（errcode=0 即事实）
+- **cleanup 遍历中列表收缩跳项（#3）**：任务 done 回调从 _background_tasks
+  remove（:166），第二个循环 await 让出控制权时列表原地变异，索引迭代跳项
+  → 被跳过的任务从未被 await（终态异常无人消费、"cleanup 后无任务触碰已清
+  状态"保证被破）。两循环改遍历 list() 快照
+- **publish 失败状态源分叉（#4）**：send_command 发布异常置 connected=False
+  +notify 却漏了 update_gateway_status("offline")——其余全部 connected=False
+  路径（check_connection×2/重连放弃）都同步，唯此分叉。对齐补齐
+  （注：审计对症状的描述"binary sensor 离线/Web 在线"不准确——
+  gateway_status 无显示面消费方，实际是内部状态源一致性问题）
+- **去重时间轴 monotonic 化（#5）**：time.time() 换 time.monotonic()（唯一
+  喂入点，整体同时基）。注：审计"回跳致字典无限增长"不成立——键空间
+  （ctype,id,sn）有限天然有界，本项按 better-practice 顺手修
+- **config_flow 连接测试 mock 缺方法（#6）**：MockDeviceManager（生产文件
+  内，非测试）缺 allocate_device_number——测试窗口内到达的 005 走
+  _quick_add_device 必抛 AttributeError 被消息循环兜底吞（丢一帧+噪音）。
+  补齐 + conftest 增补 config_flow 导入面桩（callback/ConfigFlow 基类/
+  OptionsFlow）
+- **cover.is_closed 浮点截断（外部审计第四轮 #2）**：防御兜底分支
+  int(r_travel) 把 0.5 截成 0 → 微开误判"关"，违反">0=打开"定案语义；
+  改 float 直比（协议规定整数 0-100，本分支正常不触发，纯防御加固），
+  非数值仍落 None
 
+### 裁决为误报（不设修复）
+- **#1 "MQTT 订阅永久失效"（🔴 指控最重者）**：不成立。订阅走 HA MQTT 集成
+  的 async_subscribe（:403），HA core 自持 broker 重连并在恢复后自动重订阅
+  全部注册项；_unsub_rsp 在放弃路径从不注销；_reconnect_mqtt 重试的只是
+  冗余的再注册（本地操作，几乎首试即成）；send_command 断连时还会
+  _schedule_reconnect 再拉保险。"5 次后永久失聪"的前提机制错误
+- **#7 005/002 添加竞争（#NN 号抖动）**：真实存在但纯 cosmetic——
+  add_device 按 sn 幂等，无数据损坏；统一命名需中等重构，不值本批动
 
-
-
-
-
-
-
+### 测试
+- 新增 5 用例（test_audit_round3.py）：迟到 003 会话保持×1、我方确认
+  仍退出会话×1（N1 语义护栏）、cleanup 快照红绿双验×1（旧代码实测
+  消费 5/6 确定性失败）、publish 失败 offline 对齐×1、mock 契约×1、
+  is_closed 浮点/负值/非数值×1；全量 112 passed；py_compile /
+  node --check（JS 无逻辑改动）全绿
 
 
 ## [1.6.10] - 2026-08-30

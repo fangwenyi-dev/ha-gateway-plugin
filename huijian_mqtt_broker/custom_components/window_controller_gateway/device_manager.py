@@ -1067,10 +1067,14 @@ class WindowControllerDeviceManager:
         """清理资源"""
         _LOGGER.info("清理设备管理器资源")
         # P1 修复：取消并 await 所有后台任务，避免任务在 cleanup 后访问已清理的状态
-        for task in self._background_tasks:
+        # v1.6.11（审计 #3）：两个循环都遍历**快照**——任务完成时的
+        # add_done_callback(remove)（见 :166）会在第二个循环 await 让出控制权
+        # 时原地收缩列表，索引迭代跳项 → 被跳过的任务从未被 await，
+        # "cleanup 后无任务触碰已清状态"的保证被破。快照保证每个任务都被处理
+        for task in list(self._background_tasks):
             if not task.done():
                 task.cancel()
-        for task in self._background_tasks:
+        for task in list(self._background_tasks):
             try:
                 await task
             except asyncio.CancelledError:

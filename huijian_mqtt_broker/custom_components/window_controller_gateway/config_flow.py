@@ -56,6 +56,13 @@ class MockDeviceManager:
     def is_device_manually_removed(self, device_sn):
         return device_sn in self._manually_removed_devices
 
+    def allocate_device_number(self):
+        # v1.6.11（审计 #6）：连接测试期间 handler 订阅真实生效，测试窗口内
+        # 到达的 005 会走 _quick_add_device → allocate_device_number——本 mock
+        # 缺该方法的 AttributeError 此前被消息循环兜底 except 吞掉（丢一帧
+        # +日志噪音）。补齐契约面（返回值仅测试期占位，条目创建后真实 dm 接管）
+        return 1
+
 
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Configuration flow handler class"""

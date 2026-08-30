@@ -6,7 +6,7 @@
 
 | 插件 | 版本 | 说明 |
 |------|------|------|
-| [慧尖 LoRa 网关](./huijian_mqtt_broker/) | v1.6.10 | 内置 Mosquitto Broker + mDNS 广播 + 网关集成，安装即用 |
+| [慧尖 LoRa 网关](./huijian_mqtt_broker/) | v1.6.11 | 内置 Mosquitto Broker + mDNS 广播 + 网关集成，安装即用 |
 
 ## 安装方法
 
@@ -87,7 +87,9 @@ LoRa 网关 (MQTT 客户端)
 ## 更新日志
 
 ### 慧尖 LoRa 网关插件
-- **v1.6.10 (2026-08-29)**：生命周期链/MRO 加固、Web 更新检查限流、run.sh 端口变量一致性、README 收敛
+- **v1.6.11 (2026-08-30)**：第三轮审计修复——配对会话门控/cleanup 快照迭代/publish 失败状态对齐/去重时钟 monotonic/config_flow mock 契约
+- **v1.6.10**：审计批2+3——二次配对卡死根治、transfer/check_status 假成功收口、Web 全链路 fetch 超时、绑定状态恢复、number 簿记不回退
+- **v1.6.9**：start_pairing/set_position 假成功根治×7、网关增删检测、CI 阻断门禁、生命周期链/MRO 加固、README 收敛
 - **v1.6.8**：子设备状态恒显 unknown 修复（is_closed 真实推导 + 状态与位置同步 + RestoreEntity 重启回填）
 - **v1.6.7**：服务状态单行横排磁贴、双源升级检查、深色/浅色主题打磨
 - **v1.6.6**：子设备自动增删检测、缓存 no-store 修复版本显示滞后
