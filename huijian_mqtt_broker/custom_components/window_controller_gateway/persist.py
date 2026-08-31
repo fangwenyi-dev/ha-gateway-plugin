@@ -32,22 +32,25 @@ async def load_persistent_data(hass: HomeAssistant) -> None:
     data_file = os.path.join(config_dir, PERSISTENT_DATA_FILE)
     bak_file = data_file + ".bak"
 
-    if not os.path.exists(data_file):
-        return
-
-    # 尝试读取主文件
     data = None
-    try:
-        def _read_file():
-            with open(data_file, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        data = await hass.async_add_executor_job(_read_file)
-    except Exception as e:
-        _LOGGER.error("加载持久化数据失败（主文件损坏）: %s", e)
+    if os.path.exists(data_file):
+        # 尝试读取主文件
+        try:
+            def _read_file():
+                with open(data_file, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            data = await hass.async_add_executor_job(_read_file)
+        except Exception as e:
+            _LOGGER.error("加载持久化数据失败（主文件损坏）: %s", e)
+    else:
+        # v1.6.12（第五轮审计 #10）：主文件缺失此前直接 return，.bak 永不救援
+        # ——误删主文件后重启即全量丢失（映射/手动删除列表），而备份明明在。
+        # "缺失"与"损坏"应同样触发备份恢复
+        _LOGGER.warning("持久化主文件缺失: %s", data_file)
 
-    # 主文件读取失败，尝试 .bak 恢复
+    # 主文件缺失或读取失败，尝试 .bak 恢复
     if data is None and os.path.exists(bak_file):
-        _LOGGER.warning("主文件损坏，尝试从 .bak 恢复")
+        _LOGGER.warning("主文件缺失或损坏，尝试从 .bak 恢复")
         try:
             def _read_bak():
                 with open(bak_file, 'r', encoding='utf-8') as f:
@@ -69,15 +72,35 @@ async def load_persistent_data(hass: HomeAssistant) -> None:
             version, SCHEMA_VERSION
         )
 
+    # v1.6.12（第五轮审计 #10）：字段必须类型校验——此前 JSON 解析成功但字段
+    # 畸形（如 "manually_removed_devices": null → set(None) TypeError）时异常
+    # 逃逸至 async_setup，整个集成 setup 失败；备份恢复只覆盖"解析失败"，
+    # 覆盖不了"内容畸形"。非法字段丢弃+告警，合法字段照常加载
     if 'device_to_gateway_mapping' in data:
         mapping = data['device_to_gateway_mapping']
-        hass.data[DOMAIN][DEVICE_TO_GATEWAY_MAPPING] = mapping
-        _LOGGER.info("已加载设备到网关映射表，共 %d 个设备", len(mapping))
+        if isinstance(mapping, dict):
+            hass.data[DOMAIN][DEVICE_TO_GATEWAY_MAPPING] = mapping
+            _LOGGER.info("已加载设备到网关映射表，共 %d 个设备", len(mapping))
+        else:
+            _LOGGER.error(
+                "device_to_gateway_mapping 字段类型非法（%s），已丢弃",
+                type(mapping).__name__,
+            )
 
     if 'manually_removed_devices' in data:
-        removed_set = set(data['manually_removed_devices'])
-        hass.data[DOMAIN][GLOBAL_MANUALLY_REMOVED_DEVICES] = removed_set
-        _LOGGER.info("已加载手动删除设备列表，共 %d 个设备", len(removed_set))
+        removed = data['manually_removed_devices']
+        if isinstance(removed, (list, tuple, set)):
+            removed_set = {x for x in removed if isinstance(x, str)}
+            hass.data[DOMAIN][GLOBAL_MANUALLY_REMOVED_DEVICES] = removed_set
+            _LOGGER.info("已加载手动删除设备列表，共 %d 个设备", len(removed_set))
+            if len(removed_set) != len(removed):
+                _LOGGER.warning("手动删除列表含 %d 个非字符串条目，已丢弃",
+                                len(removed) - len(removed_set))
+        else:
+            _LOGGER.error(
+                "manually_removed_devices 字段类型非法（%s），已丢弃",
+                type(removed).__name__,
+            )
 
     # 设备参数设定值（速度/力度等），旧版文件无此字段时保持空表
     hass.data[DOMAIN].setdefault(DEVICE_SETPOINTS, {})

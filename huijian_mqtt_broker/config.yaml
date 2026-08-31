@@ -1,5 +1,5 @@
 name: 慧尖 LoRa 网关
-version: "1.6.11"
+version: "1.6.12"
 slug: huijian_mqtt_broker
 description: 慧尖开窗器 LoRa 网关一体化插件，内置 Mosquitto Broker + 网关集成，安装即用
 url: 'https://github.com/fangwenyi-dev/ha-gateway-plugin'
@@ -33,8 +33,11 @@ host_network: true
 # 本地手工 docker push 创建所致（可见性创建时定死，后续推版本不改）。
 # 修复手段即：删包→CI 重建（无需任何人工网页点击）。
 image: ghcr.io/fangwenyi-dev/{arch}-huijian-mqtt-broker
+# v1.6.12（第五轮审计）：移除 ssl 挂载——全仓（run.sh/Dockerfile/mosquitto.conf/
+# 集成/Web）对 /ssl 零引用，broker 也未启用 TLS；与 v1.6.3 移除 hassio_api 时
+# 自立的"权限最小化：不需要就不声明"准则对齐（保留的 homeassistant_config:rw
+# 为持久化数据与集成回链真实依赖，非死映射）
 map:
-  - ssl
   - homeassistant_config:rw
 options:
   username: huijian

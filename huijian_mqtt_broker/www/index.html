@@ -440,7 +440,7 @@
     </div>
 
     <script>
-        let CURRENT_VERSION = '1.6.11';
+        let CURRENT_VERSION = '1.6.12';
         const DOMAIN = 'window_controller_gateway';
 
         // v1.6.3：页头/页脚的初始版本号不再硬编码——脚本在 body 末尾，
@@ -586,18 +586,31 @@
             el.parentElement.querySelector('.dot').className = 'dot dot-' + status;
         }
 
-        // ========== 带超时的 fetch 封装（v1.6.10，审计 N6）==========
+        // ========== 带超时的 fetch 封装（v1.6.10 审计 N6；v1.6.12 第五轮审计修正）==========
         // 此前全部请求无 AbortController：HA Core 挂起时一次刷新周期可无限
-        // 卡住并与 30s 定时器叠跑竞态。超时后 abort 真正终止请求并抛
-        // AbortError，由既有 catch 统一呈现。默认 12s：HA REST 慢查询容忍
-        // 上限；本地 nginx 静态 JSON 8s；外部更新源（github/gitee 经代理）20s
+        // 卡住并与 30s 定时器叠跑竞态。默认 12s：HA REST 慢查询容忍上限；
+        // 本地 nginx 静态 JSON 8s；外部更新源（github/gitee 经代理）20s。
+        // v1.6.12 两处修正：
+        // ① abort reason 必须是 Error 对象——规范规定 fetch 以 reason 原值
+        //    reject，字符串 reason 会让所有消费 e.message 的 toast 显示
+        //    "undefined"（v1.6.10 用字符串，"显示人话"的目标实际未达成）；
+        // ② 超时须覆盖 body 读取——原 .finally 在响应头到达即清定时器，
+        //    代理"回头不 Body"时 resp.json() 无限悬挂，silentRefresh 防重入
+        //    标志永不自愈。定时器延后到 json()/text() 结算再清理；调用方
+        //    不读 body 时定时器自然到期（对已完成响应 abort 无害）。
         function fetchT(url, opts = {}, timeoutMs = 12000) {
             const ctrl = new AbortController();
-            // abort 带 reason：超时被 catch 后 toast 显示人话而非
-            // "signal is aborted without reason"
-            const timer = setTimeout(() => ctrl.abort('请求超时'), timeoutMs);
+            const timer = setTimeout(() => ctrl.abort(new Error('请求超时')), timeoutMs);
+            const clearTimer = () => clearTimeout(timer);
             return fetch(url, Object.assign({}, opts, { signal: ctrl.signal }))
-                .finally(() => clearTimeout(timer));
+                .then(resp => {
+                    const origJson = resp.json.bind(resp);
+                    resp.json = () => origJson().finally(clearTimer);
+                    const origText = resp.text.bind(resp);
+                    resp.text = () => origText().finally(clearTimer);
+                    return resp;
+                })
+                .catch(e => { clearTimer(); throw e; });
         }
 
         // ========== HA API 调用 ==========

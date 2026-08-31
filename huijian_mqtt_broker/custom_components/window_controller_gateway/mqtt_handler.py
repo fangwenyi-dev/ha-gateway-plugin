@@ -17,6 +17,7 @@ from .utils import is_mqtt_loaded, is_mqtt_connected
 from .const import (
     DOMAIN,
     CONF_GATEWAY_SN,
+    CONF_AUTO_DISCOVERY,
     ATTR_DEVICE_SN,
     ATTR_DEVICE_NAME,
     ATTR_POSITION,
@@ -116,6 +117,19 @@ class WindowControllerMQTTHandler:
             oldest = next(iter(self._bind_ops))
             self._bind_ops.pop(oldest)
             _LOGGER.debug("_bind_ops 超过上限 %d，淘汰最旧记录: %s", MAX_BIND_OPS, oldest)
+
+    def _auto_discovery_enabled(self) -> bool:
+        """读取本条目 options 的 auto_discovery（v1.6.12 第五轮审计 #4）。
+
+        此前该选项在选项表单里存在但全工程零消费——取消勾选静默无效。
+        entry/设备管理器不可得或字段缺失时保持 True（历史默认行为），
+        避免取不到配置反而误停自动添加。
+        """
+        try:
+            options = getattr(self.device_manager.entry, "options", None) or {}
+            return bool(options.get(CONF_AUTO_DISCOVERY, True))
+        except Exception:
+            return True
 
     def _clear_bind_ops_for_device(self, device_sn: str) -> None:
         """清除指定设备的待处理 003 绑定/解绑方向记录
@@ -620,6 +634,15 @@ class WindowControllerMQTTHandler:
                 }
                 # 在顶层也添加bind字段
                 payload["bind"] = 1
+                # v1.6.12（第五轮审计 #3）：新配对取代一切陈旧 bind 记账——
+                # start_pairing 的记录是 ("bind", None)，而 _clear_bind_ops_for_device
+                # 按 device_sn 匹配（None 永不命中）、超时回调也不清理，导致旧会话
+                # 迟到确认仍能 pop 命中旧记账、bind_op=="bind" 门控下掐掉当前会话的
+                # 定时器提前关窗（v1.6.11 #2 目标的残留窗口）。配对会话不变式：
+                # 同一时刻只保留最新一条 bind 记账
+                for _stale_id in [k for k, (op, _sn) in self._bind_ops.items() if op == "bind"]:
+                    self._bind_ops.pop(_stale_id, None)
+                    _LOGGER.debug("已清除陈旧待处理绑定记录: id=%s", _stale_id)
                 # 记录本命令方向（id 匹配回复，供 _handle_ctype_003 判定）
                 self._record_bind_op(payload["id"], "bind")
             elif command in ["open", "close", "stop", "a"]:
@@ -1107,6 +1130,11 @@ class WindowControllerMQTTHandler:
             results = await asyncio.gather(*batch_tasks, return_exceptions=True)
             success_count = sum(1 for r in results if not isinstance(r, Exception))
             total_success += success_count
+            # v1.6.12（第五轮审计 #2）：子任务异常此前只被计数、内容整体丢弃
+            # （毒数据引发静默丢更新时无从排查），逐条记警告
+            for r in results:
+                if isinstance(r, Exception):
+                    _LOGGER.warning("批量%s子任务异常: %r", task_type, r)
             _LOGGER.info("批量%s完成，批次: %d，成功: %d，总数: %d", 
                        task_type, i//batch_size + 1, success_count, len(batch_tasks))
         _LOGGER.info("所有批次%s完成，总成功: %d，总总数: %d", task_type, total_success, len(tasks))
@@ -1254,6 +1282,12 @@ class WindowControllerMQTTHandler:
                             # 只更新状态，不重复添加
                             update_tasks.append(self._update_device_attributes(device_sn, device_info))
                         else:
+                            # v1.6.12（第五轮审计 #4）：auto_discovery 接线——
+                            # 取消勾选后 002 上报中的未知设备不再自动添加
+                            # （已有设备状态更新不受影响；配对/手动添加路径不走这里）
+                            if not self._auto_discovery_enabled():
+                                _LOGGER.debug("auto_discovery 已关闭，跳过自动添加: %s", device_sn)
+                                continue
                             # 检查设备是否已添加到其他网关中
                             if DEVICE_TO_GATEWAY_MAPPING in self.hass.data[DOMAIN]:
                                 device_to_gateway_mapping = self.hass.data[DOMAIN][DEVICE_TO_GATEWAY_MAPPING]
@@ -1304,20 +1338,25 @@ class WindowControllerMQTTHandler:
         attributes = {}
         
         # 提取设备属性
+        # v1.6.12（第五轮审计 #2）：两处只捕 ValueError——battery/r_travel 为
+        # null/list/dict 时 float()/int() 抛 TypeError，未捕获即杀死本协程，
+        # 经 gather(return_exceptions=True) 静默吞没，该设备本轮"位置+状态"
+        # 整体丢失且零日志。005 路径同类转换均捕 (ValueError, TypeError)，
+        # 此处对齐（battery 失败不得连带丢失其后的 r_travel 更新）
         if "battery" in device_info:
             try:
                 voltage = float(device_info["battery"]) / 10
                 attributes["voltage"] = voltage
                 _LOGGER.debug("设备 %s 电池电压: %.1fV", device_sn, voltage)
-            except ValueError as e:
+            except (ValueError, TypeError) as e:
                 _LOGGER.error("电池电压数据格式错误: %s, 值: %s", e, device_info["battery"])
-        
+
         if "r_travel" in device_info:
             try:
                 r_travel = int(device_info["r_travel"])
                 attributes["r_travel"] = r_travel
                 _LOGGER.debug("设备 %s 位置状态: %d", device_sn, r_travel)
-            except ValueError as e:
+            except (ValueError, TypeError) as e:
                 _LOGGER.error("位置状态数据格式错误: %s, 值: %s", e, device_info["r_travel"])
         
         if attributes:
@@ -1462,7 +1501,24 @@ class WindowControllerMQTTHandler:
                 _LOGGER.warning("设备控制失败，错误码: %d, SN: %s", errcode, device_sn)
 
     async def _handle_ctype_005(self, payload, ctype, data):
-        """处理协议类型005：设备上报"""
+        """处理协议类型005：设备上报
+
+        v1.6.12（第五轮审计 #1）：处理体必须整体包 try/except——此前解析/更新
+        阶段（如 data.attrs 非列表、元素为 null）抛出的异常会杀死协程并跳过
+        末尾 ack，网关按未确认重发：5s 内重发被去重吞掉（仍无 ack）、5s 后
+        重发再次崩溃，形成毒消息无限重传环，该设备状态永久冻结。与 002
+        （try 包裹 + ack 恒达）对称加固，ack 移出异常区保证必发。
+        """
+        try:
+            await self._handle_ctype_005_inner(payload, ctype, data)
+        except Exception as e:
+            _LOGGER.error("处理005消息异常: %s, data: %r", e, data, exc_info=True)
+        finally:
+            # 回复 005 确认，告知网关已收到设备上报，避免网关重复重发
+            await self._send_ack("005", payload)
+
+    async def _handle_ctype_005_inner(self, payload, ctype, data):
+        """005 处理体（异常由 _handle_ctype_005 兜底，ack 由其 finally 保证）"""
         device_sn = data.get("sn")
         if device_sn:
             # 解析设备上报的状态
@@ -1541,9 +1597,6 @@ class WindowControllerMQTTHandler:
             # 通知设备状态变化，触发传感器实体更新
             self._notify_device_status_change(device_sn)
             _LOGGER.debug("设备上报处理完成: %s", device_sn)
-
-        # 回复 005 确认，告知网关已收到设备上报，避免网关重复重发
-        await self._send_ack("005", payload)
 
     async def _handle_ctype_006(self, payload, ctype, data):
         """处理协议类型006：HA 主动发起命令的网关回复

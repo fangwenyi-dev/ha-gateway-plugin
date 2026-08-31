@@ -64,9 +64,16 @@ def mqtt_match(pattern, topic):
 
 
 def check(acl, user, topic, operation):
-    """返回 (是否允许, 原因)。用户无定义 → 默认允许全部（mosquitto 语义）。"""
+    """返回 (是否允许, 原因)。
+
+    v1.6.12（第五轮审计）：未列用户改判**默认拒绝**——此前按 mosquitto 1.x
+    旧语义钉成"默认允许全部"，而本项目实跑 mosquitto 2.x：官方迁移文档
+    （https://mosquitto.org/documentation/migrating-to-2-0/）明确 2.0 起
+    用户名不在 acl_file 中不再享有全量访问。测试模型必须与运行时一致，
+    否则日后新增不经 run.sh 生成 ACL 的用户会出现"测试绿、真机全拒"。
+    """
     if user not in acl:
-        return True, "用户未在 ACL 中定义（默认允许）"
+        return False, "用户未在 ACL 中定义（mosquitto 2.x 默认拒绝）"
     for action, pattern in acl[user]:
         if mqtt_match(pattern, topic):
             if action == "readwrite":
@@ -145,9 +152,11 @@ class TestFallbackAcl:
         assert ok
 
 
-class TestUnknownUserDefaultAllow:
-    def test_unknown_user_allowed(self):
-        """mosquitto 语义：ACL 中未定义的用户默认允许全部（保持兼容）"""
+class TestUnknownUserDefaultDeny:
+    def test_unknown_user_denied(self):
+        """mosquitto 2.x 语义：ACL 中未定义的用户默认拒绝一切访问"""
         acl = parse_acl(ACL)
         ok, _ = check(acl, "some_other_client", "homeassistant/anything/#", "write")
-        assert ok
+        assert not ok
+        ok, _ = check(acl, "some_other_client", "gateway/100122501207/req", "read")
+        assert not ok

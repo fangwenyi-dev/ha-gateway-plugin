@@ -611,17 +611,20 @@ class OptionsFlow(config_entries.OptionsFlow):
         )
 
     async def async_step_options(self, user_input: Optional[Dict[str, Any]] = None) -> FlowResult:
-        """常规选项（已有网关时显示）"""
+        """常规选项（已有网关时显示）
+
+        v1.6.12（第五轮审计 #9）：移除 gateway_sn 表单字段——setup 只读
+        entry.data，写入 options 无任何消费方，是"看起来能用实则静默无效"
+        的死控件（改 SN 的正确入口是「替换网关」流程）。auto_discovery
+        保留并已真实接线（mqtt_handler._auto_discovery_enabled 门控 002
+        自动添加）；三个字段与 strings/zh-CN 的 options.step.options 对齐。
+        """
         if user_input is not None:
             return self.async_create_entry(title="", data=user_input)
 
         return self.async_show_form(
             step_id="options",
             data_schema=vol.Schema({
-                vol.Optional(
-                    "gateway_sn",
-                    default=self._config_entry.data.get(CONF_GATEWAY_SN, "")
-                ): str,
                 vol.Optional(
                     "discovery_interval",
                     default=self._config_entry.options.get("discovery_interval", 300)

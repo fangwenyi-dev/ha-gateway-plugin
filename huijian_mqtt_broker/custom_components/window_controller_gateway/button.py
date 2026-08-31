@@ -301,6 +301,28 @@ async def _cleanup_unsupported_buttons(hass, gateway_sn, device_sn):
             _LOGGER.info("清理不支持内倒功能设备 %s 的多余按钮: %s (类型: %s)", device_sn, entity_id, button_type)
 
 
+async def _remove_device_buttons(hass, gateway_sn, device_sn, device_name):
+    """按 unique_id 幂等删除设备基础按钮（v1.6.12，第五轮审计 #8）。
+
+    独立成模块级函数便于钉真实参数的测试；注册表查不到的按钮直接跳过
+    （无副作用），因此调用方无需任何前置跟踪条件。
+    """
+    from homeassistant.helpers.entity_registry import async_get
+    from .utils import async_get_entity_id as _aget_eid
+    from .utils import call_registry_method as _call_reg
+    try:
+        entity_registry = async_get(hass)
+        for button_type in ("open", "stop", "close", "a", "wind_lock_tilt", "wind_lock_flat"):
+            button_unique_id = f"{gateway_sn}_{device_sn}_{button_type}"
+            # 查找并删除实体（兼容新旧 HA entity 查找）
+            entity_id = await _aget_eid(hass, "button", button_unique_id)
+            if entity_id:
+                await _call_reg(entity_registry.async_remove, entity_id)
+                _LOGGER.info("已从实体注册表中删除设备 %s 的%s按钮", device_name, button_type)
+    except Exception as e:
+        _LOGGER.error("从实体注册表中删除设备 %s 的按钮失败: %s", device_name, e)
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -456,7 +478,15 @@ async def async_setup_entry(
     
     # 定义设备移除回调函数
     async def on_device_removed(device_sn: str, device_name: str, device_type: str):
-        """设备移除回调，清理相关按钮"""
+        """设备移除回调，清理相关按钮
+
+        v1.6.12（第五轮审计 #8）：原结构把基础按钮清理整段嵌在
+        `if device_sn in created_remove_buttons:` 里——删除按钮被注册表查重
+        跳过（不入本会话跟踪）而基础按钮本会话新建时，清理块被整体跳过，
+        本会话按钮永久滞留注册表（number/sensor 在 v1.6.3 已改独立跟踪，
+        button 是同类缺口最后残留）。现拆开独立执行：删除按钮按自身跟踪，
+        基础按钮无条件按 unique_id 幂等清理。
+        """
         if device_type == DEVICE_TYPE_WINDOW_OPENER:
             # 从存储中移除删除按钮引用
             if device_sn in created_remove_buttons:
@@ -467,7 +497,7 @@ async def async_setup_entry(
                 # 更新entry_data中的删除按钮跟踪信息
                 entry_data["created_remove_buttons"] = created_remove_buttons
                 _LOGGER.info("已清理设备 %s 的删除按钮引用", device_name)
-                
+
                 # 尝试从实体注册表中删除按钮实体
                 try:
                     from homeassistant.helpers.entity_registry import async_get
@@ -490,18 +520,11 @@ async def async_setup_entry(
                             "删除按钮实体定位失败（unique_id=%s 与 entity_id 均未命中）: %s",
                             remove_unique_id, device_name
                         )
-                    
-                    # 生成并删除其他按钮实体ID
-                    button_types = ["open", "stop", "close", "a", "wind_lock_tilt", "wind_lock_flat"]
-                    for button_type in button_types:
-                        button_unique_id = f"{gateway_sn}_{device_sn}_{button_type}"
-                        # 查找并删除实体（兼容新旧 HA entity 查找）
-                        entity_id = await _aget_eid(hass, "button", button_unique_id)
-                        if entity_id:
-                            await _call_reg(entity_registry.async_remove, entity_id)
-                            _LOGGER.info("已从实体注册表中删除设备 %s 的%s按钮", device_name, button_type)
                 except Exception as e:
-                    _LOGGER.error("从实体注册表中删除设备 %s 的按钮失败: %s", device_name, e)
+                    _LOGGER.error("从实体注册表中删除设备 %s 的删除按钮失败: %s", device_name, e)
+
+            # 基础按钮：不依赖删除按钮跟踪，无条件幂等清理（v1.6.12）
+            await _remove_device_buttons(hass, gateway_sn, device_sn, device_name)
     
     # 设置设备添加回调
     device_manager.set_device_added_callback(on_device_added)

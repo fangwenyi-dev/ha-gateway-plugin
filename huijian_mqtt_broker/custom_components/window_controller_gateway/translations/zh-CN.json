@@ -50,7 +50,7 @@
   },
   "options": {
     "step": {
-      "init": {
+      "options": {
         "title": "配置选项",
         "description": "配置网关的高级选项",
         "data": {
@@ -58,7 +58,20 @@
           "auto_discovery": "自动发现设备",
           "debug_logging": "调试日志"
         }
+      },
+      "add_gateway": {
+        "title": "添加网关",
+        "description": "输入要绑定到本条目的网关序列号（示例：{example_sn}）",
+        "data": {
+          "gateway_sn": "网关序列号",
+          "gateway_name": "网关名称（可选）"
+        }
       }
+    },
+    "error": {
+      "required": "网关序列号不能为空",
+      "invalid_sn_format": "序列号格式无效，必须至少10位字母数字",
+      "already_configured": "该网关已被其他配置条目使用"
     }
   },
   "services": {

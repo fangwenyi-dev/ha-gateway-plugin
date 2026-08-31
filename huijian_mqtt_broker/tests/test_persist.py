@@ -69,9 +69,11 @@ class TestPersistRoundTrip:
             hass = FakeHass(tmp)
             hass.data[DOMAIN] = {}
             _run(persist.load_persistent_data(hass))
-            # 文件不存在 → load 无副作用（DEVICE_SETPOINTS 的初始化由
-            # async_setup 的 setdefault 负责，不属于 load 的职责）
-            assert hass.data[DOMAIN] == {}
+            # v1.6.12（第五轮审计）契约更新：主文件缺失且无 .bak 时走
+            # "数据完全不可用"分支——映射/删除列表不产生（保持 async_setup 的
+            # setdefault 初值），DEVICE_SETPOINTS 兜底初始化（防 setup 顺序变化
+            # 时下游 KeyError）
+            assert hass.data[DOMAIN] == {"device_setpoints": {}}
 
     def test_load_corrupt_file_falls_back_to_bak(self):
         with tempfile.TemporaryDirectory() as tmp:

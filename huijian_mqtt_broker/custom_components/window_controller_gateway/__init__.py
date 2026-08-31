@@ -510,15 +510,21 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     # 清理设备注册表中该网关的设备条目（含其下实体）。
     # 若残留，async_discover_gateway 的"已在设备注册表中"检查会永久屏蔽该网关，
     # 导致删除后的网关再也无法被自动发现，只能手动添加。
+    gateway_device_id = None  # v1.6.12：子设备匹配用（删除前捕获）
     try:
         device_registry = dr.async_get(hass)
         gateway_device = device_registry.async_get_device(
             identifiers={(DOMAIN, gateway_sn)}
         )
         if gateway_device:
+            gateway_device_id = gateway_device.id
             # 仅当该设备只关联到当前（被删除的）配置条目时才整删。
             # 若被其他 entry 共享（罕见：同 SN 多 entry），整删会误伤另一网关。
-            entry_ids = getattr(gateway_device, "config_entry_ids", None) or set()
+            # v1.6.12（第五轮审计 #6）：原读一个不存在的复数属性名——DeviceEntry 上
+            # 从未有过它（正确为 config_entries/旧版 config_entry_id），
+            # getattr 恒 None 使共享保护形同虚设，统一走 utils 双读兼容
+            from .utils import get_device_config_entry_ids
+            entry_ids = get_device_config_entry_ids(gateway_device)
             if entry_ids and entry_ids != {entry.entry_id}:
                 _LOGGER.info(
                     "网关设备 %s 同时关联其他配置条目（%s），仅清理映射、保留设备注册表条目",
@@ -537,15 +543,21 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     except Exception as e:
         _LOGGER.error("删除网关 %s 的设备注册表条目失败: %s", gateway_sn, e)
 
-    # 清理该网关的子设备注册表条目（via_device 指向该网关）。
+    # 清理该网关的子设备注册表条目（via_device_id 指向该网关）。
     # 否则子设备条目残留为孤儿设备（config_entry 已删，无法被管理，脏数据）。
+    # v1.6.12（第五轮审计 #6）：原读一个不存在的设备属性（hasattr/getattr 恒
+    # None——测试钉桩见 tests/test_audit_round5.py 的静态扫描）
+    # 不存在、恒 None，且旧值形态也非 (DOMAIN, sn) 元组，本段"意图 100% 落空"
+    # 从未清理过任何子设备。改为按父设备 id 匹配（网关设备 id 已在上一步捕获，
+    # 即便其注册表条目已被删，子设备 via_device_id 仍指向该 id，字符串可比）
     try:
         from .utils import call_registry_method as _call_reg
+        from .utils import get_via_device_id
         device_registry = dr.async_get(hass)
         entity_registry = er.async_get(hass)
         for device in list(device_registry.devices.values()):
-            via = getattr(device, "via_device", None)
-            if via and via[0] == DOMAIN and via[1].lower() == gateway_sn.lower():
+            via_id = get_via_device_id(device)
+            if gateway_device_id and via_id == gateway_device_id:
                 # 先删除该子设备下的实体（仅限属于被删除网关 entry 的实体），
                 # 再删除设备条目本身
                 for entity_entry in list(entity_registry.entities.values()):

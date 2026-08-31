@@ -289,6 +289,11 @@ async def async_setup_entry(
             )
             async_add_entities([cover])
             created_covers[device_sn] = cover
+            # v1.6.12（第五轮审计 #5）：注册设备状态回调（对齐 number/sensor）——
+            # 此前 cover 只靠 HA 轮询（默认 5 分钟），005 上报到达后传感器/滑块
+            # 即时刷新而 cover 卡片滞后，违背 v1.6.8「cover.state 可驱动历史曲线、
+            # 自动化触发条件」的定案
+            mqtt_handler.add_status_callback(device_sn, cover.async_update)
             _LOGGER.info("自动为设备 %s 添加Cover实体", device_name)
 
     async def on_device_removed(device_sn: str, device_name: str, device_type: str):
@@ -297,6 +302,8 @@ async def async_setup_entry(
             if device_sn in created_covers:
                 cover = created_covers[device_sn]
                 del created_covers[device_sn]
+                # v1.6.12：摘除本会话注册的设备状态回调（与 number 移除路径对称）
+                mqtt_handler.remove_status_callback(device_sn, cover.async_update)
 
                 try:
                     from .utils import call_registry_method as _call_reg
@@ -332,6 +339,9 @@ async def async_setup_entry(
             )
             entities.append(cover)
             created_covers[device_sn] = cover
+            # v1.6.12（第五轮审计 #5）：启动循环同样注册状态回调，
+            # 005 上报即时刷新 cover（此前只有轮询路径）
+            mqtt_handler.add_status_callback(device_sn, cover.async_update)
 
     if entities:
         async_add_entities(entities)

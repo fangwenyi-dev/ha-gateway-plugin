@@ -49,7 +49,8 @@ class WindowControllerBatterySensor(WindowControllerBaseEntity, SensorEntity):
         self._attr_unique_id = f"{gateway_sn}_{device_sn}_battery"
         self._attr_device_class = SensorDeviceClass.VOLTAGE
         self._attr_state_class = SensorStateClass.MEASUREMENT
-        self.last_update_time = None  # 最后更新时间
+        # v1.6.12（第五轮审计 #7）：移除 last_update_time——本地刷新时效戳
+        # 是失效机制永不生效的根因，时效统一以设备缓存 last_update 为准
         self._entry_id = entry_id
         # 添加图标
         self._attr_icon = "mdi:battery"
@@ -74,20 +75,29 @@ class WindowControllerBatterySensor(WindowControllerBaseEntity, SensorEntity):
         )
     
     def _update_state(self):
-        """从设备管理器更新状态"""
+        """从设备管理器更新状态
+
+        v1.6.12（第五轮审计 #7）：时效判定改读设备缓存 last_update（真实上报
+        时刻，update_device_status 维护的墙钟）——此前每次从缓存读到值就把
+        本地 last_update_time 重置为 now，紧随其后的超时判定恒为假，
+        SENSOR_TIMEOUT_MINUTES 契约从未生效（网关离线数小时仍显示离线前电压）。
+        """
         device = self.device_manager.get_device(self.device_sn)
-        if device:
-            attributes = device.get("attributes", {})
-            voltage = attributes.get("voltage")
-            if voltage is not None:
-                self._attr_native_value = voltage
-                self.last_update_time = time.monotonic()  # 单调时钟，不受系统时间调整影响
-                _LOGGER.debug("设备 %s 电池电压更新: %.1fV", self.device_sn, voltage)
-        
-        # 检查是否超过设定时间没有更新（单调时钟）
-        if self.last_update_time and (time.monotonic() - self.last_update_time) > SENSOR_TIMEOUT_MINUTES * 60:
+        if not device:
+            return
+        attributes = device.get("attributes", {})
+        voltage = attributes.get("voltage")
+        if voltage is None:
+            return
+        last_update = device.get("last_update")
+        if last_update is not None and \
+                (time.time() - last_update) > SENSOR_TIMEOUT_MINUTES * 60:
             self._attr_native_value = None
-            _LOGGER.debug("设备 %s 电池电压数据超时", self.device_sn)
+            _LOGGER.debug("设备 %s 电池电压数据超时（超过 %d 分钟无上报）",
+                          self.device_sn, SENSOR_TIMEOUT_MINUTES)
+            return
+        self._attr_native_value = voltage
+        _LOGGER.debug("设备 %s 电池电压更新: %.1fV", self.device_sn, voltage)
     
     @property
     def native_unit_of_measurement(self):
@@ -131,7 +141,8 @@ class WindowControllerStatusSensor(WindowControllerBaseEntity, SensorEntity):
         self._attr_device_class = SensorDeviceClass.ENUM
         self._attr_options = ["closed", "open"]
         self._attr_entity_category = EntityCategory.DIAGNOSTIC
-        self.last_update_time = None  # 最后更新时间
+        # v1.6.12（第五轮审计 #7）：移除 last_update_time——本地刷新时效戳
+        # 是失效机制永不生效的根因，时效统一以设备缓存 last_update 为准
         
         # 初始化状态
         self._update_state()
@@ -147,28 +158,36 @@ class WindowControllerStatusSensor(WindowControllerBaseEntity, SensorEntity):
         )
     
     def _update_state(self):
-        """从设备管理器更新状态"""
+        """从设备管理器更新状态
+
+        v1.6.12（第五轮审计 #7）：同电池传感器——时效改读设备缓存
+        last_update（真实上报时刻），本地重置时效戳令超时分支恒不可达的
+        缺陷根治；网关长时间离线后状态如实转 unknown。
+        """
         device = self.device_manager.get_device(self.device_sn)
-        if device:
-            # 优先使用设备状态
-            status = device.get("status")
-            if status in ["closed", "open"]:
-                self._attr_native_value = status
-                self.last_update_time = time.monotonic()  # 单调时钟
-                _LOGGER.debug("设备 %s 状态更新为: %s", self.device_sn, status)
-            else:
-                # 如果没有状态，使用r_travel判断
-                attributes = device.get("attributes", {})
-                r_travel = attributes.get("r_travel")
-                if r_travel is not None:
-                    new_status = "closed" if r_travel == 0 else "open"
-                    self._attr_native_value = new_status
-                    self.last_update_time = time.monotonic()  # 单调时钟
-                    _LOGGER.debug("设备 %s 状态根据r_travel更新为: %s", self.device_sn, new_status)
-        
-        # 检查是否超过设定时间没有更新（单调时钟）
-        if self.last_update_time and (time.monotonic() - self.last_update_time) > SENSOR_TIMEOUT_MINUTES * 60:
+        if not device:
+            return
+        # v1.6.12：先做陈旧判定——陈旧值（status/r_travel 都是缓存）不再回写
+        last_update = device.get("last_update")
+        if last_update is not None and \
+                (time.time() - last_update) > SENSOR_TIMEOUT_MINUTES * 60:
             self._attr_native_value = None
+            _LOGGER.debug("设备 %s 状态数据超时（超过 %d 分钟无上报）",
+                          self.device_sn, SENSOR_TIMEOUT_MINUTES)
+            return
+        # 优先使用设备状态
+        status = device.get("status")
+        if status in ["closed", "open"]:
+            self._attr_native_value = status
+            _LOGGER.debug("设备 %s 状态更新为: %s", self.device_sn, status)
+        else:
+            # 如果没有状态，使用r_travel判断
+            attributes = device.get("attributes", {})
+            r_travel = attributes.get("r_travel")
+            if r_travel is not None:
+                new_status = "closed" if r_travel == 0 else "open"
+                self._attr_native_value = new_status
+                _LOGGER.debug("设备 %s 状态根据r_travel更新为: %s", self.device_sn, new_status)
 
     async def async_update(self) -> None:
         """更新实体状态"""

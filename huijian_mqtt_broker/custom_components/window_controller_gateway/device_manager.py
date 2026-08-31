@@ -537,14 +537,20 @@ class WindowControllerDeviceManager:
                         else:
                             _LOGGER.warning("设备未成功关联到当前配置条目: %s", device_sn)
                         
-                        # 检查updated_device是否有via_device属性
-                        if hasattr(updated_device, 'via_device'):
-                            if updated_device.via_device and updated_device.via_device[1] == self.gateway_sn:
-                                _LOGGER.info("设备已成功关联到当前网关: %s", device_sn)
-                            else:
-                                _LOGGER.warning("设备未成功关联到当前网关: %s", device_sn)
+                        # v1.6.12（第五轮审计 #6）：原读一个不存在的设备属性——
+                        # DeviceEntry 无该属性（读取端为 via_device_id，值是父设备 id
+                        # 而非 (DOMAIN, sn)），hasattr 恒 False 使验证永远走"跳过"。
+                        # 改为解析网关注册表 id 后比对（本方法已确认设备关联成功才到
+                        # 这里，属诊断日志修正，不影响功能路径）
+                        from .utils import get_via_device_id
+                        gateway_reg_device = device_registry.async_get_device(
+                            identifiers={(DOMAIN, self.gateway_sn)}
+                        )
+                        via_id = get_via_device_id(updated_device)
+                        if gateway_reg_device and via_id == gateway_reg_device.id:
+                            _LOGGER.info("设备已成功关联到当前网关: %s", device_sn)
                         else:
-                            _LOGGER.debug("设备没有via_device属性，跳过网关关联检查: %s", device_sn)
+                            _LOGGER.warning("设备未成功关联到当前网关: %s", device_sn)
                         
                         _LOGGER.info("设备注册信息已更新: %s", device_sn)
                     else:
@@ -1172,8 +1178,11 @@ class WindowControllerDeviceManager:
                 _LOGGER.warning("设备在注册表中未找到: %s，跳过", device_sn)
                 continue
             
-            # 检查设备是否已经关联到新网关（大小写不敏感）
-            if hasattr(device, 'via_device') and device.via_device and device.via_device[1].lower() == new_gateway_sn.lower():
+            # 检查设备是否已经关联到新网关
+            # v1.6.12（第五轮审计 #6）：原读恒 None 的 via_device 属性——短路
+            # 从未生效，只是被 get_or_create 幂等性掩盖。按新网关设备 id 比对
+            from .utils import get_via_device_id
+            if get_via_device_id(device) == new_gateway_device.id:
                 _LOGGER.debug("设备 %s 已经关联到新网关，跳过", device_sn)
                 migrated_devices.append(device_sn)
                 continue
@@ -1326,7 +1335,21 @@ class WindowControllerDeviceManager:
         gateway_devices = []
         
         _LOGGER.info("开始查找网关 %s 的设备，总设备数: %d", gateway_sn, len(device_registry.devices))
-        
+
+        # v1.6.12（第五轮审计 #6，本簇影响最大的一处）：原按恒 None 的
+        # getattr(device, <不存在的属性名>) 匹配 (DOMAIN, sn) 元组——该属性/值形态
+        # 均不存在于 DeviceEntry，本函数永远返回空表，迁移快照、转移实体
+        # （_transfer_entities_complete 依赖此清单）、跨网关冲突通知的设备
+        # 获取全部静默落空。改为解析网关设备 id 后按 via_device_id 比对
+        gateway_reg_device = device_registry.async_get_device(
+            identifiers={(DOMAIN, gateway_sn)}
+        )
+        if gateway_reg_device is None:
+            _LOGGER.debug("网关 %s 尚无注册表条目，无子设备可查", gateway_sn)
+            return gateway_devices
+        from .utils import get_via_device_id
+        gateway_device_id = gateway_reg_device.id
+
         # 使用生成器表达式和内置函数优化查找过程
         for device in device_registry.devices.values():
             # 检查设备是否有此集成的标识符
@@ -1334,12 +1357,11 @@ class WindowControllerDeviceManager:
                 (identifier[1] for identifier in device.identifiers if identifier[0] == DOMAIN),
                 None
             )
-            
+
             # 只有当设备有此集成的标识符且不是网关本身时才处理
             if device_sn and device_sn != gateway_sn:
                 # 检查设备是否关联到指定网关
-                via_device_info = getattr(device, 'via_device', None)
-                if via_device_info and via_device_info[1].lower() == gateway_sn.lower():
+                if get_via_device_id(device) == gateway_device_id:
                     gateway_devices.append(device_sn)
                     _LOGGER.info("找到关联到网关 %s 的设备: %s", gateway_sn, device_sn)
         

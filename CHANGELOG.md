@@ -3,6 +3,87 @@
 所有版本变更记录在此文件中。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.6.12] - 2026-08-30
+
+### 修复（第五轮全量审计 16 项：4 路并行审计 + 父代理逐条实证后全部落地）
+
+**MQTT 核心（mqtt_handler.py）**
+- **005 毒消息 ack 必达（#1）**：attrs 非列表/元素 null → TypeError/AttributeError
+  炸穿处理协程、尾部 `_send_ack` 不可达 → 网关对同一报文无限重传。005 处理体
+  重构为 inner+wrapper：异常记录并吞掉，ack 进 finally（畸形帧仍恰 ack 一次）
+- **002 属性转换吞噬（#2）**：`float(battery)`/`int(r_travel)` 对 null 抛 TypeError
+  被 `except ValueError` 漏掉 → 整个属性更新协程中断且被 gather 静默。补
+  (ValueError, TypeError)；`_batch_process_tasks` 的 gather 结果逐个查异常落日志
+- **陈旧 bind 记账死账（#3）**：start_pairing 记录为 ("bind", None)，
+  `_clear_bind_ops_for_device` 按 device_sn 匹配永不命中、超时也不清理 →
+  旧会话迟到确认仍命中旧记账，bind_op=="bind" 门控下掐掉当前配对会话的定时器
+  （v1.6.11 #2 的残留窗口）。新配对启动时清光全部旧 "bind" 记账（会话不变式：
+  同一时刻只留最新一条）
+- **auto_discovery 真实接线（#4）**：该选项在表单存在但全工程零消费，取消勾选
+  静默无效。新增 `_auto_discovery_enabled()`（读 entry options，取不到默认 True
+  保持历史行为），门控 002 未知设备自动添加（已有设备更新/配对路径不受影响）
+
+**实体平台**
+- **cover 状态回调缺失（#5）**：cover 是四个平台里唯一没注册
+  `add_status_callback` 的——005 上报后滑块/传感器即时刷新而 cover 卡片只能等
+  HA 轮询，v1.6.8「cover 驱动历史/自动化」定案的实时性半边从未兑现。启动
+  循环与 on_device_added 两路径补注册，移除路径对称摘除
+- **sensor 时效契约复活（#7）**：`_update_state` 每次从缓存读到值就把本地
+  时效戳重置为 now，紧随其后的 SENSOR_TIMEOUT_MINUTES 判定恒为假——网关离线
+  数小时电压/状态仍显示离线前值。改读设备缓存 `last_update`（真实上报墙钟），
+  陈旧值如实转 unknown；永不生效的 `last_update_time` 字段删除
+- **button 清理总闸（#8）**：基础按钮（open/stop/close/a/内倒两模式）的注册表
+  清理整段嵌在「本会话创建过删除按钮」的 if 里——删除按钮被查重跳过时本会话
+  新建的基础按钮永久滞留注册表（number/sensor v1.6.3 已修同类，button 最后
+  残留）。抽模块级 `_remove_device_buttons` 无条件幂等清理
+
+**注册表死属性簇（本轮最重，#6/#9/#10/#11 关联）**
+- **`via_device` 读取簇根治**：DeviceEntry 上从未存在 `via_device` 属性
+  （读取端是 `via_device_id`，值=父设备 id：新版 str/旧版 tuple），但
+  device_manager 验证日志/转移短路/**`_get_gateway_devices_from_registry`**
+  与 `__init__` 子设备清理全部读它且恒落 None——网关子设备清单在生产中**恒空**，
+  迁移快照/实体转移/跨网关冲突通知整段静默 no-op；删除网关时子设备孤儿条目
+  清理从未执行。新增 utils `get_via_device_id`/`get_device_config_entry_ids`
+  双形态兼容层统一改造 5 处读取点；`config_entry_ids` 同为不存在属性名
+  （正确 config_entries/旧 config_entry_id），共享保护死分支一并修复。
+  附 tokenize 静态扫描测试：集成源码再现 `.via_device`/`config_entry_ids`
+  读取即红（v1.6.0 "entity" 字面量同族教训的机制化防复发）
+- **options 死控件（#9）**：gateway_sn 字段写入 options 后零消费（setup 只读
+  entry.data），删除；真实消费三字段与翻译文案对齐
+- **翻译契约（#11）**：strings/zh-CN 的 options.step 只有从不渲染的 "init"，
+  补 options/add_gateway 真实步骤与 add_gateway 三个 error 键（此前 UI 裸显
+  英文 key）
+
+**持久化与配置**
+- **persist .bak 救援（#10）**：主文件缺失直接 return——误删主文件后重启全量
+  丢失而备份明明在；缺失与损坏同走 .bak。字段级类型校验：mapping 非 dict/
+  removed 非容器此前以 len(None)/set(42) 逃逸到 setup 整挂，现丢弃+告警
+- **test_acl 2.x 语义**：未知用户判定从 1.x"默认允许"翻正为 2.x"默认拒绝"
+  （运行时即 2.x，测试模型与真机分叉）
+- **config.yaml ssl 映射移除**：全仓对 /ssl 零引用、broker 无 TLS——与 v1.6.3
+  hassio_api 移除同源的权限最小化清理
+
+**Web UI**
+- **abort reason 必须是 Error（#12）**：WHATWG fetch 以 reason 原值 reject，
+  `abort('请求超时')` 字符串 reason 让全部 `e.message` toast 显示 "undefined"
+  （v1.6.10 目标实际未达成）。改 `abort(new Error(...))`
+- **fetchT 超时覆盖 body 读取（#13）**：`.finally(clearTimeout)` 在响应头到达
+  即清 timer——代理"回头不 Body"时 resp.json() 无限悬挂，silentRefresh 防重入
+  标志永不自愈。timer 延后到 json()/text() 结算；静态钉桩防回潮
+
+**文档**
+- README 端口出处纠偏（2022 由 mosquitto.conf+run.sh 定义，config.yaml 不含）；
+  ingress.conf "兜底"死路径叙事更正（run.sh 必先重写它，真实角色是 heredoc
+  第二拷贝）
+
+### 测试
+- 新增 `tests/test_audit_round5.py` 27 项：005 毒消息三形态 ack 恰一次、002 转换
+  吞噬、bind 清账+迟到确认不掐会话、auto_discovery 门控开/关、真实 DeviceEntry
+  形态（str/tuple via_device_id，刻意不带 via_device）的子设备清单命中与排除、
+  静态死属性扫描、sensor 新/旧值四态、cover 注册/摘除生命周期、button 无条件
+  清理、options schema 键断言、persist 救援/畸形三例、Web 契约正则、infra 断言
+- `test_persist` 主文件缺失用例更新为"完全不可用"分支契约；全套 139 绿
+
 ## [1.6.11] - 2026-08-30
 
 ### 修复（第三轮外部审计 7 项：5 项落地，2 项裁决误报/维持不改）

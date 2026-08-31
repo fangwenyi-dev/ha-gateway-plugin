@@ -1,6 +1,6 @@
 # 慧尖 LoRa 网关一体化插件
 
-[![版本](https://img.shields.io/badge/version-1.6.11-blue)]()
+[![版本](https://img.shields.io/badge/version-1.6.12-blue)]()
 [![HA Add-on](https://img.shields.io/badge/HA-Add--on-green)]()
 
 慧尖开窗器 LoRa 网关的 Home Assistant 一体化插件。**内置 Mosquitto Broker + mDNS 自动发现 + 网关集成，安装一个插件即可获得全部能力**。
@@ -100,7 +100,7 @@ https://github.com/fangwenyi-dev/ha-gateway-plugin
 | `auto_setup_ha_mqtt` | `true` | 启动时自动配置 HA MQTT 集成 |
 | `install_integration` | `true` | 启动时自动安装网关集成到 `custom_components` |
 
-> **MQTT 端口**固定为 `2022`（`config.yaml` 定义，host_network 模式直接暴露在主机），避免与 HA 官方 Mosquitto broker 的 `1883` 端口冲突，两个 broker 可共存。
+> **MQTT 端口**固定为 `2022`（由 `mosquitto.conf` 的 `listener` 与 `run.sh` 的 `MQTT_PORT` 常量定义，`config.yaml` 不含端口声明；host_network 模式直接暴露在主机），避免与 HA 官方 Mosquitto broker 的 `1883` 端口冲突，两个 broker 可共存。
 
 > **⚠️ 安全提醒**：默认密码仅供初次测试使用，**请在生产环境中务必修改默认密码**。
 
@@ -145,6 +145,13 @@ https://github.com/fangwenyi-dev/ha-gateway-plugin
 不会。持久化数据存储在 HA 配置目录，升级时自动备份恢复。v1.3.2 起增加了 `.bak` 备份机制，JSON 损坏时可自动恢复。
 
 ## 更新日志
+
+### v1.6.12 (2026-08-30)
+- 第五轮审计 16 项修复：005 毒消息 ack 必达（防网关无限重传）、002 属性转换吞噬、陈旧 bind 记账清账、auto_discovery 选项真实接线
+- **注册表死属性簇根治**：`via_device`/`config_entry_ids` 均非 DeviceEntry 真实属性——网关子设备清单在生产中恒空（迁移快照/转移/冲突通知/删除清理全部静默失效），本轮最后残留的"假 mock 骗过真测试"缺陷；附静态扫描测试防复发
+- cover 补注册设备状态回调（005 即时刷新，不再只靠轮询）；sensor 超时契约复活（网关离线如实转 unknown）；button 基础按钮清理脱离删除按钮总闸
+- 持久化：主文件缺失改走 .bak 救援 + 字段类型校验（畸形数据不再拖垮 setup）；options 表单删 gateway_sn 死控件；选项流中英文文案补全
+- Web：fetch 超时 abort reason 改 Error 对象（toast 不再显示 undefined）、超时覆盖 body 读取（悬挂自愈）；移除无用的 ssl 挂载；test_acl 对齐 mosquitto 2.x 默认拒绝语义
 
 ### v1.6.11 (2026-08-30)
 - 第三轮审计修复：迟到/非请求 003 不再掐掉当前配对会话（会话退出限定发起方记账）

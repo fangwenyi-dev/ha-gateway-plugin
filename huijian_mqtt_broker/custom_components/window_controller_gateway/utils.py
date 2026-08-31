@@ -31,6 +31,41 @@ def is_mqtt_connected(hass: HomeAssistant) -> bool:
         return is_mqtt_loaded(hass)
 
 
+def get_via_device_id(device) -> Optional[str]:
+    """读取设备的父设备 id（v1.6.12 第五轮审计，跨版本兼容）。
+
+    DeviceEntry 上**从未存在** ``via_device`` 属性——``via_device=(DOMAIN, sn)``
+    只是 ``async_get_or_create`` 的入参形式；读取端属性名是 ``via_device_id``，
+    其值分两代：
+    - 新版 HA：str（父设备 id），上游已列入移除遗留别名计划
+    - 旧版 HA：tuple ``(config_entry_id, device_id)`` → 取 device_id
+    本库此前多处 ``getattr(device, "via_device", ...)`` 恒落 None，
+    网关子设备清单/迁移/删除清理整段死分支（教训与 v1.6.0 "entity"
+    字面量同族：假 mock 带真机没有的属性骗过全部测试）。
+    """
+    via = getattr(device, "via_device_id", None)
+    if isinstance(via, tuple):
+        return via[1] if len(via) > 1 else None
+    return via
+
+
+def get_device_config_entry_ids(device) -> set:
+    """读取设备关联的配置条目 id 集合（跨版本兼容，同 api.py 的双读法）。
+
+    新版 HA 是 ``config_entries``（set），旧版是 ``config_entry_id``（str）。
+    ``config_entry_ids`` 这个属性名不存在——v1.6.12 修正 __init__.py 的
+    恒空读取（共享保护死分支）。
+    """
+    ids = set()
+    ce = getattr(device, "config_entries", None)
+    if ce:
+        ids.update(ce)
+    ce_id = getattr(device, "config_entry_id", None)
+    if ce_id:
+        ids.add(ce_id)
+    return ids
+
+
 def get_entity_registry(hass: HomeAssistant):
     """获取实体注册表
 
