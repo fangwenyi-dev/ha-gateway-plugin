@@ -1,4 +1,5 @@
 """工具模块 - 存放通用辅助函数"""
+import asyncio
 import logging
 from typing import Dict, Any, Optional, Tuple
 from homeassistant.core import HomeAssistant
@@ -29,6 +30,34 @@ def is_mqtt_connected(hass: HomeAssistant) -> bool:
         return bool(async_connected(hass))
     except (ImportError, AttributeError):
         return is_mqtt_loaded(hass)
+
+
+async def async_wait_mqtt_loaded(
+    hass: HomeAssistant, timeout: float = 10.0, interval: float = 0.5
+) -> bool:
+    """等待 MQTT 集成 setup 完成（hass.data["mqtt"] 出现），返回是否就绪。
+
+    v1.6.13（客户现场 mqtt_not_available 误诊根治）：ensure_mqtt_connection 的
+    "创建/更新 MQTT 条目"路径以提交动作为终点，而 MQTT 集成真正 setup 完成
+    （``hass.data["mqtt"]`` 写入）是异步的——config flow 在 ensure 返回后立即
+    同步检查 is_mqtt_loaded，会把"刚创建正在连接"的正常时序误判成失败。
+
+    为何不用官方 async_wait_for_mqtt_client：它等待的是"客户端实际连上
+    broker"（内部 30 秒超时）。本门禁的唯一判据是"下游
+    mqtt.async_subscribe 是否会因 wrapper 缺失而炸"，即 hass.data 条目
+    存在性——broker 永久不可达时应快速失败给出可读错误，而不是让
+    表单卡 30 秒。轮询目标与 is_mqtt_loaded 保持同一谓词，
+    上游改存储结构时仍只需改一处。
+    """
+    if is_mqtt_loaded(hass):
+        return True
+    waited = 0.0
+    while waited < timeout:
+        await asyncio.sleep(interval)
+        waited += interval
+        if is_mqtt_loaded(hass):
+            return True
+    return False
 
 
 def get_via_device_id(device) -> Optional[str]:

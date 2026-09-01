@@ -69,6 +69,28 @@ def _remove_marker(path: str) -> None:
         _LOGGER.warning("删除 MQTT 引导标记文件失败: %s", err)
 
 
+def _marker_exists(path: str) -> bool:
+    return os.path.isfile(path)
+
+
+async def has_bootstrap_marker(hass: HomeAssistant) -> bool:
+    """引导标记是否仍存在（True = 自动配置意图尚未确认完成）。
+
+    v1.6.13：config flow 错误码分流使用——标记存在说明加载项已声明
+    "要用内置 broker 自动配置 MQTT"，此时 MQTT 未就绪的根因通常是
+    内置 broker 未启动/凭据被拒，应给 broker_not_ready 而非误导性的
+    "请先启用 MQTT 集成"。检查失败按 False 处理（保守：宁可少一类等待，
+    不可让门禁异常打断添加流程）。
+    """
+    try:
+        return await hass.async_add_executor_job(
+            _marker_exists, hass.config.path(BOOTSTRAP_FILENAME)
+        )
+    except Exception:  # noqa: BLE001 — 探针失败不改变主判定
+        _LOGGER.debug("检查 MQTT 引导标记失败（按不存在处理）", exc_info=True)
+        return False
+
+
 async def _wait_for_mqtt_client(hass: HomeAssistant) -> bool:
     """等待 MQTT 客户端连接就绪，最多 30 秒。
 
@@ -127,13 +149,20 @@ async def _update_mqtt_entry(
     )
 
 
-async def ensure_mqtt_connection(hass: HomeAssistant) -> None:
+async def ensure_mqtt_connection(hass: HomeAssistant) -> Optional[bool]:
     """确保 HA 的 MQTT 集成已连接到内置 Broker（需要时自动创建/更新配置条目）。
 
     - 标记不存在（HACS 独立安装等场景）→ 立即返回，不做任何事。
     - 已有 MQTT 条目但 broker 地址不一致 → 自动更新为内置 Broker 地址。
     - 已有 MQTT 条目且地址一致 → 保持现状，删除标记。
     - 无条目且有标记 → 程序化运行 mqtt config flow 创建条目并等待连接。
+
+    返回值契约（v1.6.13 审计#3：消除调用方重复等待）：
+    - ``True``  已消耗过最长 30s 的连接等待且客户端就绪；
+    - ``False`` 已消耗过最长 30s 的连接等待仍未就绪——调用方**不应**再
+      自行宽限轮询（同一时段内不可能凭空就绪，只会白等）；
+    - ``None``  本次未做连接等待（无标记 / 条目已匹配 / 无需动作），
+      就绪与否由调用方自行判断。
 
     抛出 :class:`ConfigEntryNotReady` 表示暂时无法完成（典型为内置 Broker 尚未
     就绪），调用方应让 setup 流程稍后自动重试。
@@ -229,24 +258,32 @@ async def ensure_mqtt_connection(hass: HomeAssistant) -> None:
                 )
                 # 降级方案：虽然 Supervisor 可能会在 reload 时覆盖回原 broker，
                 # 但至少在当前会话中让 MQTT 客户端连上内置 broker。
-                # 保留标记以便下次启动时重试删除 + 创建新条目。
+                # v1.6.13（审计#1a）：条目数据此刻已被改写为内置 broker——
+                # "引导配置已落地"这一标记职责完成，无条件删标记；
+                # 连不上属 MQTT 集成自身的重连职责（HA 内置退避重试），
+                # 保留标记反而会与"匹配分支即删"的真实行为自相矛盾，
+                # 并在 Supervisor 持续覆盖的极端场景下形成 reload 循环。
+                # 返回值如实上报"等过一轮没成就"，调用方不必重复等待。
                 await _update_mqtt_entry(hass, first, broker, port, username, password)
                 await hass.config_entries.async_reload(first.entry_id)
                 _LOGGER.info("等待 MQTT 客户端重连到内置 Broker（降级模式）...")
-                if not await _wait_for_mqtt_client(hass):
-                    _LOGGER.warning("MQTT 客户端重连超时，但配置已更新（降级模式）")
                 await hass.async_add_executor_job(_remove_marker, marker_path)
-                return
+                if not await _wait_for_mqtt_client(hass):
+                    _LOGGER.warning("MQTT 客户端重连超时（降级模式），交由 MQTT 集成自动重试")
+                    return False
+                return True
             # 不删标记——让后续 create_new_entry 路径接管
         else:
             # 非 hassio 条目（用户手动创建等）：直接更新数据
+            # v1.6.13（审计#1a）：同上——更新落地即删标记，连接归 MQTT 集成重试。
             await _update_mqtt_entry(hass, first, broker, port, username, password)
             await hass.config_entries.async_reload(first.entry_id)
+            await hass.async_add_executor_job(_remove_marker, marker_path)
             _LOGGER.info("等待 MQTT 客户端重连到内置 Broker...")
             if not await _wait_for_mqtt_client(hass):
-                _LOGGER.warning("MQTT 客户端重连超时，但配置已更新，继续启动")
-            await hass.async_add_executor_job(_remove_marker, marker_path)
-            return
+                _LOGGER.warning("MQTT 客户端重连超时，交由 MQTT 集成自动重试")
+                return False
+            return True
 
     if not broker:
         _LOGGER.warning("MQTT 引导标记缺少 broker 字段，跳过自动配置")
@@ -325,11 +362,16 @@ async def ensure_mqtt_connection(hass: HomeAssistant) -> None:
         if result_type == FlowResultType.CREATE_ENTRY:
             _LOGGER.info("已自动创建 MQTT 配置条目，等待客户端连接…")
             if not await _wait_for_mqtt_client(hass):
-                # 条目已创建，仅客户端暂未连上（Broker 可能仍在启动）。
-                # 不回滚：订阅层具备重试机制；删除标记避免重复创建。
-                _LOGGER.warning("MQTT 客户端 30 秒内未完成连接，将继续启动")
+                # v1.6.13（客户现场"装完立刻添加网关必报 mqtt_not_available"
+                # 根修）：条目已创建但客户端 30s 内没连上（内置 Broker 仍在
+                # 启动）→ **保留标记**：条目若因 HA 版本差异未真正落地，
+                # 下次 ensure 仍能重建；就绪语义 = 客户端真连上才算引导完成。
+                # （审计#1 复核：本路径保留有独立价值，区别于更新/降级路径
+                # ——后两者条目数据已落地且必然匹配，保留标记无消费出口。）
+                _LOGGER.warning("MQTT 客户端 30 秒内未完成连接，保留引导标记待下次重试")
+                return False
             await hass.async_add_executor_job(_remove_marker, marker_path)
-            return
+            return True
 
         if result_type == FlowResultType.ABORT:
             reason = result.get("reason")

@@ -18,10 +18,18 @@ from .const import (
     GATEWAY_CONNECT_TIMEOUT
 )
 from .mqtt_handler import WindowControllerMQTTHandler
-from .mqtt_bootstrap import ensure_mqtt_connection
-from .utils import is_mqtt_loaded
+from .mqtt_bootstrap import ensure_mqtt_connection, has_bootstrap_marker
+from .utils import is_mqtt_loaded, async_wait_mqtt_loaded
 
 _LOGGER = logging.getLogger(__name__)
+
+# v1.6.13：MQTT 就绪宽限窗口。ensure_mqtt_connection 创建/更新条目后，
+# MQTT 集成 setup 完成（hass.data["mqtt"] 写入）是异步的，立即同步判
+# is_mqtt_loaded 会误报（客户现场实锤）。宽限轮询此窗口；超时仍不就绪
+# 才按失败形态分流错误码。注意两等待谓词不同（ensure 内 30s 等"客户端
+# 连上"，此处 10s 等"hass.data 条目存在"），时序上可串行叠加；当 ensure
+# 返回 False（已完整等过 30s 仍未就绪）时门禁跳过本窗口免白等（审计#3）。
+MQTT_READY_GRACE_SECONDS = 10.0
 
 def validate_gateway_sn(sn: str) -> bool:
     """Validate gateway serial number format"""
@@ -107,14 +115,21 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                             return self.async_abort(reason="already_configured")
 
                     try:
+                        mqtt_already_waited = False
                         try:
-                            await ensure_mqtt_connection(self.hass)
-                        except ConfigEntryNotReady:
-                            errors["base"] = "mqtt_not_available"
+                            mqtt_already_waited = (
+                                await ensure_mqtt_connection(self.hass)
+                            ) is False
+                        except ConfigEntryNotReady as mqtt_exc:
+                            # v1.6.13：该异常语义是"暂时未就绪、可稍后重试"，
+                            # 不再直接判定失败形态——交给统一就绪门禁分流
+                            # （旧版在此直接报 mqtt_not_available，与真实原因
+                            # "内置 broker 未就绪/凭据被拒"不符，客户无从下手）
+                            _LOGGER.info("MQTT 引导未确认完成，转交就绪门禁: %s", mqtt_exc)
 
-                        if not is_mqtt_loaded(self.hass):
-                            errors["base"] = "mqtt_not_available"
-                        else:
+                        if await self._async_gate_mqtt_ready(
+                            errors, already_waited=mqtt_already_waited
+                        ):
                             connected = await self._test_gateway_connectivity(gateway_sn)
                             if not connected:
                                 self._pending_gateway_sn = gateway_sn
@@ -398,6 +413,46 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 "device_count": self.context.get("device_count", "未知")
             }
         )
+
+    async def _async_gate_mqtt_ready(
+        self, errors: Dict[str, str], already_waited: bool = False
+    ) -> bool:
+        """MQTT 就绪门禁（v1.6.13，客户现场误诊根治）。
+
+        返回 True 表示可安全进入连接测试。返回 False 时已向 errors["base"]
+        写入恰当错误码：
+        - 从未加载且无引导线索（无 MQTT 条目、无标记）→ mqtt_not_available
+          （真正"没启用 MQTT 集成"，提示用户去启用）
+        - 有引导意图/已有条目但宽限窗口内始终未就绪 → broker_not_ready
+          （内置 broker 未起或凭据被拒，提示等加载项就绪后重试）
+
+        关键点：ensure_mqtt_connection 创建/更新条目后 MQTT setup 是异步完成的，
+        故先宽限轮询再判定，避免把"正在连接"误判成"不可用"。
+        already_waited=True（ensure 已完整消耗过 30s 连接等待仍未就绪，见
+        ensure 返回值契约）时跳过本窗口——同一时段内不可能凭空就绪（审计#3）。
+        """
+        if is_mqtt_loaded(self.hass):
+            return True
+
+        has_entries = bool(self.hass.config_entries.async_entries("mqtt"))
+        marker_pending = (not has_entries) and await has_bootstrap_marker(self.hass)
+
+        # 完全没有 MQTT 条目、也没有引导标记 → 用户确实尚未启用/配置 MQTT，
+        # 无需空等宽限窗口，直接给 mqtt_not_available。
+        if not has_entries and not marker_pending:
+            errors["base"] = "mqtt_not_available"
+            return False
+
+        if already_waited:
+            errors["base"] = "broker_not_ready"
+            return False
+
+        # 存在引导线索（已有 MQTT 条目，或有标记待消费）→ 给异步 setup 一次宽限窗口
+        if await async_wait_mqtt_loaded(self.hass, MQTT_READY_GRACE_SECONDS):
+            return True
+
+        errors["base"] = "broker_not_ready"
+        return False
 
     async def _test_gateway_connectivity(self, gateway_sn: str) -> bool:
         """Test gateway connectivity"""

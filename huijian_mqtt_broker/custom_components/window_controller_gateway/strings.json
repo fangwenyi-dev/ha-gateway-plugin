@@ -37,6 +37,7 @@
     "error": {
       "invalid_sn_format": "序列号格式无效，必须至少10位字母数字",
       "mqtt_not_available": "MQTT 集成未启用，请先在 Home Assistant 中启用 MQTT",
+      "broker_not_ready": "MQTT Broker 未就绪：已有 MQTT 配置条目，但客户端尚未连上。使用慧尖一体化加载项时请确认其处于运行状态（内置 Broker 端口 2022）；自行搭建 Broker 请检查其可达性与凭据。系统会自动重试连接，请稍等约一分钟后重试。",
       "cannot_connect": "连接网关失败"
     },
     "abort": {

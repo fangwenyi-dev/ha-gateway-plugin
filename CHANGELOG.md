@@ -3,6 +3,44 @@
 所有版本变更记录在此文件中。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.6.13] - 2026-09-01
+
+### 修复（客户现场 mqtt_not_available 误报根治 · dsh-review-loop 双审计 + 变异测试验证）
+
+**问题**：客户安装加载项后在集成中添加网关报 "MQTT 集成未启用"，但实际根因是
+config flow 在 `ensure_mqtt_connection` 之后**立即同步**检查 `hass.data["mqtt"]`
+——MQTT 条目刚创建/重载时集成 setup 尚未异步完成，正常启动时序被误判为失败；
+且两种完全不同的故障（从未配置 MQTT / 内置 broker 未就绪）复用同一误导文案，
+用户无从下手。
+
+**config_flow.py（就绪门禁）**
+- 新增 `_async_gate_mqtt_ready` 统一门禁：未就绪时先宽限轮询（10s）再判定；
+  错误码按失败形态分流——无条目且无引导标记 → `mqtt_not_available`（快速失败，
+  不空等）；有条目或有标记但未就绪 → 新增 `broker_not_ready`（如实提示内置
+  broker 未起/凭据被拒，文案中性兼容 HACS 自建 broker 用户）
+- `ensure_mqtt_connection` 抛 `ConfigEntryNotReady` 不再直接定错，转交门禁统一
+  分流（旧行为=本 bug 本体，E 组端到端接线测试钉死防回归）
+
+**mqtt_bootstrap.py（引导返回值契约）**
+- `ensure_mqtt_connection` 返回 `True/False/None`：False=已消耗满一轮 30s 连接
+  等待仍未就绪，调用方不得再叠加宽限（消除 30s+10s 串行白等）；None=本次未做
+  连接等待，就绪判定交由调用方
+- CREATE_ENTRY 超时**保留**标记（条目未落地时下次可重建，独立价值）；更新/
+  降级路径**无条件删除**标记（条目数据已落地即引导职责完成，连接由 MQTT 集成
+  自身重试负责；此前"保留"语义经审计证实无消费出口且可在 Supervisor 覆盖场景
+  形成周期性 reload 环）；修复 hassio 降级分支注释与行为相反的历史漂移
+- 新增 `has_bootstrap_marker` 探针（异常安全回退 False，不打断门禁）
+
+**utils.py**
+- 新增 `async_wait_mqtt_loaded(hass, timeout)`：轮询与 `is_mqtt_loaded` 同一
+  谓词（下游 async_subscribe 的真实前置条件），先查后睡无忙等
+
+**测试**（161 项全绿，新增 22 项）
+- `test_mqtt_gate.py`：宽限三态 / 门禁分流 / 短路守护 / 标记生命周期（含
+  HAOS MENU 导航形态、hassio 降级分支）/ async_step_user 调用点接线（E 组）
+- 变异测试验证：还原旧硬编码 → E 组 4 红；更新分支改回保留标记 → 契约红；
+  CREATE 分支改回无条件删 → D1 红——排除假绿
+
 ## [1.6.12] - 2026-08-30
 
 ### 修复（第五轮全量审计 16 项：4 路并行审计 + 父代理逐条实证后全部落地）
