@@ -605,3 +605,252 @@ class TestUserStepWiring:
         )
         assert result["step_id"] == "confirm_add"
         assert f._pending_gateway_sn == "100121501186"
+
+
+# ==================== F. 客户现场"首次添加"全链路场景（用户验收问题） ====================
+# E 组钉的是接线，C/D 组钉的是部件；本组把三者串成客户事故链原样走一遍
+# （真实 async_step_user + 真实 ensure_mqtt_connection + 真实门禁 + 真实标记
+# 文件），唯一 fake 是 HA 骨架（flow 管理器/条目表/_wait_for_mqtt_client）。
+# 回答验收问题："用户第一次在集成中添加，不会出现 mqtt_not_available 了吧？"
+
+import time
+
+
+class TestCustomerFirstAddScenario:
+    def _flow(self, hass):
+        f = ConfigFlow.__new__(ConfigFlow)
+        f.hass = hass
+        f.context = {}
+
+        async def _set_uid(uid):
+            pass
+
+        f.async_set_unique_id = _set_uid
+        f._abort_if_unique_id_configured = lambda: None
+        f.async_show_form = lambda step_id=None, data_schema=None, errors=None, **kw: {
+            "type": "form", "step_id": step_id, "errors": dict(errors or {})
+        }
+        f.async_create_entry = lambda title=None, data=None: {
+            "type": "create_entry", "title": title, "data": dict(data or {})
+        }
+        return f
+
+    @pytest.mark.asyncio
+    async def test_broker_healthy_first_add_creates_entry(self, tmp_path, monkeypatch):
+        """场景1（客户正常安装）：无 MQTT 条目 + 标记在 + broker 可用 →
+        首点"添加"必须建条目成功，全链任何路径都不许出现 mqtt_not_available。"""
+        _marker(tmp_path)
+        hass = EnsureHass(
+            tmp_path / BOOTSTRAP_FILENAME, flow_results=_form_results()
+        )
+        hass.data = {}
+
+        async def fake_wait(h):
+            # 模拟真实时序：客户端就绪的同时 MQTT setup 完成写入 hass.data
+            h.data["mqtt"] = object()
+            return True
+
+        monkeypatch.setattr(mb_mod, "_wait_for_mqtt_client", fake_wait)
+
+        f = self._flow(hass)
+
+        async def fake_test(sn):
+            return True
+
+        f._test_gateway_connectivity = fake_test
+        result = await f.async_step_user(
+            {CONF_GATEWAY_SN: "100121501186", CONF_GATEWAY_NAME: "客厅"}
+        )
+        assert result["type"] == "create_entry"
+        assert result["data"][CONF_GATEWAY_SN] == "100121501186"
+        assert "mqtt_not_available" not in json.dumps(result, ensure_ascii=False)
+        assert not (tmp_path / BOOTSTRAP_FILENAME).exists()  # 就绪 → 标记消费
+
+    @pytest.mark.asyncio
+    async def test_broker_down_first_add_never_mqtt_not_available(
+        self, tmp_path, monkeypatch
+    ):
+        """场景2（客户事故链原样：broker 未就绪/加载项重启窗口）：必须给
+        broker_not_ready 而非误导的 mqtt_not_available；标记保留可自愈；
+        ensure 等满一轮后门禁不再叠加宽限（总耗时 <2s 证明跳过 10s）。"""
+        _marker(tmp_path)
+        hass = EnsureHass(
+            tmp_path / BOOTSTRAP_FILENAME, flow_results=_form_results()
+        )
+        hass.data = {}  # 客户端始终没就绪
+
+        async def fake_wait(h):
+            return False
+
+        monkeypatch.setattr(mb_mod, "_wait_for_mqtt_client", fake_wait)
+
+        f = self._flow(hass)
+        t0 = time.perf_counter()
+        result = await f.async_step_user(
+            {CONF_GATEWAY_SN: "100121501186", CONF_GATEWAY_NAME: ""}
+        )
+        elapsed = time.perf_counter() - t0
+
+        assert result["type"] == "form"
+        assert result["errors"]["base"] == "broker_not_ready"
+        assert result["errors"]["base"] != "mqtt_not_available"
+        assert elapsed < 2.0  # 无 30s+10s 叠加白等
+        assert (tmp_path / BOOTSTRAP_FILENAME).exists()  # CREATE_ENTRY 超时保留
+
+    @pytest.mark.asyncio
+    async def test_restart_race_grace_swallows_false_alarm(
+        self, tmp_path
+    ):
+        """场景3（HA 重启/条目已就绪但 setup 在途）：条目与标记匹配、
+        hass.data 0.6s 后才写入 → 真实宽限轮询必须吸收该竞态并放行
+        （旧代码在此同一瞬间定罪，即"第一次报错第二次成功"本体）。"""
+        _marker(tmp_path)
+        entry = types.SimpleNamespace(
+            entry_id="m1",
+            source="user",
+            data={
+                "broker": "127.0.0.1",
+                "port": 2022,
+                "username": "ha_mqtt",
+                "password": "pw",
+            },
+        )
+        hass = EnsureHass(
+            tmp_path / BOOTSTRAP_FILENAME, flow_results=[], mqtt_entries=[entry]
+        )
+        hass.data = {}
+
+        async def _late_setup():
+            await asyncio.sleep(0.6)
+            hass.data["mqtt"] = object()
+
+        task = asyncio.ensure_future(_late_setup())
+
+        f = self._flow(hass)
+
+        async def fake_test(sn):
+            return True
+
+        f._test_gateway_connectivity = fake_test
+        result = await f.async_step_user(
+            {CONF_GATEWAY_SN: "100121501186", CONF_GATEWAY_NAME: ""}
+        )
+        await task
+        assert result["type"] == "create_entry"
+        assert not (tmp_path / BOOTSTRAP_FILENAME).exists()  # 匹配分支消费标记
+
+
+# ==================== G. other_settings schema 自适应（v1.6.14 真机 E2E 根修） ====================
+# 真机实锤（WSL HA 2026.8.3 + mosquitto 2.0.21）：2026.8 正式版把 broker 表单
+# 的 other_settings 改成 vol.Required，缺失时 data_entry_flow 抛 InvalidData，
+# 而旧自适应只接 KeyError → 提交直接落入兜底 except → CENR。后果：客户 HA≥
+# 2026.8 首添网关，**broker 完全健康也必失败**（v1.6.12 报 mqtt_not_available，
+# v1.6.13 报 broker_not_ready——均无法自动建 MQTT 条目）。本组钉死两种异常
+# 形态的重试契约；此面前科是"零覆盖"（v1.6.5 引入以来无任何测试触过重试分支）。
+
+class TestOtherSettingsSchemaAdaptive:
+    def _hass_with_raise_on(self, tmp_path, exc_factory):
+        """configure 在缺 other_settings 时抛指定异常，补上后 CREATE_ENTRY。"""
+        from homeassistant.data_entry_flow import FlowResultType
+
+        hass = EnsureHass(tmp_path / BOOTSTRAP_FILENAME, flow_results=[
+            {"flow_id": "f1", "type": FlowResultType.FORM},
+        ])
+        submits = []
+
+        async def _configure(flow_id, user_input=None):
+            submits.append(dict(user_input or {}))
+            if "other_settings" not in (user_input or {}):
+                raise exc_factory()
+            return {"type": FlowResultType.CREATE_ENTRY}
+
+        hass.config_entries.flow.async_configure = _configure
+        return hass, submits
+
+    @pytest.mark.asyncio
+    async def test_invalid_data_triggers_other_settings_retry(self, tmp_path, monkeypatch):
+        """2026.8 正式版形态：InvalidData → 补 other_settings 重试 → 成功。"""
+        from homeassistant.data_entry_flow import InvalidData
+
+        _marker(tmp_path)
+        hass, submits = self._hass_with_raise_on(
+            tmp_path, lambda: InvalidData("Schema validation failed @ data['other_settings']")
+        )
+
+        async def fake_wait(h):
+            return True
+
+        monkeypatch.setattr(mb_mod, "_wait_for_mqtt_client", fake_wait)
+        assert await mb_mod.ensure_mqtt_connection(hass) is True
+        assert len(submits) == 2
+        retry = submits[1]["other_settings"]
+        assert retry == {
+            "set_ca_cert": "off",
+            "set_client_cert": False,
+            "transport": "tcp",
+        }
+        assert submits[1]["port"] == 2022 and submits[1]["broker"] == "127.0.0.1"
+        assert not (tmp_path / BOOTSTRAP_FILENAME).exists()
+
+    @pytest.mark.asyncio
+    async def test_key_error_still_triggers_retry(self, tmp_path, monkeypatch):
+        """2026.8.0-dev 形态（校验器直接索引 KeyError）：行为不回退。"""
+        _marker(tmp_path)
+        hass, submits = self._hass_with_raise_on(tmp_path, lambda: KeyError("other_settings"))
+
+        async def fake_wait(h):
+            return True
+
+        monkeypatch.setattr(mb_mod, "_wait_for_mqtt_client", fake_wait)
+        assert await mb_mod.ensure_mqtt_connection(hass) is True
+        assert len(submits) == 2 and "other_settings" in submits[1]
+
+    @pytest.mark.asyncio
+    async def test_retry_still_failing_becomes_cenr_and_keeps_marker(self, tmp_path, monkeypatch):
+        """补字段后仍 InvalidData（未来 schema 再变）→ 收敛为 CENR+abort，
+        绝不让异常穿透 ensure；标记保留待下次。"""
+        from homeassistant.data_entry_flow import FlowResultType, InvalidData
+
+        _marker(tmp_path)
+        hass = EnsureHass(tmp_path / BOOTSTRAP_FILENAME, flow_results=[
+            {"flow_id": "f1", "type": FlowResultType.FORM},
+        ])
+        attempts = []
+
+        async def _configure(flow_id, user_input=None):
+            attempts.append(dict(user_input or {}))
+            raise InvalidData("Schema validation failed @ data['whatever_new']")
+
+        hass.config_entries.flow.async_configure = _configure
+        with pytest.raises(ConfigEntryNotReady):
+            await mb_mod.ensure_mqtt_connection(hass)
+        assert len(attempts) == 2  # 一次自适应重试后止损，不死循环
+        assert (tmp_path / BOOTSTRAP_FILENAME).exists()
+        assert ("abort", "f1") in hass.flow.calls
+
+    @pytest.mark.asyncio
+    async def test_old_ha_first_submit_passes_no_retry(self, tmp_path, monkeypatch):
+        """旧 HA（无 other_settings 也接受）：单次提交直通，不多试。"""
+        from homeassistant.data_entry_flow import FlowResultType
+
+        _marker(tmp_path)
+        hass = EnsureHass(tmp_path / BOOTSTRAP_FILENAME, flow_results=[
+            {"flow_id": "f1", "type": FlowResultType.FORM},
+        ])
+        submits = []
+
+        async def _configure(flow_id, user_input=None):
+            submits.append(dict(user_input or {}))
+            return {"type": FlowResultType.CREATE_ENTRY}
+
+        hass.config_entries.flow.async_configure = _configure
+
+        async def fake_wait(h):
+            return True
+
+        monkeypatch.setattr(mb_mod, "_wait_for_mqtt_client", fake_wait)
+        assert await mb_mod.ensure_mqtt_connection(hass) is True
+        assert len(submits) == 1 and "other_settings" not in submits[0]
+
+
+from homeassistant.exceptions import ConfigEntryNotReady  # noqa: E402

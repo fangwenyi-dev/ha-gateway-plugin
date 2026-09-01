@@ -3,6 +3,29 @@
 所有版本变更记录在此文件中。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.6.14] - 2026-09-01
+
+### 修复（真机 E2E 揪出的第二生产根因：HA 2026.8 MQTT 表单 schema 演化击穿自适应）
+
+**问题**：本地真栈（WSL HA 2026.8.3 进程内 + mosquitto 2.0.21 真 broker +
+假网关 MQTT 上报）A/B 实锤：客户 HA≥2026.8 首添网关时，MQTT 引导的
+`async_configure` 提交**在 broker 完全健康的情况下也必然失败**——2026.8
+正式版将 broker 表单的 `other_settings` 改为 `vol.Required`，缺失时由
+data_entry_flow 抛 **InvalidData**，而 v1.6.5 引入的"补字段重试"自适应
+只捕获 **KeyError**（那是 2026.8.0-dev 校验器直接索引的形态）。落空后
+进入兜底 except → ConfigEntryNotReady：v1.6.12 误报 `mqtt_not_available`、
+v1.6.13 报 `broker_not_ready`——文案更准但自动建条目依然不可用。
+该分支自引入以来零测试覆盖，历轮代码审计（纯静态）均未能发现。
+
+- `ensure_mqtt_connection` 提交重试同时捕获 `(KeyError, InvalidData)`，
+  两代 2026.8 形态共用同一"补 other_settings 重试"；重试仍失败则照旧
+  收敛为 CENR + abort + 保留标记（不死循环、不穿透异常）
+- 旧 HA（无 other_settings 直通）不受影响：单次提交不多试
+- 测试：新增 G 组 4 项（InvalidData 重试契约 / KeyError 形态不回退 /
+  双失败止损 CENR / 旧版直通单次），变异验证（还原 KeyError-only）精确 2 红
+- 全套 168 passed；真机矩阵复跑：健康 broker 首添一次成功（含 cover
+  实体生成、网关在线判定、标记消费）
+
 ## [1.6.13] - 2026-09-01
 
 ### 修复（客户现场 mqtt_not_available 误报根治 · dsh-review-loop 双审计 + 变异测试验证）

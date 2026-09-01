@@ -27,6 +27,7 @@ import os
 from typing import Any, Dict, Optional
 
 from homeassistant.core import HomeAssistant
+from homeassistant.data_entry_flow import InvalidData
 from homeassistant.exceptions import ConfigEntryNotReady
 
 _LOGGER = logging.getLogger(__name__)
@@ -330,28 +331,32 @@ async def ensure_mqtt_connection(hass: HomeAssistant) -> Optional[bool]:
             user_input["password"] = password
 
         # 自适应兼容新旧 HA 的 mqtt broker 表单 schema：
-        # - 旧版：不认识 other_settings 键，按不含该键提交即可；
-        # - 新版（2026.8+/dev）：broker 校验器直接索引 user_input[OTHER_SETTINGS]，
-        #   缺失会抛 KeyError。捕获后补字段重试，无需硬编码版本号探测
-        #   （未来 schema 再变时以实际抛错信号为准，比版本探测更稳健）。
+        # - 旧版（<2026.8）：不认识 other_settings 键，按不含该键提交即可；
+        # - 2026.8.0-dev：broker 校验器直接索引 user_input[OTHER_SETTINGS]，
+        #   缺失抛 KeyError；
+        # - 2026.8 正式版：schema 改为 vol.Required(OTHER_SETTINGS)，缺失由
+        #   data_entry_flow 包装成 InvalidData（v1.6.14 真机 E2E 实锤：客户
+        #   HA≥2026.8 首添在健康 broker 下也必然 InvalidData→旧版误报
+        #   mqtt_not_available）。两种异常都触发同一"补字段重试"。
         OTHER_SETTINGS = {
             "set_ca_cert": "off",
             "set_client_cert": False,
             "transport": "tcp",
         }
         try:
-            result = await hass.config_entries.flow.async_configure(
-                flow_id, user_input=user_input
-            )
-        except KeyError:
-            # 新版 HA 要求 other_settings 段：补字段后重试一次
-            if "other_settings" not in user_input:
-                user_input["other_settings"] = OTHER_SETTINGS
+            try:
                 result = await hass.config_entries.flow.async_configure(
                     flow_id, user_input=user_input
                 )
-            else:
-                raise
+            except (KeyError, InvalidData):
+                # 新版 HA 要求 other_settings 段：补字段后重试一次
+                if "other_settings" not in user_input:
+                    user_input["other_settings"] = OTHER_SETTINGS
+                    result = await hass.config_entries.flow.async_configure(
+                        flow_id, user_input=user_input
+                    )
+                else:
+                    raise
         except Exception as err:  # noqa: BLE001 — 校验器内部异常不能炸掉 setup
             await _quietly_abort_flow(hass, flow_id)
             _LOGGER.warning("提交 MQTT 配置流程失败: %s", err)

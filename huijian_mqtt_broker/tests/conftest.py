@@ -132,6 +132,13 @@ ha_data_entry_flow.FlowResult = dict
 ha_data_entry_flow.FlowResultType = FlowResultType
 
 
+class InvalidData(Exception):
+    """fake data_entry_flow.InvalidData（schema 校验失败的包装异常，2026.8 实态）"""
+
+
+ha_data_entry_flow.InvalidData = InvalidData
+
+
 # ---- helpers ----
 def _noop(*args, **kwargs):
     return None
