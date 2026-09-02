@@ -138,6 +138,29 @@ SLIDER_DEBOUNCE_SECONDS: Final = 1       # 速度/力度滑动条防抖：停止
 # ==================== 设备SN前缀 ====================
 DEVICE_SN_PREFIX_WIND_LOCK: Final = "5005"  # 支持内倒/平开模式的LoRa子设备SN前四位
 
+# ==================== 小程序局域网 WS 网关（v1.6.15） ====================
+# 复刻固件 app_ws_gateway.c 的 JSON-over-WebSocket 契约，让微信慧尖小程序
+# 在局域网直连 HA 主机（ws://<HA-IP>:<port>/ws）。协议常量与固件对齐：
+# - 端口 9001（Kconfig WS_GATEWAY_PORT default）
+# - 令牌经 Sec-WebSocket-Protocol 子协议头做握手前校验，不匹配拒发 101
+# - 默认令牌 = 小程序内置值（weichat-huijian-hz ws-gateway.js 硬编码，
+#   与固件 sdkconfig WS_GATEWAY_TOKEN 同值），开箱即可直连
+CONF_WS_GATEWAY_ENABLED: Final = "ws_gateway_enabled"
+CONF_WS_GATEWAY_PORT: Final = "ws_gateway_port"
+CONF_WS_GATEWAY_TOKEN: Final = "ws_gateway_token"
+DEFAULT_WS_GATEWAY_ENABLED: Final = False
+DEFAULT_WS_GATEWAY_PORT: Final = 9001
+DEFAULT_WS_GATEWAY_TOKEN: Final = "hIZ56jhQ-wzA3ENiP2xGzo55PXsewUWM"
+WS_GATEWAY_PATH: Final = "/ws"
+WS_TOKEN_MIN_LEN: Final = 8            # 固件：新 token 至少 8 字符（防弱 token）
+WS_TOKEN_MAX_LEN: Final = 63           # 固件判式 strlen >= sizeof(s_ws_token)-1（63）即拒绝 → 允许 ≤62
+WS_TOKEN_CHARSET: Final = frozenset(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-"
+)  # 固件 ws_token_charset_ok：仅 [A-Za-z0-9_-]，RFC6455 子协议安全字符集
+WS_MAX_CLIENTS: Final = 4              # 固件 MAX_WS_CLIENTS=4（握手认证成功才占槽）
+WS_MAX_FRAME_BYTES: Final = 1024       # 固件 WS_RX_BUF_SIZE：超长→error+断连
+WS_RECV_TIMEOUT_SECONDS: Final = 300   # 固件 recv_wait_timeout=300s 空闲断连
+
 # ==================== 其他 ====================
 MANUFACTURER: Final = "慧尖"
 MODEL: Final = "慧尖开窗器网关"

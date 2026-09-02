@@ -15,7 +15,15 @@ from .const import (
     CONF_GATEWAY_SN, 
     CONF_GATEWAY_NAME, 
     DEFAULT_GATEWAY_NAME,
-    GATEWAY_CONNECT_TIMEOUT
+    GATEWAY_CONNECT_TIMEOUT,
+    CONF_WS_GATEWAY_ENABLED,
+    CONF_WS_GATEWAY_PORT,
+    CONF_WS_GATEWAY_TOKEN,
+    DEFAULT_WS_GATEWAY_ENABLED,
+    DEFAULT_WS_GATEWAY_PORT,
+    DEFAULT_WS_GATEWAY_TOKEN,
+    WS_TOKEN_MAX_LEN,
+    WS_TOKEN_MIN_LEN,
 )
 from .mqtt_handler import WindowControllerMQTTHandler
 from .mqtt_bootstrap import ensure_mqtt_connection, has_bootstrap_marker
@@ -673,9 +681,26 @@ class OptionsFlow(config_entries.OptionsFlow):
         的死控件（改 SN 的正确入口是「替换网关」流程）。auto_discovery
         保留并已真实接线（mqtt_handler._auto_discovery_enabled 门控 002
         自动添加）；三个字段与 strings/zh-CN 的 options.step.options 对齐。
+
+        v1.6.15 新增「小程序局域网直连」三项：enabled 默认关（9001 是
+        暴露到局域网的新监听面，必须显式开启）；令牌按固件握手规则
+        预校验（B4 教训：含空格/逗号的令牌会拆散子协议造成永久自锁），
+        空串 = 不认证并如实提示。
         """
+        errors = {}
         if user_input is not None:
-            return self.async_create_entry(title="", data=user_input)
+            token = user_input.get(CONF_WS_GATEWAY_TOKEN, DEFAULT_WS_GATEWAY_TOKEN)
+            if not isinstance(token, str):
+                token = ""
+            token = token.strip()
+            if token and (
+                not (WS_TOKEN_MIN_LEN <= len(token) < WS_TOKEN_MAX_LEN)
+                or any(c not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-" for c in token)
+            ):
+                errors[CONF_WS_GATEWAY_TOKEN] = "invalid_ws_token"
+            else:
+                user_input = {**user_input, CONF_WS_GATEWAY_TOKEN: token}
+                return self.async_create_entry(title="", data=user_input)
 
         return self.async_show_form(
             step_id="options",
@@ -692,6 +717,25 @@ class OptionsFlow(config_entries.OptionsFlow):
                     "debug_logging",
                     default=self._config_entry.options.get("debug_logging", False)
                 ): bool,
-            })
+                vol.Optional(
+                    CONF_WS_GATEWAY_ENABLED,
+                    default=self._config_entry.options.get(
+                        CONF_WS_GATEWAY_ENABLED, DEFAULT_WS_GATEWAY_ENABLED)
+                ): bool,
+                vol.Optional(
+                    CONF_WS_GATEWAY_PORT,
+                    default=self._config_entry.options.get(
+                        CONF_WS_GATEWAY_PORT, DEFAULT_WS_GATEWAY_PORT)
+                ): vol.All(vol.Coerce(int), vol.Range(min=1024, max=65535)),
+                vol.Optional(
+                    CONF_WS_GATEWAY_TOKEN,
+                    description={
+                        "suggested_value": self._config_entry.options.get(
+                            CONF_WS_GATEWAY_TOKEN, DEFAULT_WS_GATEWAY_TOKEN)
+                    },
+                    default=DEFAULT_WS_GATEWAY_TOKEN,
+                ): str,
+            }),
+            errors=errors,
         )
 

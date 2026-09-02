@@ -745,6 +745,57 @@ class WindowControllerMQTTHandler:
         except Exception as e:
             _LOGGER.error("发送MQTT命令失败: %s\n命令: %s\n设备: %s", e, command, device_sn)
             return False
+
+    async def send_ws_raw_004(self, device_sn: str, attribute: str, value: str) -> bool:
+        """v1.6.15 小程序 WS 网关：透传一条 004 控制命令，不做语义解释。
+
+        与固件 app_ws_gateway.c/app_protocol_bridge.cpp 的 WS→MQTT 转发
+        等形：payload = {"head":"$SH","ctype":"004","id":N,
+        "data":{"sn":dev,"attribute":attr,"value":val},"sn":gw}，
+        发布到本网关 gateway/{sn}/req（QoS1）。
+
+        与 send_command 的边界：send_command 面向 HA 实体（枚举命令+参数
+        校验+裁剪），本方法面向小程序协议透传——值语义（w_travel 的
+        100/0/101/200/0-100、rwp_wind_lock_mode 0/1 等）由 LoRa 设备端
+        解释，固件不校验，本方法同样不校验，保证双桥行为一致。
+        返回值语义同 send_command：True = QoS1 已送达 broker，不代表执行。
+        """
+        payload = {
+            "head": PROTOCOL_HEAD,
+            "ctype": "004",
+            "id": self.command_id,
+            "data": {
+                "sn": device_sn,
+                "attribute": attribute,
+                "value": value,
+            },
+            "sn": self.gateway_sn,
+        }
+        self.command_id += 1
+        if self.command_id > MAX_COMMAND_ID:
+            self.command_id = 1
+        try:
+            await mqtt.async_publish(
+                self.hass,
+                self.TOPIC_GATEWAY_REQ,
+                json.dumps(payload),
+                1,
+                False,
+            )
+            _LOGGER.info("WS透传控制命令: gw=%s dev=%s attr=%s value=%s",
+                         self.gateway_sn, device_sn, attribute, value)
+            return True
+        except Exception as publish_error:
+            _LOGGER.error("WS透传控制命令发布失败: %s\n载荷: %s", publish_error, payload)
+            # 与 send_command 失败路径同构（v1.6.11 #4 定式）：broker 不可达
+            # 即刷新在线状态并同步 device_manager，避免双状态源分叉
+            if self.connected:
+                self.connected = False
+                self._notify_status_change()
+            self._schedule_async_task(
+                self.device_manager.update_gateway_status("offline")
+            )
+            return False
     
 
     

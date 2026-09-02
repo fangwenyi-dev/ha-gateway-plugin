@@ -46,6 +46,12 @@ class WindowControllerDeviceManager:
         self._device_added_callbacks = []
         self._device_removed_callbacks = []
         self._device_update_callbacks = {}
+        # v1.6.15 小程序 WS 网关：设备状态变化监听器（同步回调，签名
+        # (gateway_sn, device_sn)）。update_device_status 是唯一状态漏斗
+        # （002 批量/005 单报都走它），在此挂钩即覆盖固件 device_update
+        # 推送的全部触发源。监听器强引用在此列表——生命周期与服务器
+        # start/stop 配对（stop 时 remove），cleanup 兜底清空。
+        self._status_listeners = []
         self._device_registry_cache = None
         self._entity_registry_cache = None
         self._is_migrating = False
@@ -378,7 +384,33 @@ class WindowControllerDeviceManager:
         if not callback_exists:
             self._device_removed_callbacks.append(callback)
             _LOGGER.debug("设备移除回调已添加")
-    
+
+    def add_status_listener(self, callback: Callable[[str, str], None]):
+        """注册设备状态变化监听器（v1.6.15 小程序 WS 网关推送链路）
+
+        同步回调，签名 (gateway_sn, device_sn)，在
+        update_device_status 成功更新缓存后调用。注册幂等（同一
+        callback 不会重复存储）。监听器为强引用：服务器 stop() 必须
+        remove，cleanup 兜底清空。
+        """
+        if callback not in self._status_listeners:
+            self._status_listeners.append(callback)
+
+    def remove_status_listener(self, callback: Callable[[str, str], None]):
+        """注销设备状态监听器（不存在时静默，幂等）"""
+        try:
+            self._status_listeners.remove(callback)
+        except ValueError:
+            pass
+
+    def _notify_status_listeners(self, device_sn: str):
+        """通知全部状态监听器；单个监听器异常只记日志，不影响其他监听器"""
+        for listener in list(self._status_listeners):
+            try:
+                listener(self.gateway_sn, device_sn)
+            except Exception as e:
+                _LOGGER.error("设备状态监听器异常（已忽略）: %s", e, exc_info=True)
+
     async def add_device(self, device_sn: str, device_name: str, device_type: str = None, force: bool = False, is_manual_pairing: bool = False):
         """添加设备 - 只支持开窗器类型
         
@@ -769,6 +801,8 @@ class WindowControllerDeviceManager:
                     if "voltage" in attributes:
                         _LOGGER.debug("设备 %s 电压更新: %.1fV", device_sn, attributes["voltage"])
                 _LOGGER.debug("设备状态更新: %s -> %s", device_sn, status)
+                # v1.6.15 小程序 WS 网关：状态已入缓存，推送 device_update
+                self._notify_status_listeners(device_sn)
             else:
                 # 设备不存在，尝试添加
                 _LOGGER.debug("设备 %s 不存在，尝试添加", device_sn)
@@ -784,6 +818,9 @@ class WindowControllerDeviceManager:
                             self.devices[device_sn]["attributes"] = {}
                         self.devices[device_sn]["attributes"].update(attributes)
                     _LOGGER.info("设备 %s 已添加并更新状态", device_sn)
+                    # v1.6.15 小程序 WS 网关：新设备首个上报同样推送
+                    # （覆盖"配对后首次出现"场景，等价固件 pair 后的 -1 推送）
+                    self._notify_status_listeners(device_sn)
         except Exception as e:
             _LOGGER.error("更新设备状态失败: %s", e)
             # 即使失败，也尝试记录错误状态
@@ -1094,6 +1131,9 @@ class WindowControllerDeviceManager:
         self._device_added_callbacks = []
         self._device_removed_callbacks = []
         self._device_update_callbacks.clear()
+        # v1.6.15：WS 网关状态监听器同理清空（服务器 stop 会显式 remove，
+        # 此处兜底防 entry 卸载竞态下残留强引用）
+        self._status_listeners = []
         # 注意：不要清空手动删除设备列表，因为这是持久化的状态
         # 当网关重新添加时，需要知道哪些设备是被手动删除的
 

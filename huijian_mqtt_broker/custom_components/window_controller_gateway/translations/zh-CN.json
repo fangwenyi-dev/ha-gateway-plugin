@@ -57,7 +57,10 @@
         "data": {
           "discovery_interval": "设备发现间隔（秒）",
           "auto_discovery": "自动发现设备",
-          "debug_logging": "调试日志"
+          "debug_logging": "调试日志",
+          "ws_gateway_enabled": "允许慧尖小程序局域网直连（监听 ws://0.0.0.0:端口/ws）",
+          "ws_gateway_port": "小程序 WS 网关端口（固件同款默认 9001）",
+          "ws_gateway_token": "小程序握手令牌（8-62 位 A-Za-z0-9_-；留空 = 不认证）"
         }
       },
       "add_gateway": {
@@ -72,7 +75,8 @@
     "error": {
       "required": "网关序列号不能为空",
       "invalid_sn_format": "序列号格式无效，必须至少10位字母数字",
-      "already_configured": "该网关已被其他配置条目使用"
+      "already_configured": "该网关已被其他配置条目使用",
+      "invalid_ws_token": "令牌无效：需 8-62 位字母/数字/下划线/连字符（留空表示不认证）"
     }
   },
   "services": {

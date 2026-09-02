@@ -3,6 +3,42 @@
 所有版本变更记录在此文件中。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.6.15] - 2026-09-02
+
+### 新增（小程序局域网直连 · 路线 A：集成内置 WS 网关，与 Matter 固件 1:1 协议对等）
+
+**背景**：慧尖小程序经 mDNS `_mqtt._tcp`（本加载项已广播）能"看到"HA，但
+随后固定拨 `ws://<IP>:9001/ws`（小程序零名称过滤、丢弃广播端口），插件
+此前 9001 无监听 → "可见不可连"。matter-broker 固件的
+`app_ws_gateway.c` 证明该端口/路径/子协议令牌握手即小程序的 LAN 控制协议，
+本版本在集成内实现同契约服务器，小程序与固件网关在用户侧同构共存。
+
+- **`ws_gateway.py`（新）**：aiohttp 单例服务器（`0.0.0.0:<port>/ws`），
+  命令 `get_gateways/get_devices/control/pair/unbind/ping/set_token`、
+  推送 `device_update` 七键；握手令牌按 `Sec-WebSocket-Protocol` 逗号/空格
+  拆分精确匹配（401 拒连）、认证成功才占槽（≤4）、入站帧 >1024B 报
+  `command too long` 断开、空闲 300s 断连——全部与固件定式逐字对齐；
+  消息文案（`missing cmd`/`unknown command: x`/`send failed`/set_token
+  五级校验链含 B16 bootstrap）逐字符钉死。`set_token` 成功即热改运行时
+  令牌并异步持久化到主控 entry options
+- **`mqtt_handler.send_ws_raw_004`（新）**：control 透传出口，$SH 004
+  线格式与 send_command 同 id 计数器；发布失败回 `False` → `control_ack
+  ok:false "send failed"`（不假成功，v1.6.9 家族契约）并同步网关离线态
+- **`device_manager`**：新增 `add/remove_status_listener`（update_device_status
+  成功漏斗单点挂钩，002/005 上报即推 `device_update`；cleanup 兜底清空）
+- **`config_flow` OptionsFlow + strings/zh-CN**：新增 3 个选项
+  `ws_gateway_enabled`（**默认关**——9001 是新增局域网监听面）、
+  `ws_gateway_port`（默认 9001，1024-65535）、`ws_gateway_token`
+  （默认=固件出厂令牌；留空=不认证；表单侧预校验固件字符集/长度，
+  防 B4 式含空格令牌自锁）
+- **生命周期**：entry setup/unload/remove 三点 `async_ensure_ws_gateway`
+  幂等聚合；端口/令牌变更热切换；HA STOP 闩锁防关机过程重拉；启动失败
+  （端口占用）只记日志不影响集成其余功能
+- 测试：新增 33 项（握手拆分/令牌校验链/device_ws_view -1 约定/dispatch
+  全命令实参/004 线格式 topic+QoS+payload 逐键/发布失败离线联动/真
+  aiohttp 握手 E2E 含 101 子协议回显+device_update 推送实收）；
+  全套 201 passed；`bash -n run.sh` / py_compile 全绿
+
 ## [1.6.14] - 2026-09-01
 
 ### 修复（真机 E2E 揪出的第二生产根因：HA 2026.8 MQTT 表单 schema 演化击穿自适应）

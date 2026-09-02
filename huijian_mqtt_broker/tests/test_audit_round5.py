@@ -500,8 +500,12 @@ class TestOptionsFlowSchema:
         keys = [k.schema if hasattr(k, "schema") else k
                 for k in captured["data_schema"].schema.keys()]
         assert "gateway_sn" not in keys, "gateway_sn 死控件（写入 options 零消费）必须移除"
-        assert keys == ["discovery_interval", "auto_discovery", "debug_logging"], \
-            "保留字段必须与 __init__/mqtt_handler 真实消费面一一对应"
+        # v1.6.15：新增 ws_gateway_* 三字段——真实消费方为
+        # ws_gateway.ws_gateway_wanted（options 三键逐一被读，非死控件）
+        assert keys == ["discovery_interval", "auto_discovery", "debug_logging",
+                        c.CONF_WS_GATEWAY_ENABLED, c.CONF_WS_GATEWAY_PORT,
+                        c.CONF_WS_GATEWAY_TOKEN], \
+            "字段必须与 __init__/mqtt_handler/ws_gateway 真实消费面一一对应"
 
 
 # ============ #10 persist 加固 ============

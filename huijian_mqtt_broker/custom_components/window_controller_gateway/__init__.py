@@ -311,6 +311,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         #     if old_gateway_sn and old_gateway_sn.lower() != gateway_sn.lower():
         #         hass.async_create_task(_migrate_devices_async(hass, old_gateway_sn, gateway_sn, remove_old_gateway), name=f"{DOMAIN}_migrate_{entry.entry_id}")
 
+        # v1.6.15：小程序局域网 WS 网关——任一 entry 选项开启即启动单例，
+        # 失败只记日志（不阻断集成其余功能）
+        try:
+            from .ws_gateway import async_ensure_ws_gateway
+            await async_ensure_ws_gateway(hass)
+        except Exception as e:
+            _LOGGER.error("小程序 WS 网关检查失败（不影响其余功能）: %s", e, exc_info=True)
+
         _LOGGER.info("开窗器网关 [%s] 设置完成", gateway_name)
         return True
 
@@ -462,6 +470,14 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     else:
         _LOGGER.warning("配置条目 %s 卸载完成，但部分清理操作遇到问题", entry_id)
 
+    # v1.6.15：本 entry 离场后重新聚合 WS 网关（全部关闭则停止单例；
+    # 幂等，HA STOP 路径复用）
+    try:
+        from .ws_gateway import async_ensure_ws_gateway
+        await async_ensure_ws_gateway(hass)
+    except Exception as e:
+        _LOGGER.warning("小程序 WS 网关状态同步失败: %s", e)
+
     return unload_successful
 
 async def async_update_options(hass: HomeAssistant, entry: ConfigEntry) -> None:
@@ -568,6 +584,16 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
                 _LOGGER.info("已删除网关 %s 的子设备注册表条目: %s", gateway_sn, device.id)
     except Exception as e:
         _LOGGER.error("删除网关 %s 的子设备注册表条目失败: %s", gateway_sn, e)
+
+    # v1.6.15：entry 此时已不在 config_entries 表中，重新聚合 WS 网关——
+    # 删除最后一个（或唯一开启 WS 的）entry 后服务器必须停止，
+    # 否则 9001 监听面在无任何网关时空转残留（unload 时机做不到：
+    # 彼时本 entry 仍在表内，wanted 判定恒为开）
+    try:
+        from .ws_gateway import async_ensure_ws_gateway
+        await async_ensure_ws_gateway(hass)
+    except Exception as e:
+        _LOGGER.warning("小程序 WS 网关状态同步失败（删除条目后）: %s", e)
 
 
 async def _background_initialization(hass, entry_id, mqtt_handler):
