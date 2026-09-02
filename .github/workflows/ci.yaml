@@ -60,7 +60,10 @@ jobs:
           # 依赖说明：services.py 真实 import voluptuous（conftest 只假造
           # homeassistant 包树）；@pytest.mark.asyncio 需要 pytest-asyncio，
           # 缺失时 pytest 会把 async 测试直接判 error。
-          pip install -q pytest pytest-asyncio voluptuous
+          # v1.6.15 起再加 aiohttp：ws_gateway.py 模块级 from aiohttp import
+          # （生产 HA 环境自带，CI 最小环境不带）——缺它 test_ws_gateway 收集
+          # 期 ImportError，整个 lint 炸掉（首推 CI 实锤）。
+          pip install -q pytest pytest-asyncio voluptuous aiohttp
           python3 -m py_compile huijian_mqtt_broker/custom_components/window_controller_gateway/*.py
           python3 -m py_compile huijian_mqtt_broker/mdns_publisher.py
           python3 -m pytest huijian_mqtt_broker/tests -q
