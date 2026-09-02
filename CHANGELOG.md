@@ -5,6 +5,25 @@
 
 ## [1.6.16] - 2026-09-02
 
+### 修复（cover 原生卡片开/停/关三键任何状态恒可点——用户定案）
+
+**根因实锤**（home-assistant/frontend `src/data/cover.ts`）：
+`canOpen = assumed_state || (!isFullyOpen && !isOpening)`、canClose 同理、
+`canStop` 仅排除 unavailable；`isFullyOpen/Closed` 无 `current_position`
+属性时回退 `state === 'open'/'closed'`。v1.0.1 把 `current_cover_position`
+写死 None（注释本意即"保证所有按钮始终可用"）只堵住了位置分支——v1.6.8
+恢复真实 state 后，同方向按钮被前端按 state 禁用，即用户所见
+"开态灰开键/关态灰关健"。
+
+- `cover._attr_assumed_state = True`：官方合法开关，短路 canOpen/canClose
+  两式 → 三键任何状态恒可下发；HA 状态机（state 由 is_closed 计算）不受该
+  属性影响，历史曲线/自动化/LLM 语义全保留；位置仍只走 extra_state_attributes。
+  语义诚实性成立：协议规定网关只能被动上报（002/005），HA 无法回查实际窗位
+- 新增 TestAlwaysControllableButtons 5 项钉桩（assumed 恒真 / available 不回退 /
+  is_closed 保真 / current_cover_position 恒 None / STOP feature 声明），全量 223 通过
+- 残余置灰仅剩条目重载/设置重试窗口（HA core 对未加载条目的统一行为，
+  秒级~分钟级自愈，集成侧不可覆盖）
+
 ### 优化（升级引导补「商店断联」排障指引）
 
 **背景**：客户点击 Web UI「去加载项页面更新」跳转
@@ -18,6 +37,8 @@
 
 - `www/index.html` 升级卡提示：补全恢复路径文案（重新添加仓库 URL 并更新商店）
 - `doUpgrade()` confirm 文案同步补一行排障提示；注释块记录 App 架构的 store 依赖定案
+- 协议 ack 方向五条规则钉桩：新增 test_protocol_ack_contract.py 17 项
+  （003/004/006/007 网关回复零再下发；001/002/005 恰好一次响应）
 - 版本号四点同步 1.6.15 → 1.6.16（config.yaml / version.json / index.html / manifest.json）
 
 ## [1.6.15] - 2026-09-02

@@ -68,6 +68,18 @@ class WindowControllerCover(WindowControllerBaseEntity, RestoreEntity, CoverEnti
         )
         # 始终可用，防止变灰
         self._attr_available = True
+        # v1.6.16（用户定案：原生卡片开/关/停三键任何状态下必须可点）：
+        # 置灰判据实锤于 home-assistant/frontend src/data/cover.ts——
+        #   canOpen  = assumed_state || (!isFullyOpen  && !isOpening)
+        #   canClose = assumed_state || (!isFullyClosed && !isClosing)
+        #   canStop  = 仅排除 unavailable（从不受开/闭状态影响）
+        # 即 state=open 时「开」被禁、closed 时「关」被禁——用户所见"灰色"。
+        # assumed_state=True 短路前两式 → 三键恒可下发；HA 状态机
+        # （CoverEntity.state 由 is_closed 计算）完全不受该属性影响，
+        # v1.6.8 定案的真实 open/closed（历史曲线/自动化/LLM 语义）原样保留。
+        # 语义诚实性同样成立：协议规定网关只能被动上报（002/005），HA 无法
+        # 回查实际窗位，手动拉绳等旁路移动不会即时反映——本就不是可回读态。
+        self._attr_assumed_state = True
         self._last_state_update = None
 
     @property

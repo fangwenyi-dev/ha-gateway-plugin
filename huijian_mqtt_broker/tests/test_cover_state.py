@@ -143,3 +143,59 @@ class TestRestoreOnAdd:
         cover = _make_cover(DEVICE_STATUS_UNKNOWN)
         self._run_added(cover, None)
         assert cover.device_manager.updated is None
+
+
+class TestAlwaysControllableButtons:
+    """v1.6.16 用户定案：原生卡片开/停/关三键任何状态都必须可点。
+
+    置灰判据（home-assistant/frontend src/data/cover.ts 实锤）：
+      canOpen  = assumed_state || (!isFullyOpen  && !isOpening)
+      canClose = assumed_state || (!isFullyClosed && !isClosing)
+      canStop  = 非 unavailable 恒亮
+    isFullyOpen/Closed 在无 current_position 属性时回退 state 判据——
+    仅靠 current_cover_position=None 挡不住（v1.0.1 时代只堵住了位置
+    分支，state 分支就是用户所见"开态灰开键"）。正解为 assumed_state=True
+    短路，同时 is_closed 必须仍是真值（v1.6.8 状态定案不得回退）。
+    """
+
+    def _make(self, status):
+        return WindowControllerCover(
+            hass=None,
+            device_manager=FakeDeviceManager(status),
+            mqtt_handler=None,
+            gateway_sn="GW1",
+            device_sn="5005X",
+            device_name="窗",
+        )
+
+    def test_assumed_state_true_for_every_cache_shape(self):
+        for status in (DEVICE_STATUS_OPEN, DEVICE_STATUS_CLOSED,
+                       DEVICE_STATUS_UNKNOWN, DEVICE_STATUS_CONNECTED, None):
+            assert self._make(status)._attr_assumed_state is True
+
+    def test_available_still_pinned_true(self):
+        # 置灰另一半（unavailable）防线不得丢失：入口重载以外永不灰
+        assert self._make(DEVICE_STATUS_OPEN)._attr_available is True
+
+    def test_assumed_state_does_not_break_real_is_closed(self):
+        open_cov = self._make(DEVICE_STATUS_OPEN)
+        closed_cov = self._make(DEVICE_STATUS_CLOSED)
+        assert open_cov._attr_assumed_state is True
+        assert open_cov.is_closed is False   # state 仍真实输出 open
+        assert closed_cov.is_closed is True  # state 仍真实输出 closed
+
+    def test_current_cover_position_stays_none(self):
+        # 位置端点（0/100）会经 isFullyOpen/Closed 重新引入端点置灰，
+        # 双保险面：本属性必须恒 None，位置只走 extra_state_attributes
+        for status in (DEVICE_STATUS_OPEN, DEVICE_STATUS_CLOSED):
+            assert self._make(status).current_cover_position is None
+
+    def test_stop_feature_declared(self):
+        # 渲染门槛：无 STOP feature 时前端根本不画停键（canStop 恒真无用武之地）
+        from custom_components.window_controller_gateway.cover import (
+            CoverEntityFeature,
+        )
+        feats = self._make(DEVICE_STATUS_OPEN)._attr_supported_features
+        assert feats & CoverEntityFeature.STOP
+        assert feats & CoverEntityFeature.OPEN
+        assert feats & CoverEntityFeature.CLOSE
