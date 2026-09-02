@@ -674,11 +674,16 @@ class TestStaticPins:
             assert call in src, f"{fname} 移除路径缺 unique_id 优先定位"
             assert "双路径均未命中" in src, f"{fname} 缺双落空留痕告警"
 
-    def test_config_primary_is_nju_1619(self):
+    def test_config_primary_is_ghcr_io_source_1620(self):
         src = (HERE.parent / "config.yaml").read_text(encoding="utf-8")
         img = [ln for ln in src.splitlines() if ln.startswith("image:")][0]
-        assert "ghcr.nju.edu.cn" in img
-        assert 'version: "1.6.19"' in src
+        # v1.6.20 定案：主源=ghcr.io 源站。两镜像站被实测否决——
+        # 1ms 认证端点持续故障；nju 对 aarch64 新 tag 21MB 大层回源
+        # 近冻结（4.3KB/s→311B/s），"假活慢滴"比明确失败更糟；
+        # 源站 216KB/s 稳定，42MB≈3-4 分钟可接受
+        assert "ghcr.io/fangwenyi-dev" in img
+        assert "nju" not in img and "1ms" not in img
+        assert 'version: "1.6.20"' in src
 
     def test_ci_warm_arm64_mapping_and_guards(self):
         src = (HERE.parent.parent / ".github" / "workflows" / "ci.yaml").read_text(
@@ -689,7 +694,7 @@ class TestStaticPins:
         assert '[ -z "$MAN" ]' in src and '[ -z "$BLOBS" ]' in src
 
     def test_version_files_consistent(self):
-        ver = "1.6.19"
+        ver = "1.6.20"
         assert ver in (HERE.parent / "www" / "version.json").read_text(encoding="utf-8")
         assert f"CURRENT_VERSION = '{ver}'" in (HERE.parent / "www" / "index.html").read_text(encoding="utf-8")
         mf = json.loads((PKG / "manifest.json").read_text(encoding="utf-8"))

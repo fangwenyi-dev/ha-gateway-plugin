@@ -3,6 +3,24 @@
 所有版本变更记录在此文件中。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.6.20] - 2026-09-04
+
+### 变更（镜像主源回退 ghcr.io 源站——1.6.19 升级现场实测决策）
+
+1.6.19 把主源切到 ghcr.nju.edu.cn 后，用户升级实测卡在低百分比：nju 对
+aarch64 新 tag 的 21MB 大层回源同步近乎冻结（我方两次实测 4.3KB/s →
+311B/s 递减），"慢而稳"的预估不成立——**假活慢滴比明确失败更糟**；
+ghcr.1ms.run 同期认证端点仍故障（"专属域名获取失败"）。源站 ghcr.io
+实测 216KB/s 稳定无闪断，42MB 全量约 3-4 分钟，可接受——主源回退源站。
+
+- 镜像站降级为**手动加速可选项**：追求首包极致（热缓存 1ms ~5MB/s）的
+  用户仍可在加载项「配置 → 镜像(Image)」覆盖，README FAQ 同步改口径
+  （可用性随时间波动，不作任何默认保证）。
+- CI warm-mirrors 保留（对换源用户尽力预热，continue-on-error 不阻塞）。
+- 本次无代码逻辑变更；`config.yaml`/`www/version.json`/`www/index.html`/
+  `manifest.json` 四处版本同步 1.6.20；测试钉桩同步
+  （`test_config_primary_is_ghcr_io_source_1620`）。
+
 ## [1.6.19] - 2026-09-04
 
 ### 变更（镜像主源回退 ghcr.nju.edu.cn —— v1.6.18 方案实测翻车纠偏）

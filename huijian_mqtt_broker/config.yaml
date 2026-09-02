@@ -1,5 +1,5 @@
 name: 慧尖 LoRa 网关
-version: "1.6.19"
+version: "1.6.20"
 slug: huijian_mqtt_broker
 description: 慧尖开窗器 LoRa 网关一体化插件，内置 Mosquitto Broker + 网关集成，安装即用
 url: 'https://github.com/fangwenyi-dev/ha-gateway-plugin'
@@ -34,6 +34,12 @@ host_network: true
 # 修复手段即：删包→CI 重建（无需任何人工网页点击）。
 # v1.6.16 初版加速：image 改指南京大学透传 ghcr.nju.edu.cn。
 # v1.6.18 曾主源切毫秒镜像 ghcr.1ms.run（实测 5MB/s 全镜像≈10s）。
+# v1.6.20 定案：主源回退 ghcr.io 源站。两个国内镜像站被实测否决——
+# ghcr.1ms.run 认证端点持续故障（"专属域名获取失败"）；ghcr.nju.edu.cn 对
+# aarch64 新 tag 的 21MB 大层回源近冻结（实测 4.3KB/s→311B/s 递减，"假活
+# 慢滴"比明确失败更折磨用户）。源站实测 216KB/s 稳定，42MB 约 3-4 分钟。
+# 追求首包极致的用户可在本加载项「配置→镜像(Image)」覆盖为任一镜像站
+# （可用性随时间波动，不作默认保证）；CI warm-mirrors 仍尽力预热备源。
 # v1.6.19 主源【回退 nju】——1ms 定案翻车复盘（2026-09-03 发版实测）：
 # 1ms 是多边缘 LB 架构，对【新 tag 冷缓存】各边缘未同步完成前返回 404，
 # 且 200/404 按边缘闪断、分钟~小时级才自愈——"发版后首装"这一最需要用
@@ -49,7 +55,7 @@ host_network: true
 # 镜像站故障时手动换源：加载项详情页「配置→高级→镜像(Image)」覆盖域名
 # （路径不变），备选 ghcr.nju.edu.cn → ghcr.1ms.run(热缓存后) → ghcr.io(源站
 # 需自备加速)；另商店元数据有缓存，改源/升级前先在商店 ⋮→检查更新刷新。
-image: ghcr.nju.edu.cn/fangwenyi-dev/{arch}-huijian-mqtt-broker
+image: ghcr.io/fangwenyi-dev/{arch}-huijian-mqtt-broker
 # v1.6.12（第五轮审计）：移除 ssl 挂载——全仓（run.sh/Dockerfile/mosquitto.conf/
 # 集成/Web）对 /ssl 零引用，broker 也未启用 TLS；与 v1.6.3 移除 hassio_api 时
 # 自立的"权限最小化：不需要就不声明"准则对齐（保留的 homeassistant_config:rw
