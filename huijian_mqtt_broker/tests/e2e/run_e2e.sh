@@ -64,11 +64,14 @@ done
 echo "HA API 端口就绪（401 属预期，未 onboarding）"
 
 log "4. Headless onboarding（owner + 长期令牌）"
+# HA 2025+：onboarding schema 强制 language（首轮 E2E 实锤 422
+# "required key not provided @ data['language']"）；令牌字段兼容
+# 直出与 result 嵌套两种响应形态。
 OB=$(curl -sf -m 15 -X POST "http://localhost:${HA_PORT}/api/onboarding/users" \
     -H 'Content-Type: application/json' \
-    -d '{"username":"e2e-admin","password":"e2e-e2e-e2e","name":"E2E Admin"}')
+    -d '{"username":"e2e-admin","password":"e2e-e2e-e2e","name":"E2E Admin","language":"en"}')
 echo "onboarding 响应: ${OB:0:200}"
-TOKEN=$(echo "$OB" | jq -r '.long_lived_access_token // empty')
+TOKEN=$(echo "$OB" | jq -r '.long_lived_access_token // .result.long_lived_access_token // empty')
 [ -n "$TOKEN" ] || { diag "onboarding 未返回 long_lived_access_token"; exit 1; }
 
 log "5. 建立 HA MQTT 集成（127.0.0.1:${MQTT_PORT}）"
