@@ -6,7 +6,7 @@
 
 | 插件 | 版本 | 说明 |
 |------|------|------|
-| [慧尖 LoRa 网关](./huijian_mqtt_broker/) | v1.6.12 | 内置 Mosquitto Broker + mDNS 广播 + 网关集成，安装即用 |
+| [慧尖 LoRa 网关](./huijian_mqtt_broker/) | v1.6.16 | 内置 Mosquitto Broker + mDNS 广播 + 网关集成 + 小程序 WS 直连，安装即用 |
 
 ## 安装方法
 
@@ -73,21 +73,21 @@ LoRa 网关 (MQTT 客户端)
     └→ 服务（配对/重命名/转移设备等）
 ```
 
-## 小程序局域网直连（v1.6.15 起）
+## 小程序局域网直连
 
 微信「慧尖」小程序的「Matter 网关」入口经 mDNS `_mqtt._tcp` 发现本机后，
 会固定拨号 `ws://<IP>:9001/ws` 讲 JSON-over-WebSocket。本插件实现了与
 Matter 网关固件（matter-broker `app_ws_gateway.c`）1:1 对等的 WS 协议服务，
-开启后小程序可在局域网**直连 HA**：看到、控制挂在慧尖 LoRa 网关下的全部
+小程序可在局域网**直连 HA**：看到、控制挂在慧尖 LoRa 网关下的全部
 开窗器，与 Matter 固件网关在小程序侧同构共存。
 
-**开启方式**：HA「设置 → 设备与服务 → 慧尖开窗器网关 → 配置」，勾选
-「允许慧尖小程序局域网直连」。默认**关闭**（0.0.0.0:9001 是新增局域网
-监听面，需显式授权）。
+**默认开启**（对齐固件"配网完成即常听"语义，任一网关条目存在即监听；
+安全由令牌握手 401 门禁保障）。可在 HA「设置 → 设备与服务 → 慧尖开窗器
+网关 → 配置」中显式关闭/改端口/改令牌。
 
 | 选项 | 默认 | 说明 |
 |------|------|------|
-| 启用开关 | 关 | 任一网关条目开启即启动全局单例（一台 HA 只监听一个端口，聚合全部网关视图） |
+| 启用开关 | 开 | 任一网关条目未显式关闭即启动全局单例（一台 HA 只监听一个端口，聚合全部网关视图） |
 | 端口 | 9001 | 与固件 `WS_GATEWAY_PORT` 一致；改动即时生效（热重启监听） |
 | 握手令牌 | 固件出厂默认令牌 | 经 `Sec-WebSocket-Protocol` 预共享握手；8-62 位 `[A-Za-z0-9_-]`；**留空 = 不认证**（内网调试用；小程序可经 `set_token` 远程改令牌，旧连接保持） |
 
@@ -111,15 +111,7 @@ Matter 网关固件（matter-broker `app_ws_gateway.c`）1:1 对等的 WS 协议
 | 左侧导航栏 | 无（只有加载项页面） | ✅ 有设备实体入口 |
 | 可视化配置 | 仅 broker 配置 | ✅ broker + 集成 config_flow |
 
-## 更新日志
+## 版本与历史
 
-### 慧尖 LoRa 网关插件
-- **v1.6.12 (2026-08-30)**：第五轮审计修复 16 项——005 毒消息 ack 必达、via_device/config_entry_ids 死属性簇根治（网关子设备清单此前恒空）、sensor 时效契约复活、auto_discovery 真实接线、cover 状态回调、persist .bak 救援、Web 超时 Error reason 与 body 悬挂、options 死控件清理、权限最小化等
-- **v1.6.11 (2026-08-30)**：第三轮审计修复——配对会话门控/cleanup 快照迭代/publish 失败状态对齐/去重时钟 monotonic/config_flow mock 契约
-- **v1.6.10**：审计批2+3——二次配对卡死根治、transfer/check_status 假成功收口、Web 全链路 fetch 超时、绑定状态恢复、number 簿记不回退
-- **v1.6.9**：start_pairing/set_position 假成功根治×7、网关增删检测、CI 阻断门禁、生命周期链/MRO 加固、README 收敛
-- **v1.6.8**：子设备状态恒显 unknown 修复（is_closed 真实推导 + 状态与位置同步 + RestoreEntity 重启回填）
-- **v1.6.7**：服务状态单行横排磁贴、双源升级检查、深色/浅色主题打磨
-- **v1.6.6**：子设备自动增删检测、缓存 no-store 修复版本显示滞后
-
-完整历史见 [CHANGELOG.md](CHANGELOG.md)。
+当前版本 **v1.6.16**。完整版本历史统一收录于 [CHANGELOG.md](CHANGELOG.md)，
+本 README 不重复罗列。
