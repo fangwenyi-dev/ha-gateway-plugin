@@ -102,6 +102,14 @@ https://github.com/fangwenyi-dev/ha-gateway-plugin
 
 在插件 Web UI 侧边栏页面点击「检查更新」→「去加载项页面更新」，或在 **设置 → 加载项 → 慧尖 LoRa 网关** 中点击「更新」。升级后需重启插件；**集成代码有变更时还需重启 HA**（否则运行的仍是旧版集成）。
 
+### Q: 安装很慢/卡在镜像拉取？
+
+插件镜像发布在 GitHub 容器 Registry（ghcr.io），国内直连很慢。本仓库已将
+安装源指向南京大学 ghcr 透传镜像（`ghcr.nju.edu.cn`，国内秒级拉取，约
+42MB）。若该镜像偶发不可用，在加载项详情页「配置」标签打开高级字段中的
+**镜像（Image）覆盖**，填 `ghcr.io/fangwenyi-dev/{arch}-huijian-mqtt-broker`
+（需自备 GitHub 网络加速）即可换回源站安装。
+
 ### Q: 加载项页面报 "App huijian_mqtt_broker does not exist in the store"？
 
 插件本身运行正常，这是商店侧断联：安装后仓库被删除或商店刷新失败（国内访问 GitHub 不通常见）。恢复：按「安装步骤 1」重新添加仓库 URL，再到 **加载项商店 → ⋮ → 更新商店** 刷新一次，详情页与更新按钮即恢复。

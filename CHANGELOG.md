@@ -63,6 +63,21 @@
   （003/004/006/007 网关回复零再下发；001/002/005 恰好一次响应）
 - 版本号四点同步 1.6.15 → 1.6.16（config.yaml / version.json / index.html / manifest.json）
 
+### 发布后修正（仓库元数据，不占版本号，2026-09-02）
+
+- **安装提速**：`config.yaml` 的 `image` 由 `ghcr.io` 改指南京大学 ghcr 透传
+  镜像 `ghcr.nju.edu.cn/fangwenyi-dev/{arch}-huijian-mqtt-broker`——用户实报
+  "仓库用的 Gitee 但安装显示 GitHub 且很慢"：仓库元数据走 Gitee 没问题，
+  慢在镜像固定拉 ghcr.io（国内龟速/超时）。nju 全链路实测匿名 200
+  （index/config/blob；amd64+aarch64、latest 与历史 tag 全通；镜像压缩
+  ≈42MB）；镜像本体仍单份发布 CI 推 ghcr.io，零 CI 改动；nju 偶发不可用
+  可在加载项配置页用镜像覆盖字段改回。README 同步新增两条 FAQ（安装慢、
+  9001 直连排障）。**生效方式**：Supervisor 从仓库直接读取，更新商店后
+  新安装即提速，无需新版本发布
+- **README 收敛**：addon/根 README 仅保留 1.6.16 与「工作原理/安装启动/
+  重启 HA/常见问题」板块（删配置 LoRa 网关/插件配置/设备类型/逐版本清单，
+  版本历史单一真源=CHANGELOG）；根 README 修正"直连默认关闭"过期表述
+
 ## [1.6.15] - 2026-09-02
 
 ### 新增（小程序局域网直连 · 路线 A：集成内置 WS 网关，与 Matter 固件 1:1 协议对等）

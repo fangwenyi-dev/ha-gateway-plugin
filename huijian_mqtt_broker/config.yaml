@@ -32,7 +32,14 @@ host_network: true
 # 仓库可见性】——public 仓库⇒包自动 public。旧包 private 是 8-25 仓库当天
 # 本地手工 docker push 创建所致（可见性创建时定死，后续推版本不改）。
 # 修复手段即：删包→CI 重建（无需任何人工网页点击）。
-image: ghcr.io/fangwenyi-dev/{arch}-huijian-mqtt-broker
+# v1.6.16+ 安装加速定案（2026-09-02 用户实报：Gitee 仓库装插件仍慢）：
+# 仓库元数据走 Gitee 没问题，但镜像此前固定 ghcr.io（GitHub 容器 Registry，
+# 国内连接龟速/超时，即"用 gitee 却显示 github"的真相）。image 改指南京大学
+# 开源镜像站的 ghcr 透传代理，全链路实测：index/config/blob 匿名 200、
+# amd64+aarch64、latest 与历史 tag 全通（镜像本体仍只有一份，CI 照旧推
+# ghcr.io，nju 按需回源缓存，零 CI 改动）。若 nju 偶发不可用，可在加载项
+# 详情页"显示配置为 YAML/高级"改回 ghcr.io 同路径，或走源码构建（builds）。
+image: ghcr.nju.edu.cn/fangwenyi-dev/{arch}-huijian-mqtt-broker
 # v1.6.12（第五轮审计）：移除 ssl 挂载——全仓（run.sh/Dockerfile/mosquitto.conf/
 # 集成/Web）对 /ssl 零引用，broker 也未启用 TLS；与 v1.6.3 移除 hassio_api 时
 # 自立的"权限最小化：不需要就不声明"准则对齐（保留的 homeassistant_config:rw
