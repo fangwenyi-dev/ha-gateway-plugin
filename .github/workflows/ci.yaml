@@ -265,24 +265,46 @@ jobs:
             curl -fsS -m 15 "$2?service=$3&scope=repository:${OWNER}/$1:pull" \
               | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d.get("token") or d.get("access_token",""))' || true
           }
-          warm_via() { # $1=reg $2=realm $3=service；返回码=是否全绿
-            local REG="$1" REALM="$2" SVC="$3" OK=0 FAIL=0 BYTES=0
+          # v1.6.19（第六轮审计 C′）四处纠偏：
+          # ① OCI platform.architecture 值是 "arm64" 而非 "aarch64"——旧过滤
+          #   永不命中，全部落到 ms[0]（可能取到 attestation blob 摘要）。
+          #   现显式映射且无匹配时报错跳过，绝不瞎猜。
+          # ② MAN/BLOBS 的 curl 无兜底：整个函数被 `warm_via || echo` 调用时
+          #   set -e 失效，404 → MAN 空 → BLOBS 空 → 循环不执行 → "ok=0
+          #   fail=0" 假绿零预热（v1.6.18 首发即此形态）。现逐段判空计入 FAIL。
+          # ③ OK/FAIL/BYTES 改按 arch 归零，日志不再跨 arch 累计失真。
+          # ④ 1ms 对冷 tag 是多边缘 200/404 闪断（分钟~小时自愈），3×20s 密集
+          #   重试无用且易自触发限流（记忆定案：预热低频单轮）→ 改单轮 +
+          #   调用方 300s 长间隔一次性复查；nju 慢站超时放宽到 180s。
+          warm_via() { # $1=reg $2=realm $3=service $4=timeout秒；返回码=是否全绿
+            local REG="$1" REALM="$2" SVC="$3" TMO="${4:-60}"
+            local TOTOK=0 TOFAIL=0
             for ARCH in amd64 aarch64; do
+              local OCI_ARCH; OCI_ARCH=$([ "$ARCH" = aarch64 ] && echo arm64 || echo "$ARCH")
               local REPO="${ARCH}-huijian-mqtt-broker" TOK
               TOK=$(token_of "$REPO" "$REALM" "$SVC")
               local -a HDRS=()
               [ -n "$TOK" ] && HDRS+=(-H "Authorization: Bearer $TOK")
+              local OK=0 FAIL=0 BYTES=0
               local IDX="" TRY
-              for TRY in 1 2 3; do
-                IDX=$(curl -fsS -m 60 "${HDRS[@]}" -H "Accept: $IDX_ACCEPT" "https://$REG/v2/$REPO/manifests/$VERSION" 2>/dev/null || true)
+              for TRY in 1 2; do
+                IDX=$(curl -fsS -m "$TMO" "${HDRS[@]}" -H "Accept: $IDX_ACCEPT" "https://$REG/v2/$REPO/manifests/$VERSION" 2>/dev/null || true)
                 [ -n "$IDX" ] && break
-                echo "  [$REG] $REPO manifest 冷缓存/抖动，20s 后重试 $TRY …"; sleep 20
+                [ "$TRY" = 1 ] && { echo "  [$REG] $REPO manifest 冷缓存/抖动，15s 后单次复查"; sleep 15; }
               done
-              [ -z "$IDX" ] && { echo "  [$REG] ❌ $REPO manifest 不可达"; FAIL=$((FAIL+1)); continue; }
-              local MDIG MAN BLOBS
-              MDIG=$(printf '%s' "$IDX" | python3 -c 'import json,sys;i=json.load(sys.stdin);ms=i.get("manifests");print(next((m["digest"] for m in ms if (m.get("platform") or {}).get("architecture")==sys.argv[1]), ms[0]["digest"]) if ms else "")' "$ARCH" 2>/dev/null || true)
-              MAN=$(curl -fsS -m 60 "${HDRS[@]}" -H "Accept: $MAN_ACCEPT" "https://$REG/v2/$REPO/manifests/${MDIG:-$VERSION}")
-              BLOBS=$(printf '%s' "$MAN" | python3 -c 'import json,sys;m=json.load(sys.stdin);print(m["config"]["digest"]);[print(l["digest"]) for l in m.get("layers",[])]')
+              if [ -z "$IDX" ]; then echo "  [$REG] ❌ $REPO manifest 不可达"; TOFAIL=$((TOFAIL+1)); continue; fi
+              local MDIG
+              MDIG=$(printf '%s' "$IDX" | python3 -c 'import json,sys
+          i=json.load(sys.stdin);ms=i.get("manifests") or []
+          hit=[m for m in ms if (m.get("platform") or {}).get("architecture")==sys.argv[1] and (m.get("platform") or {}).get("os")=="linux"]
+          print(hit[0]["digest"] if hit else "")' "$OCI_ARCH" 2>/dev/null || true)
+              if [ -z "$MDIG" ]; then echo "  [$REG] ❌ $REPO index 中无 $OCI_ARCH/linux 平台条目（异常形态，跳过勿瞎猜）"; TOFAIL=$((TOFAIL+1)); continue; fi
+              local MAN
+              MAN=$(curl -fsS -m "$TMO" "${HDRS[@]}" -H "Accept: $MAN_ACCEPT" "https://$REG/v2/$REPO/manifests/$MDIG" 2>/dev/null || true)
+              if [ -z "$MAN" ]; then echo "  [$REG] ❌ $REPO 平台 manifest($MDIG) 不可达"; TOFAIL=$((TOFAIL+1)); continue; fi
+              local BLOBS
+              BLOBS=$(printf '%s' "$MAN" | python3 -c 'import json,sys;m=json.load(sys.stdin);print(m["config"]["digest"]);[print(l["digest"]) for l in m.get("layers",[])]' 2>/dev/null || true)
+              if [ -z "$BLOBS" ]; then echo "  [$REG] ❌ $REPO manifest 解析失败/无 blobs"; TOFAIL=$((TOFAIL+1)); continue; fi
               local R CODE SZ B
               for B in $BLOBS; do
                 R=$(curl -s -o /dev/null -m 600 "${HDRS[@]}" -H "Accept: application/vnd.oci.image.layer.v1.tar+gzip" -w "%{http_code} %{size_download}" -L "https://$REG/v2/$REPO/blobs/$B" || echo "000 0")
@@ -290,12 +312,18 @@ jobs:
                 if [ "$CODE" = "200" ]; then OK=$((OK+1)); BYTES=$((BYTES+SZ)); else FAIL=$((FAIL+1)); echo "  [$REG] ⚠️ blob ${B:0:19} HTTP $CODE"; fi
               done
               echo "  [$REG] $REPO:$VERSION 预热完成 (ok=$OK fail=$FAIL $((BYTES/1024/1024))MB)"
+              TOTOK=$((TOTOK+OK)); TOFAIL=$((TOFAIL+FAIL))
             done
-            [ "$FAIL" -eq 0 ]
+            echo "  [$REG] 汇总 ok=$TOTOK fail=$TOFAIL"
+            [ "$TOFAIL" -eq 0 ]
           }
-          warm_via ghcr.1ms.run "https://ghcr.1ms.run/openapi/v1/auth/token" ghcr.1ms.run \
-            || echo "::warning title=1ms.run 预热未全绿::主源可能仍冷缓存，客户首装或回源慢；处理见加载项 README FAQ（手动换源 nju/ghcr.io）"
-          warm_via ghcr.nju.edu.cn "" "" \
+          # 1ms：冷 tag 边缘 404 属闪断形态，短重试无效——单轮失败则 300s 后
+          # 一次性复查（给边缘同步留时间），仍失败才告警。
+          warm_via ghcr.1ms.run "https://ghcr.1ms.run/openapi/v1/auth/token" ghcr.1ms.run 60 \
+            || { echo "  1ms 首轮未全绿，300s 后复查一次…"; sleep 300; \
+                 warm_via ghcr.1ms.run "https://ghcr.1ms.run/openapi/v1/auth/token" ghcr.1ms.run 60 \
+                 || echo "::warning title=1ms.run 预热未全绿::边缘缓存仍冷（多边缘 200/404 闪断属常态），客户首装或回源慢；处理见加载项 README FAQ"; }
+          warm_via ghcr.nju.edu.cn "" "" 180 \
             || echo "::warning title=nju 备用源预热未全绿::仅影响手动换源场景，不阻塞发布"
 
   # ========== 3. 创建 GitHub Release ==========

@@ -339,19 +339,30 @@ async def async_setup_entry(
             # 尝试从实体注册表中删除实体（兼容新旧 HA registry 同步/异步 API）
             try:
                 from .utils import call_registry_method as _call_reg
+                from .utils import async_get_entity_id as _aget_eid
                 entity_registry = get_entity_registry(hass)
+                # v1.6.19（第六轮审计 B-LOW6）：unique_id 优先（button.py
+                # v1.6.3 定案同款）——配对后秒级解绑时实体可能尚未获派
+                # entity_id，原单路径落空即注册表悬挂、重配对永久缺传感器。
+                async def _drop(entity, label):
+                    _eid = await _aget_eid(hass, "sensor", entity._attr_unique_id)
+                    if _eid:
+                        await _call_reg(entity_registry.async_remove, _eid)
+                    elif entity.entity_id:
+                        await _call_reg(entity_registry.async_remove, entity.entity_id)
+                    else:
+                        _LOGGER.warning("%s实体定位失败（unique_id=%s 双路径均未命中）: %s",
+                                        label, entity._attr_unique_id, device_name)
                 # 删除电池传感器
                 if "battery" in sensors:
                     battery_entity = sensors["battery"]
-                    if battery_entity.entity_id:
-                        await _call_reg(entity_registry.async_remove, battery_entity.entity_id)
-                        _LOGGER.info("已从实体注册表中删除设备 %s 的电池传感器", device_name)
+                    await _drop(battery_entity, "电池传感器")
+                    _LOGGER.info("已从实体注册表中删除设备 %s 的电池传感器", device_name)
                 # 删除状态传感器
                 if "status" in sensors:
                     status_entity = sensors["status"]
-                    if status_entity.entity_id:
-                        await _call_reg(entity_registry.async_remove, status_entity.entity_id)
-                        _LOGGER.info("已从实体注册表中删除设备 %s 的状态传感器", device_name)
+                    await _drop(status_entity, "状态传感器")
+                    _LOGGER.info("已从实体注册表中删除设备 %s 的状态传感器", device_name)
             except Exception as e:
                 _LOGGER.error("从实体注册表中删除设备 %s 的传感器失败: %s", device_name, e)
 

@@ -100,14 +100,18 @@ GitHub 同理走 `gh auth token` 注入一次性 URL（WSL 无 GCM 交互）。
 | `gateway/rpt_rsp` | 网关 → HA |
 
 ### 命令
+> 线值均为**字符串**（const.py COMMAND_VALUE_*，v1.6.17 对照固件
+> app_mqtt_business.c 逐一实证）。旧表 open=0/close=1/stop=2 是废弃固件
+> 时代记载，已按现网订正——改动命令映射前以 const.py 与固件为准，勿信旧文档。
+
 | 命令 | 值 | 说明 |
 |------|-----|------|
-| `open` | 0 | 开窗 |
-| `close` | 1 | 关窗 |
-| `stop` | 2 | 停止 |
-| `a` | 200 | 内倒 (toggle) |
-| `wind_lock_tilt` | 0 | 内倒模式 |
-| `wind_lock_flat` | 1 | 平开模式 |
+| `open` | "100" | 开窗 |
+| `close` | "0" | 关窗 |
+| `stop` | "101" | 停止 |
+| `a` | "200" | 内倒 (toggle) |
+| `wind_lock_tilt` | "0" | 内倒模式 |
+| `wind_lock_flat` | "1" | 平开模式 |
 | `set_position` | 0-100 | 设置位置 |
 | `set_speed` | 0-100 | 设置速度 |
 | `set_strength` | 0-100 | 设置力度 |

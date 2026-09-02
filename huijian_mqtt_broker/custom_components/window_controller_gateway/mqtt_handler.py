@@ -2,6 +2,7 @@
 import logging
 import json
 import asyncio
+import math
 import random
 import uuid
 import weakref
@@ -81,6 +82,12 @@ class WindowControllerMQTTHandler:
         self.command_id = DEFAULT_COMMAND_ID  # 命令ID初始值
         self._check_task = None  # 后台任务引用
         self._reconnect_task = None  # MQTT 重连任务引用（去重 + cleanup 可取消）
+        # v1.6.19（第六轮审计 A-MED1）：cleanup 与 _reconnect_mqtt 竞态守卫——
+        # cleanup 在 await 让出点期间，重连成功路径会"吞掉旧任务取消→重建
+        # 检查任务"，cleanup 恢复后把引用覆没，泄漏一个永不取消的
+        # _check_gateway_timeout 循环（每次 MQTT 抖动期 reload 泄漏一个实例）。
+        # cleanup 首行置 True，重连路径创建任何后台任务前必须检查。
+        self._closing = False
         self._unsub_rsp = None  # MQTT 订阅取消函数
         self._msg_lock = asyncio.Lock()  # 异步消息去重锁
         self.instance_uuid = str(uuid.uuid5(uuid.NAMESPACE_DNS, hass.config.config_dir))
@@ -104,6 +111,26 @@ class WindowControllerMQTTHandler:
         # {command_id: "bind" / "unbind"}，收到回复即清理，不会累积。
         self._bind_ops = {}
     
+    @staticmethod
+    def _norm_cmd_id(raw):
+        """命令 id 归一（v1.6.19 第六轮审计 A-LOW4）：_bind_ops 的键恒为
+        int(self.command_id)，但网关回包的 id 可能以 "42"/42.0 形态 echo
+        （去重层的 f-string 会抹平类型差异放行，pop 的精确匹配却会 miss，
+        退回已知有竞态的存在性推断分支）。bool 特判 False→0/True→1 是固件
+        id 语义里不存在的形态，原样返回交给 miss 分支处理。"""
+        if isinstance(raw, bool):
+            return raw
+        if isinstance(raw, int):
+            return raw
+        if isinstance(raw, float) and raw.is_integer():
+            return int(raw)
+        if isinstance(raw, str) and raw.strip().lstrip("-").isdigit():
+            try:
+                return int(raw.strip())
+            except ValueError:
+                return raw
+        return raw
+
     def _record_bind_op(self, command_id: int, direction: str, device_sn: Optional[str] = None) -> None:
         """记录 003 绑定/解绑命令方向（按命令 id 匹配回复）
 
@@ -254,6 +281,20 @@ class WindowControllerMQTTHandler:
         # 订阅网关响应和数据主题
         def handle_gateway_response(msg):
             """处理网关响应和数据消息"""
+            # v1.6.19（第六轮审计 A-LOW7）：入站尺寸闸。mosquitto 默认
+            # message_size_limit 不限，LAN 上任一可连 2022 的客户端 publish
+            # 一条 50-100MB 的 rpt_rsp 会在事件循环线程 json.loads 卡死整个
+            # HA（本回调与分发全在 loop 内）。WS 侧有 1024B 帧闸，MQTT 侧
+            # 对称补齐：>64KB 一律拒收（协议合法帧远小于此，最大 002 全量
+            # 设备列表也仅数 KB）。
+            try:
+                if len(msg.payload) > 64 * 1024:
+                    _LOGGER.warning(
+                        "收到超大 MQTT 报文（%d 字节），拒收处理", len(msg.payload)
+                    )
+                    return
+            except Exception:  # noqa: BLE001 - payload 非常规类型交给下方既有流程
+                pass
             try:
                 payload = json.loads(msg.payload)
                 _LOGGER.debug("收到网关消息: %s", payload)
@@ -263,6 +304,19 @@ class WindowControllerMQTTHandler:
                     # 标准协议格式处理
                     ctype = payload.get("ctype")
                     data = payload.get("data", {})
+                    # v1.6.19（第六轮审计 A-HIGH1）：data 归一为 dict。显式
+                    # `"data": null` 时 payload.get("data", {}) 返回 None（键
+                    # 存在、值无效，默认值不生效），非 dict 的 data 会让
+                    # _handle_ctype_001 在 ack 发布前抛 TypeError/AttributeError
+                    # ——网关按未确认无限重发，形成毒消息重传环（与 v1.6.12
+                    # 第五轮 #1 在 005 修掉的是同一类面，当时漏了 001）。
+                    # 在分发单点归一，全部 ctype 处理器同受保护。
+                    if not isinstance(data, dict):
+                        _LOGGER.warning(
+                            "消息 data 字段非对象（%s），已归一为空对象: ctype=%s",
+                            type(data).__name__, ctype,
+                        )
+                        data = {}
                     
                     # 检查响应是否来自此网关
                     response_sn = payload.get("sn")
@@ -433,6 +487,9 @@ class WindowControllerMQTTHandler:
     
     def _schedule_reconnect(self):
         """调度 MQTT 重连（去重：已有重连任务在运行则跳过，避免任务无限累积）"""
+        if self._closing:  # v1.6.19 A-MED1：unload 后不得再拉起任何后台任务
+            _LOGGER.debug("条目清理中，跳过重连调度")
+            return
         if self._reconnect_task and not self._reconnect_task.done():
             _LOGGER.debug("MQTT重连任务已在运行，跳过重复调度")
             return
@@ -450,6 +507,9 @@ class WindowControllerMQTTHandler:
         max_jitter = MQTT_MAX_JITTER
         
         while retry_count < max_retries:
+            if self._closing:  # v1.6.19 A-MED1：cleanup 已开始，立即退出重试循环
+                _LOGGER.debug("条目清理中，中止 MQTT 重连循环")
+                return
             try:
                 _LOGGER.debug("尝试重新连接MQTT... (重试 %d/%d)", retry_count + 1, max_retries)
                 
@@ -457,6 +517,13 @@ class WindowControllerMQTTHandler:
                 await self._subscribe_topics()
                 
                 # 重新启动网关超时检查任务
+                if self._closing:
+                    # v1.6.19（第六轮审计 A-MED1）：上面 await self._check_task
+                    # 是让出点——cleanup 恰好在此挂起期间恢复并继续把
+                    # _check_task 覆没为 None；若本处再 create，新任务无人持
+                    # 引用、永不取消（泄漏 + 周期触碰已销毁的 manager）。
+                    _LOGGER.debug("条目清理中，放弃重建超时检查任务")
+                    return
                 if self._check_task:
                     if not self._check_task.done():
                         self._check_task.cancel()
@@ -663,14 +730,18 @@ class WindowControllerMQTTHandler:
                 payload["data"]["attribute"] = ATTRIBUTE_W_TRAVEL
                 position = params.get("position", 0)
                 # 验证位置参数
+                # v1.6.19（第六轮审计 B-LOW11）：非法/越界不再回退 0——
+                # 0 是真实语义"关窗"，"想开到 150%" 被静默执行成"关窗"是
+                # 反向动作；拒绝下发并如实失败，由调用方（schema 已前置
+                # 拦截，走到这里说明是内部误用）感知。
                 try:
                     position = int(position)
-                    if position < 0 or position > 100:
-                        _LOGGER.warning("位置参数超出范围(0-100)，使用默认值0: %s", position)
-                        position = 0
-                except (ValueError, TypeError):
-                    _LOGGER.warning("位置参数无效，使用默认值0: %s", position)
-                    position = 0
+                except (ValueError, TypeError, OverflowError):
+                    _LOGGER.error("位置参数无效，拒绝下发: %s", params.get("position"))
+                    return False
+                if position < 0 or position > 100:
+                    _LOGGER.error("位置参数超出范围(0-100)，拒绝下发: %s", position)
+                    return False
                 payload["data"]["value"] = str(position)
             elif command in ("set_speed", "set_strength"):
                 # 开窗速度/力度控制（rwp_winact_speed / rwp_winact_strength，0-100）
@@ -683,14 +754,16 @@ class WindowControllerMQTTHandler:
                     raw_value = params.get("strength", 0)
                 try:
                     value = int(raw_value)
-                    if value < SPEED_MIN or value > SPEED_MAX:
-                        value = max(SPEED_MIN, min(SPEED_MAX, value))
-                        _LOGGER.warning("%s 参数超出范围(%d-%d)，已裁剪为 %d",
-                                        payload["data"]["attribute"], SPEED_MIN, SPEED_MAX, value)
-                except (ValueError, TypeError):
-                    _LOGGER.warning("%s 参数无效，使用默认值0: %s",
-                                    payload["data"]["attribute"], raw_value)
-                    value = 0
+                except (ValueError, TypeError, OverflowError):
+                    # v1.6.19 B-LOW11 同口径：无法解析的值拒绝下发
+                    # （回退 0 = 速度/力度"最弱档"，同样是静默反向语义）
+                    _LOGGER.error("%s 参数无效，拒绝下发: %s",
+                                  payload["data"]["attribute"], raw_value)
+                    return False
+                if value < SPEED_MIN or value > SPEED_MAX:
+                    value = max(SPEED_MIN, min(SPEED_MAX, value))
+                    _LOGGER.warning("%s 参数超出范围(%d-%d)，已裁剪为 %d",
+                                    payload["data"]["attribute"], SPEED_MIN, SPEED_MAX, value)
                 payload["data"]["value"] = str(value)
             elif command in ("wind_lock_tilt", "wind_lock_flat"):
                 # 风锁模式控制 - 内倒模式(value=0) / 平开模式(value=1)
@@ -1120,6 +1193,10 @@ class WindowControllerMQTTHandler:
     async def cleanup(self):
         """清理MQTT资源"""
         _LOGGER.info("清理MQTT资源")
+        # v1.6.19（第六轮审计 A-MED1）：必须最先置位——本函数后续每个
+        # await 都是让出点，重连任务可能在任意让出点恢复并重建后台任务；
+        # 置位后 _schedule_reconnect/重连循环/检查任务重建全部拒绝。
+        self._closing = True
         # 取消配对超时句柄
         if self.pairing_timeout_handle:
             try:
@@ -1397,9 +1474,11 @@ class WindowControllerMQTTHandler:
         if "battery" in device_info:
             try:
                 voltage = float(device_info["battery"]) / 10
+                if not math.isfinite(voltage):
+                    raise ValueError("电压值非有限数")
                 attributes["voltage"] = voltage
                 _LOGGER.debug("设备 %s 电池电压: %.1fV", device_sn, voltage)
-            except (ValueError, TypeError) as e:
+            except (ValueError, TypeError, OverflowError) as e:
                 _LOGGER.error("电池电压数据格式错误: %s, 值: %s", e, device_info["battery"])
 
         if "r_travel" in device_info:
@@ -1407,7 +1486,7 @@ class WindowControllerMQTTHandler:
                 r_travel = int(device_info["r_travel"])
                 attributes["r_travel"] = r_travel
                 _LOGGER.debug("设备 %s 位置状态: %d", device_sn, r_travel)
-            except (ValueError, TypeError) as e:
+            except (ValueError, TypeError, OverflowError) as e:
                 _LOGGER.error("位置状态数据格式错误: %s, 值: %s", e, device_info["r_travel"])
         
         if attributes:
@@ -1445,8 +1524,9 @@ class WindowControllerMQTTHandler:
         device_sn = data.get("sn")
         bind_value = data.get("bind", None)
         # 按命令 id 匹配最近发出的 003 方向（发送端已记录 _bind_ops；
-        # 记录为 (方向, 设备SN) 元组）
-        bind_record = self._bind_ops.pop(payload.get("id"), None)
+        # 记录为 (方向, 设备SN) 元组）。id 先经 _norm_cmd_id 归一：网关以
+        # "42"/42.0 形态 echo 时精确 pop 不再 miss（v1.6.19 A-LOW4）。
+        bind_record = self._bind_ops.pop(self._norm_cmd_id(payload.get("id")), None)
         bind_op = bind_record[0] if bind_record else None
         # 诊断日志：明确记录判定依据，便于定位"绑定成功但未添加"类问题
         _LOGGER.debug(
@@ -1596,9 +1676,15 @@ class WindowControllerMQTTHandler:
                 try:
                     # 转换为浮点数并除以10（如105 → 10.5V）
                     voltage = float(battery) / 10
+                    # v1.6.19（第六轮审计 A-HIGH2 源头卫生）：JSON `1e999`
+                    # 解析为 float("inf") 不抛错，inf/10 仍是 inf——必须在入库
+                    # 前拦截，否则视图层与 HA 状态机承接非有限数（视图层已另
+                    # 补 isfinite 钳制双保险）。
+                    if not math.isfinite(voltage):
+                        raise ValueError("电压值非有限数")
                     attributes["voltage"] = voltage
                     _LOGGER.debug("设备 %s 电池电压: %.1fV", device_sn, voltage)
-                except (ValueError, TypeError) as e:
+                except (ValueError, TypeError, OverflowError) as e:
                     _LOGGER.error("设备 %s 电池电压数据格式错误: %s, 值: %s", device_sn, e, battery)
             if "state" in data:
                 attributes["state"] = data["state"]
@@ -1614,8 +1700,10 @@ class WindowControllerMQTTHandler:
                         # 转换电压值，105表示10.5v
                         try:
                             voltage = float(value) / 10
+                            if not math.isfinite(voltage):
+                                raise ValueError("电压值非有限数")  # v1.6.19 A-HIGH2
                             attributes["voltage"] = voltage
-                        except (ValueError, TypeError) as e:
+                        except (ValueError, TypeError, OverflowError) as e:
                             _LOGGER.error("设备 %s 电压属性格式错误: %s, 值: %s", device_sn, e, value)
                     elif attribute == "r_travel":
                         # 处理窗户状态，0表示关闭，其他表示打开
@@ -1627,7 +1715,7 @@ class WindowControllerMQTTHandler:
                                 status = DEVICE_STATUS_CLOSED
                             else:
                                 status = DEVICE_STATUS_OPEN
-                        except (ValueError, TypeError) as e:
+                        except (ValueError, TypeError, OverflowError) as e:
                             _LOGGER.error("设备 %s 位置状态格式错误: %s, 值: %s", device_sn, e, value)
                     elif attribute == "rwp_wind_lock_mode":
                         # 风锁模式上报：0=内倒模式，1=平开模式
@@ -1640,7 +1728,7 @@ class WindowControllerMQTTHandler:
                             speed = int(value)
                             attributes["winact_speed"] = speed
                             _LOGGER.debug("设备 %s 开窗速度上报: %d", device_sn, speed)
-                        except (ValueError, TypeError) as e:
+                        except (ValueError, TypeError, OverflowError) as e:
                             _LOGGER.error("设备 %s 开窗速度属性格式错误: %s, 值: %s", device_sn, e, value)
                     elif attribute == "rwp_winact_strength":
                         # 开窗力度上报：0-100
@@ -1648,7 +1736,7 @@ class WindowControllerMQTTHandler:
                             strength = int(value)
                             attributes["winact_strength"] = strength
                             _LOGGER.debug("设备 %s 开窗力度上报: %d", device_sn, strength)
-                        except (ValueError, TypeError) as e:
+                        except (ValueError, TypeError, OverflowError) as e:
                             _LOGGER.error("设备 %s 开窗力度属性格式错误: %s, 值: %s", device_sn, e, value)
             
             # 更新设备状态

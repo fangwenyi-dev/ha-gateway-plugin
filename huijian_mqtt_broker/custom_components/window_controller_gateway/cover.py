@@ -1,5 +1,6 @@
 """开窗器网关Cover平台 - 供LLM等使用Cover语义控制开窗器"""
 import logging
+import time
 
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
@@ -26,6 +27,7 @@ from .const import (
     DEVICE_STATUS_CLOSED,
     DEVICE_STATUS_UNKNOWN,
     DEVICE_STATUS_CONNECTED,
+    SENSOR_TIMEOUT_MINUTES,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -108,6 +110,16 @@ class WindowControllerCover(WindowControllerBaseEntity, RestoreEntity, CoverEnti
         """
         device = self.device_manager.get_device(self.device_sn)
         if device:
+            # v1.6.19（第六轮审计 B-MED3）：与 sensor 的 15 分钟时效同判据
+            # （SENSOR_TIMEOUT_MINUTES，v1.6.12 #7 定案）。网关长期失联时
+            # sensor/binary_sensor 已转 unknown，此处不设闸则 cover.state
+            # 永久冻结在最后已知值——同设备两实体矛盾显示、自动化按陈旧
+            # "open" 持续动作。恢复值（async_added_to_hass）在重启时刻获得
+            # 时间戳，语义=「信任关机快照 15 分钟」，与 v1.6.8 恢复设计
+            # 自洽；无时间戳的设备（历史形态/测试夹具）视为新鲜。
+            _lu = device.get("last_update")
+            if _lu and (time.time() - _lu) > SENSOR_TIMEOUT_MINUTES * 60:
+                return None
             status = device.get("status")
             if status == DEVICE_STATUS_CLOSED:
                 return True
@@ -319,10 +331,21 @@ async def async_setup_entry(
 
                 try:
                     from .utils import call_registry_method as _call_reg
+                    from .utils import async_get_entity_id as _aget_eid
                     entity_registry = get_entity_registry(hass)
-                    if cover.entity_id:
+                    # v1.6.19（第六轮审计 B-LOW6）：unique_id 优先（button.py
+                    # v1.6.3 定案同款）——配对后秒级解绑时实体可能尚未获派
+                    # entity_id，原单路径落空即注册表悬挂、重配对永久缺 cover。
+                    _eid = await _aget_eid(hass, "cover", cover._attr_unique_id)
+                    if _eid:
+                        await _call_reg(entity_registry.async_remove, _eid)
+                        _LOGGER.info("已移除设备 %s 的Cover实体", device_name)
+                    elif cover.entity_id:
                         await _call_reg(entity_registry.async_remove, cover.entity_id)
                         _LOGGER.info("已移除设备 %s 的Cover实体", device_name)
+                    else:
+                        _LOGGER.warning("Cover实体定位失败（unique_id=%s 双路径均未命中）: %s",
+                                        cover._attr_unique_id, device_name)
                 except Exception as e:
                     _LOGGER.error("移除Cover实体失败 %s: %s", device_name, e)
 

@@ -632,7 +632,14 @@ def register_services(hass: HomeAssistant) -> bool:
             _start_pairing,
             schema=vol.Schema({
                 vol.Required("device_id"): cv.string,
-                vol.Optional("duration", default=GATEWAY_PAIRING_TIMEOUT): cv.positive_int,
+                # v1.6.19（第六轮审计 B-LOW4）：003 配对报文不携带时长，
+                # duration 纯本地兜底超时——服务与 UI 行为一致收 10-300s
+                # （Web UI 选择器 min/max 同为 10-300；此前 schema 只有
+                # positive_int，REST/YAML 传 99999 可造出永不超时的
+                # "配对中"态）。
+                vol.Optional("duration", default=GATEWAY_PAIRING_TIMEOUT): vol.All(
+                    cv.positive_int, vol.Range(min=10, max=300)
+                ),
             })
         )
 

@@ -156,6 +156,11 @@ CONF_WS_GATEWAY_TOKEN: Final = "ws_gateway_token"
 # 认证成功才占槽（≤4）、帧长与空闲限制照固件；options 仍可显式关闭。
 DEFAULT_WS_GATEWAY_ENABLED: Final = True
 DEFAULT_WS_GATEWAY_PORT: Final = 9001
+# v1.6.19（第六轮审计 B-LOW10）：本栈保留端口——WS 网关端口选项若撞上这些
+# 口，bind 失败只进 HA 日志、小程序恒 Connection refused 静默失联，
+# config_flow 在源头拒绝。2022=内置 Mosquitto，8099=Web UI nginx ingress，
+# 8123=HA core，1883=外部 broker 惯用口。
+WS_RESERVED_PORTS: Final = frozenset({2022, 8099, 8123, 1883})
 DEFAULT_WS_GATEWAY_TOKEN: Final = "hIZ56jhQ-wzA3ENiP2xGzo55PXsewUWM"
 WS_GATEWAY_PATH: Final = "/ws"
 WS_TOKEN_MIN_LEN: Final = 8            # 固件：新 token 至少 8 字符（防弱 token）

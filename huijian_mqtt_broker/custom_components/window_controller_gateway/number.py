@@ -313,11 +313,23 @@ async def async_setup_entry(
             numbers = created_numbers.pop(device_sn)
             try:
                 from .utils import call_registry_method as _call_reg
+                from .utils import async_get_entity_id as _aget_eid
                 entity_registry = get_entity_registry(hass)
                 for number in numbers.values():
                     mqtt_handler.remove_status_callback(device_sn, number.async_update)
-                    if number.entity_id:
+                    # v1.6.19（第六轮审计 B-LOW6）：unique_id 优先（button.py
+                    # v1.6.3 定案同款）——动态配对后秒级解绑时 async_add_entities
+                    # 可能尚未给实体分配 entity_id，原 `if number.entity_id:`
+                    # 落空即注册表条目悬挂；重新配对时查重命中悬挂条目又跳过
+                    # 创建 → 该设备永久缺 number 实体（直到重启）。
+                    _eid = await _aget_eid(hass, "number", number._attr_unique_id)
+                    if _eid:
+                        await _call_reg(entity_registry.async_remove, _eid)
+                    elif number.entity_id:
                         await _call_reg(entity_registry.async_remove, number.entity_id)
+                    else:
+                        _LOGGER.warning("滑动条实体定位失败（unique_id=%s 双路径均未命中）: %s",
+                                        number._attr_unique_id, device_name)
                 _LOGGER.info("已移除设备 %s 的滑动条实体", device_name)
             except Exception as e:
                 _LOGGER.error("移除设备 %s 的滑动条实体失败: %s", device_name, e)

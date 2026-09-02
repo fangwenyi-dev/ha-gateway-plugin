@@ -20,7 +20,9 @@ Mosquitto@2022 与 nginx@8099，"能看到但连不上"即因 9001 无监听者�
 
 与固件的有意差异（行为超集，不与小程序现有链路冲突）：
   - set_token 持久化走 config entry options（HA 惯例，reload 生效）而非
-    NVS；reload 会短暂断开现有 WS 连接，小程序自动重连后以新令牌握手。
+    NVS；令牌仅握手时校验——已建立的连接【不会】因 reload/改令牌断开，
+    其后续重连才需新令牌。（v1.6.19 注释纠偏 D-F6：旧注释误称"reload 会
+    短暂断开现有 WS 连接"，实况是 ensure 同端口走热同步、socket 不断。）
 
 协议契约（固件源码逐行核对）：
   - 握手：客户端以 Sec-WebSocket-Protocol 携带预共享令牌；令牌非空时
@@ -43,6 +45,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -132,12 +135,16 @@ def validate_new_token(new_token: Any, old_token: Any, current_token: str) -> Op
 
 
 def _as_int(value: Any) -> int:
-    """固件 -1=未知约定的安全取整：不可解析/None → -1。"""
+    """固件 -1=未知约定的安全取整：不可解析/None → -1。
+
+    v1.6.19（第六轮审计 A-HIGH2）：补捕 OverflowError——JSON `1e999` 解析为
+    float("inf") 不抛错而 `int(inf)` 抛 OverflowError，ValueError/TypeError
+    元组接不住，一个非有限数就能炸穿视图构造。"""
     if value is None or isinstance(value, bool):
         return -1
     try:
         return int(value)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, OverflowError):
         return -1
 
 
@@ -167,8 +174,16 @@ def device_ws_view(device_sn: str, gateway_sn: str, device: Dict[str, Any]) -> D
     battery = -1
     if voltage is not None:
         try:
-            battery = int(round(float(voltage) * 10))
-        except (ValueError, TypeError):
+            fv = float(voltage)
+            # v1.6.19（第六轮审计 A-HIGH2）：非有限数先行判死——round(inf)
+            # 抛 OverflowError（nan 抛 ValueError），若只捕 ValueError/
+            # TypeError，inf 电压会炸掉 _device_list_payload 的跨 entry 单趟
+            # 遍历：一台坏设备 → 全部网关全部设备在小程序集体消失（命令
+            # 异常被 _session 吞掉、get_devices 无回包直到心跳覆盖坏值）。
+            if not math.isfinite(fv):
+                raise ValueError("voltage 非有限数")
+            battery = int(round(fv * 10))
+        except (ValueError, TypeError, OverflowError):
             battery = -1
         if not 80 <= battery <= 140:
             # 固件同款范围判定：可解析但越界（0、负值、24.0V 假象的
@@ -220,6 +235,10 @@ class WsGatewayServer:
         self._stopping = False
         # 在途握手计数（见 _handle_ws 槽位预约注释）
         self._pending_handshakes = 0
+        # v1.6.19（第六轮审计 A-LOW6）：广播任务引用集合——裸 create_task
+        # 的任务无持有者，GC 时机不定时报 "Task was destroyed but it is
+        # pending!"；统一登记并在 async_stop 时取消。
+        self._bg_tasks: set = set()
 
     # ---------- 生命周期 ----------
 
@@ -259,6 +278,10 @@ class WsGatewayServer:
             except Exception:  # noqa: BLE001 - 关闭尽力而为
                 pass
         self._clients.clear()
+        # v1.6.19 A-LOW6：客户端已踢、监听已摘，残余广播任务无意义，取消收尾
+        for _t in list(self._bg_tasks):
+            _t.cancel()
+        self._bg_tasks.clear()
         if self._runner is not None:
             try:
                 await self._runner.cleanup()
@@ -469,10 +492,25 @@ class WsGatewayServer:
         # 解绑命令已发布 → 等网关处理 → remove_device 本地删除（登记手动
         # 删除列表，防止 002 自动发现把它复活）。
         await asyncio.sleep(GATEWAY_READY_DELAY)
+        # v1.6.19（第六轮审计 A-MED2）：sleep 是让出点——期间该 entry 可能
+        # 被 reload/删除（另一会话 set_token 持久化即触发 reload），旧
+        # manager 在 unload 时被 cleanup 清空 devices，拿旧引用 remove_device
+        # 会整体 no-op（不登记手动删除名单、不清映射），新 manager 又按映射
+        # 回填设备 → 幽灵设备复活，恰是 F1 要消灭的形态。必须重解析。
+        data2 = self._find_entry(gw_sn)
+        manager2 = data2["device_manager"] if data2 else None
+        if manager2 is None:
+            # 条目已整体卸载/删除：设备随条目消失，结果等价于删除成功
+            _LOGGER.info("WS unbind: 条目 %s 已卸载，本地删除随条目完成", gw_sn)
+            return {"type": "unbind_ack", "ok": True}
         try:
-            await manager.remove_device(dev_sn)
-        except Exception:  # noqa: BLE001 - 与按钮流程同款尽力而为
+            await manager2.remove_device(dev_sn)
+        except Exception:  # noqa: BLE001
+            # 本地删除失败不再谎报 ok（v1.6.17 修复自己立的"如实 ack"原则，
+            # 此前唯独这一处例外）：设备下次 get_devices 仍会出现，小程序
+            # 需要真实结果来提示用户。
             _LOGGER.error("WS unbind 本地删除设备失败: %s", dev_sn, exc_info=True)
+            return {"type": "unbind_ack", "ok": False, "msg": "local delete failed"}
         return {"type": "unbind_ack", "ok": True}
 
     async def _cmd_set_token(self, msg: Dict[str, Any]) -> Dict[str, Any]:
@@ -492,24 +530,37 @@ class WsGatewayServer:
         return {"type": "set_token_ack", "ok": True, "msg": "token updated"}
 
     async def _persist_token(self, new_token: str, prev_token: str) -> None:
-        """把新令牌写入主控 entry options；写失败回滚内存令牌——固件
-        NVS 写失败即回滚运行时令牌（app_ws_gateway.c :634-650），保证
-        "内存 == 持久化"。插件若只告警不回滚，会形成"小程序已存新令牌、
-        HA 重启后回退旧令牌"的永久 401 漂移（联审 F6 定案）。"""
+        """把新令牌写入主控 entry options。三种结局都保证"内存==持久化"：
+        ①写入/命中成功 → 回灌内存（A-MED3：本任务排队期间 ensure 热同步可能
+        用旧 options 覆写内存，成功路径必须把内存夺回来）；
+        ②抛异常 → 回滚内存（联审 F6 定案，固件 NVS 写失败同款语义）；
+        ③一个可写 enabled 条目都没命中 → 同样回滚（v1.6.19 D-F3：旧写法
+        循环空转正常结束不回滚，"小程序已存新令牌、HA 重启回退旧令牌"的
+        永久 401 漂移从这条路漏出去）。"""
+        wrote = False
         try:
             for entry in self.hass.config_entries.async_entries(DOMAIN):
                 options = dict(entry.options or {})
-                if options.get(CONF_WS_GATEWAY_ENABLED, DEFAULT_WS_GATEWAY_ENABLED):
-                    if options.get(CONF_WS_GATEWAY_TOKEN, DEFAULT_WS_GATEWAY_TOKEN) == new_token:
-                        return
+                if not options.get(CONF_WS_GATEWAY_ENABLED, DEFAULT_WS_GATEWAY_ENABLED):
+                    continue
+                if options.get(CONF_WS_GATEWAY_TOKEN, DEFAULT_WS_GATEWAY_TOKEN) != new_token:
                     options[CONF_WS_GATEWAY_TOKEN] = new_token
                     self.hass.config_entries.async_update_entry(entry, options=options)
                     _LOGGER.info("WS 网关令牌已持久化到集成选项（条目 %s）", entry.entry_id)
-                    return
+                wrote = True
+                break
         except Exception as e:  # noqa: BLE001
             _LOGGER.error("WS 令牌持久化失败，回滚为旧令牌（与固件 NVS 写失败语义一致）: %s", e)
             if self._token == new_token:
                 self._token = prev_token
+            return
+        if not wrote:
+            _LOGGER.error("WS 网关无任何 enabled 条目可持久化令牌，回滚内存值（防重启回退漂移）")
+            if self._token == new_token:
+                self._token = prev_token
+            return
+        # A-MED3 写后回灌：确保内存令牌与本任务落盘的 options 一致
+        self._token = new_token
 
     # ---------- 主动推送 ----------
 
@@ -520,7 +571,14 @@ class WsGatewayServer:
         payload = self._device_update_payload(gateway_sn, device_sn)
         if payload is None:
             return
-        self.hass.async_create_task(self._broadcast(payload))
+        # v1.6.19（第六轮审计 A-LOW6）：任务登记进 _bg_tasks 由 async_stop
+        # 统一取消（消灭 destroyed-pending 尾噪）。同设备事件的多任务先后
+        # 顺序无需额外排队：aiohttp≥3.10 每个 WebSocketResponse 自带
+        # _send_lock（FIFO 等待），任务以事件产生顺序进入等待队列，帧序
+        # 与事件序一致（HA 2026.x 锁定的 aiohttp 版本远高于 3.10）。
+        task = self.hass.async_create_task(self._broadcast(payload))
+        self._bg_tasks.add(task)
+        task.add_done_callback(self._bg_tasks.discard)
 
     def _device_update_payload(self, gateway_sn: str, device_sn: str) -> Optional[Dict[str, Any]]:
         data = self._find_entry(gateway_sn)
@@ -579,11 +637,19 @@ class WsGatewayServer:
         # 瞬时超 4。用预约计数把在途握手计入占位，逼近固件原子语义。
         self._pending_handshakes += 1
         try:
+            # v1.6.19（第六轮审计 A-LOW5）：递减移入 finally——旧写法只在
+            # except Exception 里减，而 runner cleanup 超时强拆/STOP 级联取消
+            # 抛出的是 CancelledError（BaseException 子类，except Exception
+            # 捕不到），预约计数只增不减，攒满 WS_MAX_CLIENTS 后本实例对新
+            # 连接永久 503 直到进程重启。
             await ws.prepare(request)
         except Exception as e:  # noqa: BLE001
             _LOGGER.warning("WS 握手完成失败: %s", e)
             self._pending_handshakes -= 1
             return ws
+        except BaseException:
+            self._pending_handshakes -= 1
+            raise
         self._pending_handshakes -= 1
         self._clients.add(ws)
         _LOGGER.info("小程序 WS 已连接（来源 %s，在线 %d/%d）",

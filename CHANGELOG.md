@@ -3,6 +3,84 @@
 所有版本变更记录在此文件中。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.6.19] - 2026-09-04
+
+### 变更（镜像主源回退 ghcr.nju.edu.cn —— v1.6.18 方案实测翻车纠偏）
+
+v1.6.18 把主源切到 ghcr.1ms.run（热缓存 5MB/s），发版当日实测打脸：1ms 是
+多边缘 LB，对**新 tag 冷缓存**的各边缘同步完成前返回 404，200/404 按边缘
+闪断、分钟~小时级自愈——"发版后首装"恰是它最不可用的窗口，warm-mirrors
+预热也只能打到部分边缘。nju 为同步 pull-through：慢（42MB 数分钟）但回源
+确定性 200。首装体验"慢而稳"优于"快而随机失败"，主源回退 nju；1ms 降级为
+手动快通道（老 tag 已缓存后求快可在加载项配置「镜像(Image)」覆盖）。
+README FAQ 同步把 v1.6.18"预热消掉冷缓存概率"的过度承诺改为如实描述。
+
+### 修复（第六轮四路并行审计：MQTT 核心 / 实体与配置 / 基础设施 / WS 契约）
+
+**崩溃与毒报文（HIGH）**
+- `mqtt_handler`：显式 `"data": null` 报文会让 001 处理在 ack 前抛
+  AttributeError → 网关无限重传毒报文；dispatch 入口统一归一化
+  （非 dict → `{}`+告警），一处收口保护全部 ctype 分支。
+- 电压解析 `1e999` → `float("inf")` 合法解析后 `int(inf)` 抛
+  OverflowError——三处电压点 + `_as_int` + WS 视图 battery 全部加
+  `math.isfinite` 判式与 OverflowError 捕获；r_travel/speed/strength
+  四个 int 解析点同步加捕。
+- `handle_gateway_response` 增加 64KB 入站载荷上限（防畸形超大 JSON 打满
+  CPU/内存的 DoS 面）。
+
+**生命周期与状态一致性（MED）**
+- `_closing` 闩锁：cleanup 让出点期间重连成功路径不再复活
+  `_check_gateway_timeout` 循环（泄漏 task）。
+- WS `_cmd_unbind`：sleep 让出后**重解析**条目（reload 竞态下旧 manager
+  已清空 devices，remove_device 整体 no-op → 幽灵设备复活）；本地删除
+  失败如实回 `ok:false`（原唯一谎报点）。
+- WS `_persist_token`：写成功后回灌内存令牌（热同步覆写窗口）；一个
+  enabled 条目都没命中时也回滚内存（原"空转正常结束"路径=静默不持久化，
+  小程序已存新令牌/重启回退旧令牌的 401 漂移从此路漏出）。
+- 配置流"忽略"按钮整体空转实锤：HA ignore_flow **另起新流**只带原流
+  unique_id，旧实现读 `self.context`（新流里恒无 gateway_sn）→ 忽略永不
+  生效、重启卡片复活。发现流补 `async_set_unique_id`，ignore 步按
+  user_input→context 顺序取 SN 并执行 async_ignore_gateway。
+- `add_gateway`（选项流）三连修：create_entry(data={}) 会清空条目全部
+  options（用户配过的 WS 端口/令牌被抹）→ 原样保留；显式 reload 与
+  update-listener 双路径重载 → 删显式；顺手写 unique_id（撞车按已配置
+  回显）。
+- `persist.py` 内层类型过滤：mapping 值非字符串（base_entity .lower()
+  炸）、setpoints 值非 dict（number 实体 __init__ 炸→整平台 setup 失败）
+  两类手工编辑/半损坏脏数据逐键丢弃+告警。
+- cover `is_closed` 接入 sensor 同款 15 分钟时效判据（SENSOR_TIMEOUT_
+  MINUTES）：网关长期失联不再永久冻结最后已知值与 sensor 矛盾显示；重启
+  恢复快照获 15 分钟信任窗（与 v1.6.8 恢复设计自洽）。
+
+**健壮性与口径（LOW）**
+- 握手 `ws.prepare()` 的计数递减移入 finally：CancelledError（STOP 级联/
+  runner 强拆）不再泄漏预约槽，攒满 4 个即本实例永久 503 的路径封死。
+- 设备状态广播 task 登记 `_bg_tasks`、stop 时统一取消（"Task was
+  destroyed" 尾噪；帧序由 aiohttp _send_lock FIFO 保证，无需额外排队）。
+- `set_position/speed/strength` 非法参数从"静默按 0 下发"改为拒绝
+  （0="关窗"是反向动作，误执行比失败更糟）。
+- 003 绑定回执 id 匹配前 `_norm_cmd_id` 归一（JSON 浮点 id `12.0` 与登记
+  键 `12` 失配丢回执）。
+- cover/number/sensor 移除路径补 unique_id 优先定位（button v1.6.3 定案
+  同款）：配对后秒级解绑时实体未获派 entity_id 不再悬挂注册表条目、
+  重配对永久缺实体的竞态封死。
+- 无 SN 安装分支查重（连点"下一步"不再造多个空条目）+ ensure 任意异常
+  不再打穿"不阻塞安装"承诺；WS 端口选项拒绝本栈保留口 2022/8099/8123/
+  1883（撞口 bind 失败属静默失联）；strings/zh-CN 补 invalid_ws_token、
+  ws_port_reserved、required、already_configured 四条缺失文案。
+- `start_pairing` duration schema 收 10-300s（服务调用与 UI 选择器同界；
+  003 报文不携带时长，纯本地兜底）；`refresh_devices`/
+  `check_gateway_status` 描述纠偏为如实语义（空操作/仅日志，行为未变）。
+- CI warm-mirrors 四修：OCI 平台过滤 `arm64`≠`aarch64`（旧过滤永不命中
+  落 ms[0] 可能取到 attestation 摘要）、MAN/BLOBS 判空防"ok=0 fail=0"
+  假绿、计数按 arch 归零、1ms 改单轮+300s 一次性复查（密集短重试对
+  分钟级闪断无效且反触发限流）。
+
+**文档**
+- `CLAUDE.md` 命令表线值勘误：open/close/stop 实为 "100"/"0"/"101"
+  （字符串；旧表 0/1/2 是废弃固件时代记载，v1.6.17 已对照固件实证）。
+- ws_gateway 文档字符串纠偏（set_token 不触发 reload，热同步语义）。
+
 ## [1.6.18] - 2026-09-03
 
 ### 修复（Web UI 侧边栏启动失败：nginx 抢绑宿主 80——v1.6.4 半截工程实锤）

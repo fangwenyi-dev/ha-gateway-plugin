@@ -79,8 +79,18 @@ async def load_persistent_data(hass: HomeAssistant) -> None:
     if 'device_to_gateway_mapping' in data:
         mapping = data['device_to_gateway_mapping']
         if isinstance(mapping, dict):
-            hass.data[DOMAIN][DEVICE_TO_GATEWAY_MAPPING] = mapping
-            _LOGGER.info("已加载设备到网关映射表，共 %d 个设备", len(mapping))
+            # v1.6.19（第六轮审计 B-MED2）：校验下探一层——手工编辑/半写
+            # 损坏可以让 {"<devSn>": 50} 这类"值非网关SN字符串"的条目混进
+            # 映射；下游 base_entity（.lower()）与 device_manager
+            # transfer_device 全部 AttributeError，波及该设备 cover/按钮的
+            # 控制路径。与 v1.6.12 #10 同法：脏条目丢弃+告警。
+            clean = {k: v for k, v in mapping.items()
+                     if isinstance(k, str) and isinstance(v, str)}
+            if len(clean) != len(mapping):
+                _LOGGER.warning("映射表含 %d 条键/值非字符串脏条目，已丢弃",
+                                len(mapping) - len(clean))
+            hass.data[DOMAIN][DEVICE_TO_GATEWAY_MAPPING] = clean
+            _LOGGER.info("已加载设备到网关映射表，共 %d 个设备", len(clean))
         else:
             _LOGGER.error(
                 "device_to_gateway_mapping 字段类型非法（%s），已丢弃",
@@ -105,8 +115,19 @@ async def load_persistent_data(hass: HomeAssistant) -> None:
     # 设备参数设定值（速度/力度等），旧版文件无此字段时保持空表
     hass.data[DOMAIN].setdefault(DEVICE_SETPOINTS, {})
     if 'device_setpoints' in data and isinstance(data['device_setpoints'], dict):
-        hass.data[DOMAIN][DEVICE_SETPOINTS] = data['device_setpoints']
-        _LOGGER.info("已加载设备参数设定值，共 %d 个设备", len(data['device_setpoints']))
+        # v1.6.19（第六轮审计 B-MED2）：内层必须是"设备SN→参数dict"。
+        # 混入标量值（{"500534...": 50}）时 number._get_setpoint 的
+        # setpoints.get(sn, {}).get(param) 在实体 __init__ 路径抛
+        # AttributeError，number 启动循环无 try → 整个 number 平台 setup
+        # 失败（一坏俱坏）。逐键过滤内层。
+        sp_raw = data['device_setpoints']
+        sp = {k: v for k, v in sp_raw.items()
+              if isinstance(k, str) and isinstance(v, dict)}
+        if len(sp) != len(sp_raw):
+            _LOGGER.warning("setpoints 含 %d 条内层非对象脏条目，已丢弃",
+                            len(sp_raw) - len(sp))
+        hass.data[DOMAIN][DEVICE_SETPOINTS] = sp
+        _LOGGER.info("已加载设备参数设定值，共 %d 个设备", len(sp))
 
 
 async def save_persistent_data(hass: HomeAssistant) -> None:

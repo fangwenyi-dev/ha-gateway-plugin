@@ -24,6 +24,7 @@ from .const import (
     DEFAULT_WS_GATEWAY_TOKEN,
     WS_TOKEN_MAX_LEN,
     WS_TOKEN_MIN_LEN,
+    WS_RESERVED_PORTS,
 )
 from .mqtt_handler import WindowControllerMQTTHandler
 from .mqtt_bootstrap import ensure_mqtt_connection, has_bootstrap_marker
@@ -156,10 +157,21 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         )
             else:
                 # ---- 无 SN：直接完成安装，网关待后续添加 ----
+                # v1.6.19（第六轮审计 B-LOW8）：查重——本分支不设 unique_id
+                # 也没有扫描，原实现可连点 N 次"下一步"造出 N 个"待配置"
+                # 条目（各带心跳监听）。引导性空条目全局只允许一个，
+                # 添加真实网关走「集成选项 → 添加网关」。
+                for entry in self.hass.config_entries.async_entries(DOMAIN):
+                    if not entry.data.get(CONF_GATEWAY_SN):
+                        return self.async_abort(reason="already_configured")
                 try:
                     await ensure_mqtt_connection(self.hass)
                 except ConfigEntryNotReady:
                     pass  # MQTT 稍后就绪即可，不阻塞安装
+                except Exception as e:  # noqa: BLE001
+                    # v1.6.19（第六轮审计 B-LOW9）：原只捕 ConfigEntryNotReady，
+                    # ensure 的意外异常直接冒泡打穿"不阻塞安装"的自我承诺
+                    _LOGGER.warning("MQTT 引导异常（无 SN 安装不阻塞，继续创建）: %s", e)
 
                 return self.async_create_entry(
                     title="慧尖网关",
@@ -341,16 +353,29 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             })
             
             # 对于发现的设备，Home Assistant会自动显示"忽略"按钮
-            # 我们只需要确保流程能够正确处理
+            # v1.6.19（第六轮审计 B-MED1）：必须给发现流设 unique_id——HA 的
+            # "忽略"按钮走 config_entries/ignore_flow 命令，它【另起新流】并只
+            # 把原流 context 的 unique_id 塞进新流 user_input；不设这里，ignore
+            # 步骤拿不到 SN（旧实现读 self.context，新流 context 里根本没有
+            # gateway_sn）→ 忽略整体空转，重启后卡片复活。
+            await self.async_set_unique_id(gateway_sn.lower(), raise_on_progress=False)
+            self._abort_if_unique_id_configured()
             return await self.async_step_user()
     
     async def async_step_ignore(self, user_input: Optional[Dict[str, Any]] = None) -> FlowResult:
         """Handle ignore step"""
-        _LOGGER.info("忽略网关: %s", self.context.get("gateway_sn"))
-        
-        # 调用忽略网关的方法
-        gateway_sn = self.context.get("gateway_sn")
+        # v1.6.19（第六轮审计 B-MED1）：SN 来源 = 新 ignore 流的 user_input
+        # （HA core 塞 {"unique_id": 原流context.unique_id, "title": ...}），
+        # 兼容保留 context 直读（同流续办形态）。旧写法只读 self.context →
+        # 恒 None → async_ignore_gateway 永不执行，"忽略"形同虚设。
+        gateway_sn = (
+            (user_input or {}).get("unique_id")
+            or (user_input or {}).get("gateway_sn")
+            or self.context.get("gateway_sn")
+        )
+        _LOGGER.info("忽略网关: %s", gateway_sn)
         if gateway_sn:
+            await self.async_set_unique_id(gateway_sn.lower(), raise_on_progress=False)
             from .discovery import async_ignore_gateway
             await async_ignore_gateway(self.hass, gateway_sn)
         
@@ -646,17 +671,34 @@ class OptionsFlow(config_entries.OptionsFlow):
                         gateway_name = f"{DEFAULT_GATEWAY_NAME} {gateway_sn[-4:]}"
 
                     # 更新 config entry DATA（不是 options）
+                    # v1.6.19（第六轮审计 B-LOW7）三处纠偏：
+                    # ① 顺手写 unique_id（引导性空条目原本无 uid，补上让
+                    #   HA 原生查重/忽略对这条生效）；uid 撞车抛 ValueError
+                    #   时按"已配置"回显；
+                    # ② 删除显式 async_reload——条目 setup 时注册了 update
+                    #   listener，async_update_entry 本身就会触发整条目重载，
+                    #   原双路径 = 双重载（MQTT 重订阅、实体瞬断两次）；
+                    # ③ create_entry(data={}) 会把条目 options 整体清空
+                    #   （options 流的 create_entry 写入的就是 options！），
+                    #   用户在选项页配过的 WS 端口/令牌被抹掉——改为原样保
+                    #   存当前 options。
                     new_data = {
                         **self._config_entry.data,
                         CONF_GATEWAY_SN: gateway_sn,
                         CONF_GATEWAY_NAME: gateway_name,
                     }
-                    self.hass.config_entries.async_update_entry(
-                        self._config_entry, data=new_data
-                    )
-                    # 重新加载以触发 async_setup_entry
-                    await self.hass.config_entries.async_reload(self._config_entry.entry_id)
-                    return self.async_create_entry(title="", data={})
+                    try:
+                        self.hass.config_entries.async_update_entry(
+                            self._config_entry,
+                            data=new_data,
+                            unique_id=gateway_sn.lower(),
+                        )
+                    except ValueError:
+                        errors[CONF_GATEWAY_SN] = "already_configured"
+                    else:
+                        return self.async_create_entry(
+                            title="", data={**self._config_entry.options}
+                        )
 
         return self.async_show_form(
             step_id="add_gateway",
@@ -699,6 +741,13 @@ class OptionsFlow(config_entries.OptionsFlow):
                 or any(c not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-" for c in token)
             ):
                 errors[CONF_WS_GATEWAY_TOKEN] = "invalid_ws_token"
+            elif user_input.get(CONF_WS_GATEWAY_PORT) in WS_RESERVED_PORTS:
+                # v1.6.19（第六轮审计 B-LOW10）：本栈保留口——2022=内置
+                # Mosquitto、8099=Web UI nginx ingress、8123=HA core、
+                # 1883=外部 broker 惯用口。撞上后 bind 失败只进日志，
+                # 小程序侧恒 Connection refused 静默失联（与"改端口=失联"
+                # 同族坑），在表单源头拒绝。
+                errors[CONF_WS_GATEWAY_PORT] = "ws_port_reserved"
             else:
                 user_input = {**user_input, CONF_WS_GATEWAY_TOKEN: token}
                 return self.async_create_entry(title="", data=user_input)

@@ -13,7 +13,7 @@ start_pairing:
         text:
     duration:
       name: 持续时间
-      description: 配对模式持续时间（秒）
+      description: 本地兜底超时（秒，10-300）。协议 003 报文不携带时长，此项只决定 HA 侧等待配对确认多久后放弃；网关自身配对窗口按固件时序关闭
       default: 60
       selector:
         number:
@@ -24,7 +24,7 @@ start_pairing:
 
 refresh_devices:
   name: 刷新设备
-  description: 触发网关重新发现已配对的设备
+  description: 兼容性保留的空操作服务——协议规定设备列表由网关 002/005 主动上报驱动，HA 无法触发重新发现；本调用仅记录日志（v1.6.19 描述纠偏，行为未变）
   fields:
     device_id:
       name: 设备ID
@@ -57,7 +57,7 @@ set_position:
 
 check_gateway_status:
   name: 检查网关状态
-  description: 检查网关的在线状态和连接情况（device_id 与 gateway_sn 至少提供一个）
+  description: 查询并记录网关在线状态（依据最近上报时间判定），不改变任何实体/连接状态；结果写入日志（device_id 与 gateway_sn 至少提供一个）
   fields:
     device_id:
       name: 设备ID
