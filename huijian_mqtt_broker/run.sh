@@ -303,12 +303,35 @@ server {
 }
 NGINXEOF
 
+# v1.6.18 运行期兜底：alpine nginx 包自带 http.d/default.conf（listen 80
+# default_server + listen [::]:80）。本加载项 host_network，该默认站会抢绑
+# 宿主 80——宿主 80 空闲时是"插件白占 80"，被占时（NAS 常见：DSM 反代/其他
+# 容器）bind 失败打死整个 nginx master，8099 侧边栏连坐全挂（2026-09-02 实锤）。
+# Dockerfile 已 rm，这里再防基础镜像/apk 升级带回同名文件，顺带清掉其他
+# 监听 80 的杂散 conf（本插件只应监听 8099）。
+for f in /etc/nginx/http.d/*.conf; do
+    [ -e "$f" ] || continue
+    [ "$f" = "/etc/nginx/http.d/ingress.conf" ] && continue
+    if grep -Eq '^[[:space:]]*listen[[:space:]]+(\[::\]:)?80([[:space:];]|$)' "$f"; then
+        echo "[Ingress] 移除杂散默认站 conf: $f"
+        rm -f "$f"
+    fi
+done
+
 # v1.6.4：不再 2>/dev/null 吞启动错误——nginx 起不来最常见是 8099 被占/权限，
 # 旧写法把真实报错丢了，只剩 nginx -t"配置语法正常"的假象，Web UI 静默瘫痪
+# v1.6.18：bind 失败先试一次兜底重启（宿主 80 服务重启竞态窗口），仍失败则
+# 打印占用诊断，不再只留 syntax ok 假象
 nginx || {
-    echo "[Ingress] nginx 启动失败（错误见上），侧边栏可能不可用"
-    # 追加配置语法测试辅助定位（语法问题与运行时问题分开看）
-    nginx -t 2>&1 || true
+    echo "[Ingress] nginx 首启失败，5 秒后重试一次…"
+    sleep 5
+    nginx && echo "[Ingress] nginx 重试启动成功" || {
+        echo "[Ingress] nginx 启动失败（错误见上），侧边栏可能不可用"
+        # 追加配置语法测试辅助定位（语法问题与运行时问题分开看）
+        nginx -t 2>&1 || true
+        # 端口占用现场取证（busybox netstat 基础镜像自带）
+        netstat -ltnp 2>/dev/null | grep -E '[:.](80|8099)[[:space:]]' || true
+    }
 }
 
 # ---------- 3b. 配置并启动 mDNS 广播 ----------

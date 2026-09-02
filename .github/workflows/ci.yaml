@@ -238,6 +238,66 @@ jobs:
           fi
 
 
+  # ========== 2.5 国内镜像站缓存预热（v1.6.18）==========
+  # Supervisor 的 image 只支持单一 URL、无多源故障转移，客户安装快慢取决于
+  # config.yaml 所指透传站的缓存冷热（冷缓存=现场回源 ghcr.io，慢且偶发 404）。
+  # 发版后立即用本作业把新版本双架构全部 blobs 经各镜像站完整拉一遍，强制
+  # 边缘缓存回源命中——首装客户直接命中热缓存。best-effort：continue-on-error
+  # 镜像站抖动不阻塞 Release（ghcr 源站才是唯一真身，预热只优化体验）。
+  # 注：latest tag 与本版本 tag 指向同一批 blobs，预热版本 tag 即覆盖。
+  warm-mirrors:
+    name: Warm CN mirrors
+    needs: [prepare, manifest]
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 30
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      OWNER: ${{ github.repository_owner }}
+    steps:
+      - name: Pre-pull all blobs via ghcr.1ms.run & ghcr.nju.edu.cn
+        run: |
+          set -u
+          IDX_ACCEPT="application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json"
+          MAN_ACCEPT="application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json"
+          token_of() { # $1=repo $2=realm(空=匿名) $3=service
+            [ -z "$2" ] && return 0
+            curl -fsS -m 15 "$2?service=$3&scope=repository:${OWNER}/$1:pull" \
+              | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d.get("token") or d.get("access_token",""))' || true
+          }
+          warm_via() { # $1=reg $2=realm $3=service；返回码=是否全绿
+            local REG="$1" REALM="$2" SVC="$3" OK=0 FAIL=0 BYTES=0
+            for ARCH in amd64 aarch64; do
+              local REPO="${ARCH}-huijian-mqtt-broker" TOK
+              TOK=$(token_of "$REPO" "$REALM" "$SVC")
+              local -a HDRS=()
+              [ -n "$TOK" ] && HDRS+=(-H "Authorization: Bearer $TOK")
+              local IDX="" TRY
+              for TRY in 1 2 3; do
+                IDX=$(curl -fsS -m 60 "${HDRS[@]}" -H "Accept: $IDX_ACCEPT" "https://$REG/v2/$REPO/manifests/$VERSION" 2>/dev/null || true)
+                [ -n "$IDX" ] && break
+                echo "  [$REG] $REPO manifest 冷缓存/抖动，20s 后重试 $TRY …"; sleep 20
+              done
+              [ -z "$IDX" ] && { echo "  [$REG] ❌ $REPO manifest 不可达"; FAIL=$((FAIL+1)); continue; }
+              local MDIG MAN BLOBS
+              MDIG=$(printf '%s' "$IDX" | python3 -c 'import json,sys;i=json.load(sys.stdin);ms=i.get("manifests");print(next((m["digest"] for m in ms if (m.get("platform") or {}).get("architecture")==sys.argv[1]), ms[0]["digest"]) if ms else "")' "$ARCH" 2>/dev/null || true)
+              MAN=$(curl -fsS -m 60 "${HDRS[@]}" -H "Accept: $MAN_ACCEPT" "https://$REG/v2/$REPO/manifests/${MDIG:-$VERSION}")
+              BLOBS=$(printf '%s' "$MAN" | python3 -c 'import json,sys;m=json.load(sys.stdin);print(m["config"]["digest"]);[print(l["digest"]) for l in m.get("layers",[])]')
+              local R CODE SZ B
+              for B in $BLOBS; do
+                R=$(curl -s -o /dev/null -m 600 "${HDRS[@]}" -H "Accept: application/vnd.oci.image.layer.v1.tar+gzip" -w "%{http_code} %{size_download}" -L "https://$REG/v2/$REPO/blobs/$B" || echo "000 0")
+                CODE="${R% *}"; SZ="${R#* }"
+                if [ "$CODE" = "200" ]; then OK=$((OK+1)); BYTES=$((BYTES+SZ)); else FAIL=$((FAIL+1)); echo "  [$REG] ⚠️ blob ${B:0:19} HTTP $CODE"; fi
+              done
+              echo "  [$REG] $REPO:$VERSION 预热完成 (ok=$OK fail=$FAIL $((BYTES/1024/1024))MB)"
+            done
+            [ "$FAIL" -eq 0 ]
+          }
+          warm_via ghcr.1ms.run "https://ghcr.1ms.run/openapi/v1/auth/token" ghcr.1ms.run \
+            || echo "::warning title=1ms.run 预热未全绿::主源可能仍冷缓存，客户首装或回源慢；处理见加载项 README FAQ（手动换源 nju/ghcr.io）"
+          warm_via ghcr.nju.edu.cn "" "" \
+            || echo "::warning title=nju 备用源预热未全绿::仅影响手动换源场景，不阻塞发布"
+
   # ========== 3. 创建 GitHub Release ==========
   release:
     name: Release

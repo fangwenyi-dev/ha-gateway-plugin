@@ -104,11 +104,19 @@ https://github.com/fangwenyi-dev/ha-gateway-plugin
 
 ### Q: 安装很慢/卡在镜像拉取？
 
-插件镜像发布在 GitHub 容器 Registry（ghcr.io），国内直连很慢。本仓库已将
-安装源指向南京大学 ghcr 透传镜像（`ghcr.nju.edu.cn`，国内秒级拉取，约
-42MB）。若该镜像偶发不可用，在加载项详情页「配置」标签打开高级字段中的
-**镜像（Image）覆盖**，填 `ghcr.io/fangwenyi-dev/{arch}-huijian-mqtt-broker`
-（需自备 GitHub 网络加速）即可换回源站安装。
+**用 Gitee 仓库装也慢？** 安装分两段：① 商店元数据走你添加的仓库地址（Gitee，<1MB 秒级）；② 真正的 42MB 运行**镜像**必须从容器 Registry 拉取——Gitee 没有镜像仓库服务，这一段与商店源地址无关，v1.6.17 及之前指向境外 ghcr.io 直连，国内 ~80KB/s 就是"特别慢"的根源。
+
+自 **v1.6.18** 起主源指向国内加速镜像 `ghcr.1ms.run`（毫秒镜像，实测 ~5MB/s，安装约十几秒），且 **CI 发版时自动预热各镜像站缓存**，新版本首装也不撞冷缓存。仍慢/失败按序自助：
+
+1. **刷新商店缓存**（最常见原因）：旧商店元数据里 image 还写着 ghcr.io。到 **设置 → 加载项 → 加载项商店 → 右上角 ⋮ → 检查更新**，重新进入详情页再安装/升级。
+2. **手动换源**：Supervisor 不支持多地址自动故障转移，但可在加载项详情页「配置」标签 → 高级 → **镜像（Image）覆盖** 填备用域名（`{arch}` 按你设备填 amd64 或 aarch64）：
+   - `ghcr.nju.edu.cn/fangwenyi-dev/{arch}-huijian-mqtt-broker`（南京大学透传，速度波动）
+   - `ghcr.io/fangwenyi-dev/{arch}-huijian-mqtt-broker`（源站，需自备网络加速）
+3. 若 `1ms.run` 整体不可用（第三方免费服务，存在停运风险），仓库会把主源切到下一个可用镜像站并发版，更新商店即可。
+
+### Q: 侧边栏打不开，日志报 `bind() to 0.0.0.0:80 failed (Address in use)`？
+
+v1.6.17 及之前的缺陷：镜像里 alpine nginx 自带默认站 `http.d/default.conf` 监听 80，插件开了 `host_network` 就真去绑**主机**的 80 端口；主机 80 被其他服务占用（NAS 群晖 DSM 反代等很常见）时整个 nginx 起不来，8099 侧边栏连坐。**升级到 v1.6.18 即修复**（构建期删除 + 运行期清扫双保险）。升级前临时自救：重启加载项碰运气（80 空闲的窗口能起来），或暂停主机上占用 80 的服务后重启本加载项。
 
 ### Q: 加载项页面报 "App huijian_mqtt_broker does not exist in the store"？
 

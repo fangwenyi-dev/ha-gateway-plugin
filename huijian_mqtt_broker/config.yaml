@@ -1,5 +1,5 @@
 name: 慧尖 LoRa 网关
-version: "1.6.17"
+version: "1.6.18"
 slug: huijian_mqtt_broker
 description: 慧尖开窗器 LoRa 网关一体化插件，内置 Mosquitto Broker + 网关集成，安装即用
 url: 'https://github.com/fangwenyi-dev/ha-gateway-plugin'
@@ -32,14 +32,27 @@ host_network: true
 # 仓库可见性】——public 仓库⇒包自动 public。旧包 private 是 8-25 仓库当天
 # 本地手工 docker push 创建所致（可见性创建时定死，后续推版本不改）。
 # 修复手段即：删包→CI 重建（无需任何人工网页点击）。
-# v1.6.16+ 安装加速定案（2026-09-02 用户实报：Gitee 仓库装插件仍慢）：
-# 仓库元数据走 Gitee 没问题，但镜像此前固定 ghcr.io（GitHub 容器 Registry，
-# 国内连接龟速/超时，即"用 gitee 却显示 github"的真相）。image 改指南京大学
-# 开源镜像站的 ghcr 透传代理，全链路实测：index/config/blob 匿名 200、
-# amd64+aarch64、latest 与历史 tag 全通（镜像本体仍只有一份，CI 照旧推
-# ghcr.io，nju 按需回源缓存，零 CI 改动）。若 nju 偶发不可用，可在加载项
-# 详情页"显示配置为 YAML/高级"改回 ghcr.io 同路径，或走源码构建（builds）。
-image: ghcr.nju.edu.cn/fangwenyi-dev/{arch}-huijian-mqtt-broker
+# v1.6.16 初版加速：image 改指南京大学透传 ghcr.nju.edu.cn。
+# v1.6.18 主源再切毫秒镜像（2026-09-02 用户实报"Gitee 装插件仍特别慢"，
+# 拨测重测定案：慢不在 Gitee——商店元数据 git 包 <1MB 秒级完成；真正的大头是
+# Supervisor 拉 42MB 运行镜像走容器 Registry，而 Gitee 没有镜像仓库服务，
+# 此步与商店源地址无关，这就是"用 gitee 却显示 github/卡死"的完整真相）。
+# 家宽同链路实测：ghcr.io 直连 ~84KB/s（全镜像≈8min 且常超时）；
+# nju 0.02~0.1MB/s 波动大，新 tag 冷缓存回源还偶发 404；
+# ghcr.1ms.run 4.6~5.2MB/s（全镜像≈10s），匿名 token 流程，双架构、
+# 版本号/latest/历史 tag 全链路 200。镜像本体仍单份推 ghcr.io，
+# 透传站按需回源缓存，零构建链改动。
+# 注：实测同 IP 短时间大量拉取（~150MB 测试流量）会令 1ms 进入数十分钟
+# 404 惩罚窗后自愈（疑单 IP 限流）；正常单次安装（42MB）不触发。故主源
+# 定 1ms.run、nju 列为第一备源；若某日 1ms 长期不可用，把 image 域名换回
+# ghcr.nju.edu.cn 即可（同路径，一行改动）。
+# CI 新增 warm-mirrors 作业：发版后自动经 1ms.run+nju 完整拉取新版本全部
+# blobs，把两家边缘缓存预热在发布环节，消掉客户首装撞冷缓存的概率。
+# 局限定案：Supervisor image 只支持单一 URL、无原生多源超时故障转移——
+# 镜像站故障时手动换源：加载项详情页「配置→高级→镜像(Image)」覆盖域名
+# （路径不变），优先级 ghcr.1ms.run → ghcr.nju.edu.cn → ghcr.io(源站需
+# 自备加速)；另商店元数据有缓存，改源/升级前先在商店 ⋮→检查更新刷新。
+image: ghcr.1ms.run/fangwenyi-dev/{arch}-huijian-mqtt-broker
 # v1.6.12（第五轮审计）：移除 ssl 挂载——全仓（run.sh/Dockerfile/mosquitto.conf/
 # 集成/Web）对 /ssl 零引用，broker 也未启用 TLS；与 v1.6.3 移除 hassio_api 时
 # 自立的"权限最小化：不需要就不声明"准则对齐（保留的 homeassistant_config:rw

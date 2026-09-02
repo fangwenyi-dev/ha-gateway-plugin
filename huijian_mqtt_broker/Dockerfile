@@ -54,7 +54,18 @@ COPY custom_components /data/custom_components
 COPY ingress.conf /etc/nginx/http.d/ingress.conf
 COPY www/ /usr/share/nginx/html/
 
-# 覆盖默认 nginx.conf，移除默认 server 块避免端口冲突
+# v1.6.18 事故修复：删除 nginx 包自带默认站。alpine nginx 的
+# /etc/nginx/http.d/default.conf 内含 `listen 80 default_server; listen [::]:80;`，
+# 而下方重写的 nginx.conf 以 `include /etc/nginx/http.d/*.conf` 拉全目录——
+# host_network 模式下该默认站会一直抢绑【宿主】80：宿主空闲时表现为插件悄悄
+# 占用 80（副作用），宿主 80 被其他服务占用时 bind 失败直接打死整个 nginx
+# master，连 8099 侧边栏一起瘫痪（2026-09-02 现场日志实锤）。旧注释"移除默认
+# server 块"只删了 nginx.conf 内嵌默认块，从未删过 http.d 这个文件——半截工程。
+# run.sh 另有运行期兜底扫描（防基础镜像/apk 升级带回同名文件）。
+RUN rm -f /etc/nginx/http.d/default.conf
+
+# 覆盖默认 nginx.conf（nginx.conf 本体默认 server 块亦随整体重写一并移除；
+# 端口冲突的真正防线是上方 rm + run.sh 运行期扫描）
 RUN echo 'user nginx;' > /etc/nginx/nginx.conf && \
     echo 'worker_processes auto;' >> /etc/nginx/nginx.conf && \
     echo 'error_log /dev/stderr warn;' >> /etc/nginx/nginx.conf && \

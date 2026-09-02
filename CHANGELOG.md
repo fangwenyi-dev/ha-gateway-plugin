@@ -3,6 +3,55 @@
 所有版本变更记录在此文件中。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.6.18] - 2026-09-03
+
+### 修复（Web UI 侧边栏启动失败：nginx 抢绑宿主 80——v1.6.4 半截工程实锤）
+
+现场日志（v1.6.17，2026-09-02）：`bind() to 0.0.0.0:80 failed (98: Address
+in use)` ×8 + `still could not bind()` → nginx master 直接退出，8099 连坐，
+侧边栏全挂；mosquitto/mDNS/集成一切正常。根因：alpine nginx 包自带
+`/etc/nginx/http.d/default.conf`（`listen 80 default_server; listen [::]:80;`），
+被重写版 nginx.conf 的 `include /etc/nginx/http.d/*.conf` 拉入，而
+host_network: true 使这个默认站一直绑的是**宿主** 80——宿主 80 空闲时表现为
+"插件白占 80"（NAS 部署副作用），被占时（DSM 反代等常态）bind 失败打死整个
+nginx。v1.6.4 的 Dockerfile 注释"移除默认 server 块"只删了 nginx.conf 内嵌
+默认块，从未删过 http.d 文件，属静默失效面（此前所有版本都带病）。
+
+- `Dockerfile`：构建期 `RUN rm -f /etc/nginx/http.d/default.conf` + 定案注释。
+- `run.sh`：启动期兜底清扫 http.d 中一切 `listen 80/[::]:80` 杂散 conf
+  （防基础镜像或 apk 升级带回）；nginx 失败改"5 秒重试一次"（宿主服务重启
+  竞态窗口）后再打印 `netstat` 占用取证，不再只留 syntax-ok 假象。
+- 回归钉桩 `tests/test_ingress_port80.py`：Dockerfile rm 行 / nginx.conf 重写
+  段零 listen / 清扫先于 nginx 启动 / 模板与 heredoc 仅监听 8099 / 失败路径
+  带重试与取证，共 7 项断言防复发。
+- README 新增「侧边栏打不开/bind 80」FAQ。
+
+### 改进（安装提速 v2：镜像主源切国内加速 + CI 镜像站自动预热）
+
+用户实报"用 Gitee 仓库在 HA 里装插件仍特别慢"。拨测定案：慢不在 Gitee——
+商店元数据 git 包 <1MB 秒级；真正大头是 Supervisor 拉 **42MB 运行镜像**走
+容器 Registry，而 **Gitee 无镜像仓库服务**，此步与商店源地址无关（v1.6.17
+及之前 image 指 ghcr.io 境外直连，家宽实测 ~84KB/s≈8 分钟且常超时）。
+
+- **家宽同链路实测对比**：ghcr.io ~84KB/s；v1.6.16 主源 ghcr.nju.edu.cn
+  0.02~0.1MB/s 波动大、新 tag 冷缓存回源偶发 404；**ghcr.1ms.run（毫秒
+  镜像）4.6~5.2MB/s，全镜像≈10s**，匿名 token 流程，双架构/版本/latest/
+  历史 tag 全链路验证 200；同 IP 短时间 ~150MB 测试级流量会触发其数十
+  分钟 404 惩罚窗（疑单 IP 限流）后自愈，正常单次安装 42MB 不触发——
+  主源仍定 1ms.run，nju 列第一备源，README FAQ 给出换源步骤。
+- `config.yaml`：`image:` 主源切 `ghcr.1ms.run/fangwenyi-dev/{arch}-
+  huijian-mqtt-broker`；注释定案 Supervisor **image 单 URL、无原生多源
+  故障转移**，手动换源三级（1ms.run → nju.edu.cn → ghcr.io）与商店
+  "检查更新"刷新缓存前置步骤全部写入注释与 README FAQ。
+- **CI 新增 `warm-mirrors` 作业**（needs manifest、continue-on-error 不
+  阻塞发布）：每次发版自动把新版本双架构全部 blobs 经 1ms.run 与 nju
+  完整拉一遍预热边缘缓存——把"多路径"落到发布环节：客户无论走主源还是
+  手动换到备用源，首装即热缓存，消掉冷缓存 404/慢回源概率。
+- 加载项 README FAQ 重写：讲清"Gitee 商店源 ≠ 镜像下载源"的两段式下载，
+  给出检查更新→手动换源→等仓库切换主源三步自助恢复路径。
+- 版本同步 bump：config.yaml / version.json / index.html / manifest.json
+  → 1.6.18（镜像本体不变，Supervisor 按新版本号才会重新拉取换源后的镜像）。
+
 ## [1.6.17] - 2026-09-03
 
 ### 修复（小程序 ↔ 插件联审：四路独立审计 × 一手复核定案的 WS 联动缺陷批）
