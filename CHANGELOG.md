@@ -3,6 +3,23 @@
 所有版本变更记录在此文件中。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.6.16] - 2026-09-02
+
+### 优化（升级引导补「商店断联」排障指引）
+
+**背景**：客户点击 Web UI「去加载项页面更新」跳转
+`/hassio/addon/huijian_mqtt_broker` 后报
+`Error fetching addon info: App huijian_mqtt_broker does not exist in the store`。
+经 Supervisor 源码定案（`supervisor/exceptions.py: StoreAppNotFoundError`、
+`supervisor/apps/app.py: app_store = store.get(slug)`）：新版 Supervisor 的 App
+架构中，已安装加载项的详情页与「更新」接口均依赖商店条目；若安装后仓库被删除
+或商店刷新失败（国内访问 GitHub 不通常见），即出现该报错——插件本身运行正常，
+属商店侧断联，非本插件 bug。
+
+- `www/index.html` 升级卡提示：补全恢复路径文案（重新添加仓库 URL 并更新商店）
+- `doUpgrade()` confirm 文案同步补一行排障提示；注释块记录 App 架构的 store 依赖定案
+- 版本号四点同步 1.6.15 → 1.6.16（config.yaml / version.json / index.html / manifest.json）
+
 ## [1.6.15] - 2026-09-02
 
 ### 新增（小程序局域网直连 · 路线 A：集成内置 WS 网关，与 Matter 固件 1:1 协议对等）

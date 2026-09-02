@@ -440,7 +440,7 @@
     </div>
 
     <script>
-        let CURRENT_VERSION = '1.6.15';
+        let CURRENT_VERSION = '1.6.16';
         const DOMAIN = 'window_controller_gateway';
 
         // v1.6.3：页头/页脚的初始版本号不再硬编码——脚本在 body 末尾，
@@ -1287,7 +1287,11 @@
                         '<div style="margin-top:10px;font-size:12px;color:var(--text-muted);white-space:pre-wrap;">' + escapeHtml(truncatedBody) + '</div>' +
                         '<div style="margin-top:8px;font-size:12px;color:var(--text-muted);">' +
                         '提示：Supervisor 安全设计禁止插件通过 API 自我更新（一键升级会返回 403/400）。' +
-                        '请使用上方按钮跳转到 Supervisor 加载项页面，以管理员身份点击「更新」。</div>';
+                        '请使用上方按钮跳转到 Supervisor 加载项页面，以管理员身份点击「更新」。' +
+                        '<br>若跳转后提示「App huijian_mqtt_broker does not exist in the store」，' +
+                        '说明本加载项已与加载项商店失去关联（安装后被删除仓库，或商店刷新失败——国内网络访问 GitHub 不通时常见）。' +
+                        '恢复方法：设置 → 加载项 → 加载项商店 → ⋮ → 仓库，重新添加 ' +
+                        'https://github.com/fangwenyi-dev/ha-gateway-plugin 并更新商店，再回到本页重试。</div>';
                 } else {
                     content.innerHTML = '<div class="update-box update-ok"><div class="update-info">' +
                         '<div class="update-title">✅ 已是最新版本 v' + CURRENT_VERSION + '</div>' +
@@ -1309,11 +1313,18 @@
         // 因此"一键升级"在官方设计上不可行，唯一可靠路径是管理员在
         // Supervisor 加载项页面点击「更新」（设置 → 加载项 → 慧尖 LoRa 网关）。
         // 本函数直接跳转到该页面，不再发起注定失败的 API 调用。
+        // v1.6.16 补充：新版 Supervisor（App 架构）中，已安装加载项的详情页与
+        // 「更新」接口都依赖商店条目（App.app_store = store.get(slug)）；若客户
+        // 删除过仓库或商店刷新失败，跳转后会报
+        // "App huijian_mqtt_broker does not exist in the store"（StoreAppNotFoundError）。
+        // 这不是本插件的 bug，须重新添加仓库并更新商店才能恢复，故在文案中给出指引。
         async function doUpgrade() {
             const openAddon = confirm(
                 'Supervisor 安全设计禁止插件通过 API 自我更新（一键升级会返回 403/400），\n' +
                 '请以管理员身份在 Supervisor 加载项页面点击「更新」。\n\n' +
-                '现在为你打开加载项页面？'
+                '现在为你打开加载项页面？\n\n' +
+                '若打开后提示 "does not exist in the store"：请到 设置→加载项→\n' +
+                '加载项商店→⋮→仓库 重新添加插件仓库并更新商店后再试。'
             );
             if (openAddon) {
                 // ingress iframe 的 origin 即 HA 前端 origin，可跳转到加载项详情页
