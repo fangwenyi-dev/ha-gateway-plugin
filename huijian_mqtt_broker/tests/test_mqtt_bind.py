@@ -33,6 +33,7 @@ class _MockDeviceManager:
         self.added = []  # 记录 add_device 调用
         self.status_updates = []  # v1.6.10(N1)：记录 update_gateway_status 调用
         self.saved_removed = []  # 记录手动删除列表保存调用
+        self.ws_notified = []  # v1.6.17：记录 WS device_update 通知
         self._next_number = 1
 
     def get_device(self, device_sn):
@@ -40,6 +41,10 @@ class _MockDeviceManager:
 
     def get_all_devices(self):
         return list(self.devices.values())
+
+    def _notify_status_listeners(self, device_sn):
+        # v1.6.17 联审F2：绑定确认后向 WS 监听器推送 device_update
+        self.ws_notified.append(device_sn)
 
     def is_device_manually_removed(self, device_sn):
         return device_sn in self._manually_removed_devices

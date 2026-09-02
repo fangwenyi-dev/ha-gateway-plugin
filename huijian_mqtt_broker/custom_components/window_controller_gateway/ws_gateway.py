@@ -43,6 +43,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from aiohttp import WSMsgType, web
@@ -59,6 +60,8 @@ from .const import (
     DEFAULT_WS_GATEWAY_TOKEN,
     DEVICE_TO_GATEWAY_MAPPING,
     DOMAIN,
+    GATEWAY_READY_DELAY,
+    WS_GATEWAY_ONLINE_STALE_SECONDS,
     WS_GATEWAY_PATH,
     WS_MAX_CLIENTS,
     WS_MAX_FRAME_BYTES,
@@ -146,23 +149,34 @@ def device_ws_view(device_sn: str, gateway_sn: str, device: Dict[str, Any]) -> D
     "HA 集成上报值 ×10 = 毫伏，/100 前即 voltage_mv"，等价 raw），
     -1 未知；state 按 r_travel==0→0 / >0→1 推导（与集成 DEVICE_STATUS
     推导同源），无 r_travel 时 -1。
+
+    v1.6.17（联审 契约F1/F2）：入界校验与固件同口径，垃圾值不得以
+    合法数字形态进入小程序——固件 position/r_travel 仅取 0..100，
+    255 等越界值是"未校准/离线标记"直接丢弃
+    （app_protocol_bridge.cpp:2133、2781 P3-2），电池 raw 仅接受
+    [80,140]（12V 锂电 9.5-12.6V 放宽到 8-14V，防 uint16 溢出/异常
+    显示，BATTERY_RAW_MIN/MAX :743-744）。插件缓存为保留 HA 侧
+    "未校准"文案语义不裁剪，钳制统一收敛在本视图层。
     """
     attrs = device.get("attributes") or {}
     position = attrs.get("r_travel")
     voltage = attrs.get("voltage")
-    if voltage is None:
-        battery = -1
-    else:
+    position_i = _as_int(position)
+    if not 0 <= position_i <= 100:
+        position_i = -1
+    battery = -1
+    if voltage is not None:
         try:
             battery = int(round(float(voltage) * 10))
         except (ValueError, TypeError):
             battery = -1
-    if position is None:
-        state = -1
-        position_i = -1
-    else:
-        position_i = _as_int(position)
-        state = 0 if position_i == 0 else (1 if position_i > 0 else -1)
+        if not 80 <= battery <= 140:
+            # 固件同款范围判定：可解析但越界（0、负值、24.0V 假象的
+            # 240 等）一律丢弃为未知
+            battery = -1
+    # state 从钳制后的 position 推导：r_travel=255（未校准标记）在
+    # 固件视图里 state=-1，插件必须一致，不得报"已开"
+    state = 0 if position_i == 0 else (1 if position_i > 0 else -1)
     return {
         "sn": device_sn,
         "gwSn": gateway_sn,
@@ -204,6 +218,8 @@ class WsGatewayServer:
         self._listener: Optional[Callable[[str, str], None]] = None
         self._listener_managers: List[Any] = []
         self._stopping = False
+        # 在途握手计数（见 _handle_ws 槽位预约注释）
+        self._pending_handshakes = 0
 
     # ---------- 生命周期 ----------
 
@@ -211,7 +227,10 @@ class WsGatewayServer:
         """绑定 TCP 并启动。失败抛异常（由 ensure 侧捕获记日志）。"""
         app = web.Application()
         app.router.add_get(WS_GATEWAY_PATH, self._handle_ws)
-        runner = web.AppRunner(app, handle_signals=False)
+        # access_log=None：默认 aiohttp.access 会对每次 WS 升级请求打
+        # INFO 行，小程序重连风暴（如 Wi-Fi 切换）会刷屏 HA 日志——
+        # 本模块已有中文连接/断开日志（_handle_ws），无访问日志需求
+        runner = web.AppRunner(app, handle_signals=False, access_log=None)
         await runner.setup()
         try:
             site = web.TCPSite(runner, self.host, self.port)
@@ -313,10 +332,20 @@ class WsGatewayServer:
         return None
 
     def _gateway_list_payload(self) -> Dict[str, Any]:
-        gateways = [
-            {"sn": gw, "online": bool(data["mqtt_handler"].connected)}
-            for gw, data in self._entries_data()
-        ]
+        # online 口径 = mqtt_handler.connected（1800s 超时）∧ 最近
+        # WS_GATEWAY_ONLINE_STALE_SECONDS(900s) 内有真实上报——固件对
+        # 静默 15 分钟的网关即显示离线，插件不得比固件"更乐观"。
+        # last_gateway_report_time 是 monotonic 时钟（收报即刷新，含
+        # 001/002 心跳），None = 从未收报。
+        now = time.monotonic()
+        gateways = []
+        for gw, data in self._entries_data():
+            handler = data["mqtt_handler"]
+            fresh = (
+                handler.last_gateway_report_time is not None
+                and now - handler.last_gateway_report_time < WS_GATEWAY_ONLINE_STALE_SECONDS
+            )
+            gateways.append({"sn": gw, "online": bool(handler.connected and fresh)})
         return {"type": "gateway_list", "gateways": gateways}
 
     def _device_list_payload(self) -> Dict[str, Any]:
@@ -367,19 +396,25 @@ class WsGatewayServer:
         value = msg.get("value")
         if not all(isinstance(x, str) and x for x in (gw_sn, dev_sn, attribute)) or value is None:
             return {"type": "control_ack", "ok": False, "msg": "missing fields"}
+        # v1.6.17（联审）：固件把"空字符串 value"按缺失字段拒绝，bool 经
+        # str() 会变成 "True"/"False"（固件解析出的是 'true'/'false' 字面量，
+        # 设备端两者都不是合法命令值）——同口径拒绝，不透传脏值
+        if value == "" or isinstance(value, bool):
+            return {"type": "control_ack", "ok": False, "msg": "missing fields"}
         value_s = str(value)
         data = self._device_gateway(dev_sn)
         if data is not None:
             ok = await data["mqtt_handler"].send_ws_raw_004(dev_sn, attribute, value_s)
             return {"type": "control_ack", "ok": bool(ok), "msg": "ok" if ok else "send failed"}
-        # 映射缺失 → 广播到所有在线网关；无在线网关时固件仍返回 ESP_OK
-        # （设备后续上线自然收敛），保持一致：不回失败假象。
+        # 映射缺失 → 广播。v1.6.17（联审）：固件定式是"无条件向全部
+        # 网关发布"（app_protocol_bridge.cpp :1628-1650 的 P2 修复，不查
+        # 网关在线状态）；插件此前跳过 connected=False（=1800s 无上报，
+        # 与 MQTT 链路真实状态本就不是同一件事）的网关，属行为分歧。
+        # 改为对全部已注册条目发布，返回语义与固件一致 = 发布级成败；
+        # 仅 broker 发布失败（send_ws_raw_004 返回 False）才算 send failed。
         publish_failed = False
         for _gw, edata in self._entries_data():
-            handler = edata["mqtt_handler"]
-            if not handler.connected:
-                continue
-            if not await handler.send_ws_raw_004(dev_sn, attribute, value_s):
+            if not await edata["mqtt_handler"].send_ws_raw_004(dev_sn, attribute, value_s):
                 publish_failed = True
         if publish_failed:
             return {"type": "control_ack", "ok": False, "msg": "send failed"}
@@ -421,7 +456,23 @@ class WsGatewayServer:
         known = bool(manager is not None and dev_sn in manager.devices)
         if handler is None or not handler.connected or not known:
             return {"type": "unbind_ack", "ok": False, "msg": "gateway offline or device unknown"}
-        await handler.unbind_device(dev_sn)
+        try:
+            await handler.unbind_device(dev_sn)
+        except Exception:  # noqa: BLE001 - broker 发布失败如实 ack，不谎报 ok
+            _LOGGER.warning("WS unbind 发布 003 失败: %s", dev_sn, exc_info=True)
+            return {"type": "unbind_ack", "ok": False, "msg": "send failed"}
+        # v1.6.17（联审 F1，幽灵设备）：固件解绑确认路径会删除本地记录；
+        # 插件的本地删除由「设备→删除」按钮流程负责，003 解绑确认分支
+        # 明确注释"本地删除已由删除按钮流程完成"——但 WS 通道不经过按钮！
+        # 不在此闭环，则设备永远留在缓存/注册表/映射里，下次 get_devices
+        # 原样复活。此处完整镜像按钮流程（gateway.py async_press）：
+        # 解绑命令已发布 → 等网关处理 → remove_device 本地删除（登记手动
+        # 删除列表，防止 002 自动发现把它复活）。
+        await asyncio.sleep(GATEWAY_READY_DELAY)
+        try:
+            await manager.remove_device(dev_sn)
+        except Exception:  # noqa: BLE001 - 与按钮流程同款尽力而为
+            _LOGGER.error("WS unbind 本地删除设备失败: %s", dev_sn, exc_info=True)
         return {"type": "unbind_ack", "ok": True}
 
     async def _cmd_set_token(self, msg: Dict[str, Any]) -> Dict[str, Any]:
@@ -433,15 +484,18 @@ class WsGatewayServer:
             return {"type": "set_token_ack", "ok": False, "msg": err}
         new_token = msg["newToken"]
         auth_was_active = bool(self._token)
+        prev_token = self._token
         self._token = new_token
         if not auth_was_active:
             _LOGGER.warning("WS 网关令牌从未启用状态被引导开启（固件 B16 bootstrap 同款）")
-        self.hass.async_create_task(self._persist_token(new_token))
+        self.hass.async_create_task(self._persist_token(new_token, prev_token))
         return {"type": "set_token_ack", "ok": True, "msg": "token updated"}
 
-    async def _persist_token(self, new_token: str) -> None:
-        """把新令牌写入主控 entry options；写失败仅告警（内存已生效，
-        重启后回退 options 旧值——固件 NVS 写失败的等价语义）。"""
+    async def _persist_token(self, new_token: str, prev_token: str) -> None:
+        """把新令牌写入主控 entry options；写失败回滚内存令牌——固件
+        NVS 写失败即回滚运行时令牌（app_ws_gateway.c :634-650），保证
+        "内存 == 持久化"。插件若只告警不回滚，会形成"小程序已存新令牌、
+        HA 重启后回退旧令牌"的永久 401 漂移（联审 F6 定案）。"""
         try:
             for entry in self.hass.config_entries.async_entries(DOMAIN):
                 options = dict(entry.options or {})
@@ -453,7 +507,9 @@ class WsGatewayServer:
                     _LOGGER.info("WS 网关令牌已持久化到集成选项（条目 %s）", entry.entry_id)
                     return
         except Exception as e:  # noqa: BLE001
-            _LOGGER.warning("WS 令牌持久化到 options 失败（重启后将回退）: %s", e)
+            _LOGGER.error("WS 令牌持久化失败，回滚为旧令牌（与固件 NVS 写失败语义一致）: %s", e)
+            if self._token == new_token:
+                self._token = prev_token
 
     # ---------- 主动推送 ----------
 
@@ -507,7 +563,7 @@ class WsGatewayServer:
             _LOGGER.warning("WS 握手令牌校验失败，拒绝连接（来源 %s）",
                             request.remote)
             return web.Response(status=401, text="unauthorized")
-        if len(self._clients) >= WS_MAX_CLIENTS:
+        if len(self._clients) + self._pending_handshakes >= WS_MAX_CLIENTS:
             _LOGGER.warning("WS 连接数已满（%d），拒绝新连接", WS_MAX_CLIENTS)
             return web.Response(status=503, text="busy")
         # 认证成功才占槽（固件 M4 定式）：protocols 传入选中的令牌，
@@ -518,11 +574,17 @@ class WsGatewayServer:
             autoclose=True,
             heartbeat=None,
         )
+        # v1.6.17（联审 会话层F4）：固件的"查满→入册"在同一回调内原子，
+        # 插件在两者之间有 ws.prepare 挂起点，并发握手可同时通过容量检查
+        # 瞬时超 4。用预约计数把在途握手计入占位，逼近固件原子语义。
+        self._pending_handshakes += 1
         try:
             await ws.prepare(request)
         except Exception as e:  # noqa: BLE001
             _LOGGER.warning("WS 握手完成失败: %s", e)
+            self._pending_handshakes -= 1
             return ws
+        self._pending_handshakes -= 1
         self._clients.add(ws)
         _LOGGER.info("小程序 WS 已连接（来源 %s，在线 %d/%d）",
                      request.remote, len(self._clients), WS_MAX_CLIENTS)

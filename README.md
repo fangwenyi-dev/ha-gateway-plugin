@@ -6,7 +6,7 @@
 
 | 插件 | 版本 | 说明 |
 |------|------|------|
-| [慧尖 LoRa 网关](./huijian_mqtt_broker/) | v1.6.16 | 内置 Mosquitto Broker + mDNS 广播 + 网关集成 + 小程序 WS 直连，安装即用 |
+| [慧尖 LoRa 网关](./huijian_mqtt_broker/) | v1.6.17 | 内置 Mosquitto Broker + mDNS 广播 + 网关集成 + 小程序 WS 直连，安装即用 |
 
 ## 安装方法
 
@@ -113,5 +113,5 @@ Matter 网关固件（matter-broker `app_ws_gateway.c`）1:1 对等的 WS 协议
 
 ## 版本与历史
 
-当前版本 **v1.6.16**。完整版本历史统一收录于 [CHANGELOG.md](CHANGELOG.md)，
+当前版本 **v1.6.17**。完整版本历史统一收录于 [CHANGELOG.md](CHANGELOG.md)，
 本 README 不重复罗列。

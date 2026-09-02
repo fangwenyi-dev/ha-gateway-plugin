@@ -148,6 +148,48 @@ GitHub 同理走 `gh auth token` 注入一次性 URL（WSL 无 GCM 交互）。
   时加载，运行中容器不换代码）。1.6.15 在线实例可先在「集成→慧尖→
   选项」勾选"小程序局域网直连"立即启用。
 
+### 与小程序/固件联审定案（v1.6.17，四路独立审计 + 一手复核）
+
+四路并行只读审计（消息契约 / 业务语义联动 / 发现与网络配置 / 握手会话）
+结论：**协议骨架三方逐字对齐**（`cmd` 请求键 vs `type` 响应键、子协议
+令牌握手、错误文案、-1=未知、帧长/槽位/空闲超时）。真实缺口不在协议，
+在下面这些**语义与生命周期**上，改动本模块前务必对照：
+
+- **视图层必须做固件同款入界钳制**：`device_ws_view` 是唯一出口——
+  position 只接受 0..100（r_travel=255 是"未校准/离线"标记，固件
+  `app_protocol_bridge.cpp:2133/2781` 直接丢弃），state 从**钳制后**的
+  position 推导；电池 raw 只接受 [80,140]（固件 BATTERY_RAW_MIN/MAX，
+  12V 锂电 9.5–12.6V 放宽到 8–14V）。HA 侧 sensor 的"未校准"文案语义
+  不受影响（钳制只在 WS 视图层收敛）。
+- **WS 通道不经过 HA「删除」按钮，必须自己闭环本地删除**：003 解绑
+  确认分支注释"本地删除已由删除按钮流程完成"，所以 `_cmd_unbind` 不
+  remove_device 的话设备永远留在缓存/注册表/映射并在下次 get_devices
+  复活（幽灵设备）。同理 003 绑定确认走 `add_device` 直达、不经
+  `update_device_status` 推送漏斗，需补一次 `_notify_status_listeners`
+  新设备才能即时出现在小程序。
+- **`connected` 是业务口径（1800s 无上报），不等于"MQTT 发布成败"**：
+  control 映射缺失时广播给**全部**已注册网关（固件 P2 定式），跳过
+  connected=False 网关属行为分歧；而 gateway_list 的 online 反过来要
+  比固件更严——`WS_GATEWAY_ONLINE_STALE_SECONDS=900` 新鲜度双条件。
+- **令牌持久化失败必须回滚内存值**：否则形成"小程序已存新令牌、HA
+  重启回退旧令牌"的永久 401（固件 NVS 写失败同款回滚语义）。
+- **改「小程序 WS 网关端口」= 直连静默失联**：微信 mDNS **不透传 TXT
+  记录**，小程序恒拨 9001，端口无法协商下发；options 文案与 README
+  FAQ 已警示。
+- **半开口径**：WS 能连 ≠ 可控。服务器任一网关条目存在即监听，但列表
+  只反映**已注册的集成条目**——小程序连上后列表为空属正常，需先在
+  集成中添加该 LoRa 网关。
+- **与固件网关共存**：两者都广播 `_mqtt._tcp`，实例名分别为
+  `huijian-mqtt`（插件，mdns_publisher.py:88）与 `huijian`（固件），
+  小程序必须读 `res.serviceName`（**`res.name` 恒 undefined**——
+  "发现服务: undefined" 根因）才能区分；两者还都广播主机名
+  `huijian.local`（A 记录冲突，待真机验证，建议只保留一个广播者）。
+- 小程序会话层定案（已在小程序仓库同批修复）：onShow/前台恢复传
+  `connect(false)` 且 `connect()` 入口清 `_reconnectTimer`（否则重连
+  阶梯无限续命，"第1→4→回到1"日志根因）；`_cleanup()` 要 close 底层
+  socket（防服务端僵尸连接占槽）；`pair_ack`/`type:"error"` 必须发
+  事件让 UI 可见。
+
 ## Supervisor API（2026-08-27 实测定案，v1.6.3 纠偏）
 
 ### 权限要求

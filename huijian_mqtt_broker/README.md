@@ -1,6 +1,6 @@
 # 慧尖 LoRa 网关一体化插件
 
-[![版本](https://img.shields.io/badge/version-1.6.16-blue)]()
+[![版本](https://img.shields.io/badge/version-1.6.17-blue)]()
 [![HA Add-on](https://img.shields.io/badge/HA-Add--on-green)]()
 
 慧尖开窗器 LoRa 网关的 Home Assistant 一体化插件。**内置 Mosquitto Broker + mDNS 自动发现 + 网关集成，安装一个插件即可获得全部能力**。
@@ -118,6 +118,9 @@ https://github.com/fangwenyi-dev/ha-gateway-plugin
 
 - `Connection refused`：9001 无监听——升级本插件到 **v1.6.16 并重启 HA**（v1.6.16 起默认监听，任一网关条目存在即启动）；旧版本需到 设置 → 设备与服务 → 慧尖开窗器网关 → 配置 中手动勾选「允许慧尖小程序局域网直连」。
 - 连上秒断：握手令牌不匹配（小程序侧内置默认令牌；在插件配置里自定义过令牌就必须两侧同步）。
+- 连上但网关/设备列表为空：WS 能连 ≠ 可控——LoRa 网关必须先在**集成「慧尖开窗器网关」中添加**（加载项配置页添加即落集成条目）。列表只反映已注册的集成条目（对齐固件：网关只认识连上自己的 LoRa 设备，插件只认识有条目的网关）。
+- 改「小程序 WS 网关端口」= 直连失联：小程序与固件恒拨固定端口 **9001**（微信 mDNS 不透传 TXT 记录，无法自动协商其它端口），请保持默认值。
+- 与固件网关共存同一局域网：小程序发现列表会出现 `huijian`（固件）与 `huijian-mqtt`（插件）两个服务，请选择**实际管理目标 LoRa 网关的那一侧**连接——设备只会出现在其所属 broker 的列表里；两者还都广播主机名 `huijian.local`（A 记录冲突），建议局域网只保留一个活跃广播者。
 
 ### Q: 升级后数据会丢失吗？
 

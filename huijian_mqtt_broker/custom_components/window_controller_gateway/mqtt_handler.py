@@ -1500,6 +1500,14 @@ class WindowControllerMQTTHandler:
                 device_name = get_device_display_name(self.gateway_sn, device_sn, device_number)
                 # 手动配对时使用 is_manual_pairing=True，跳过手动删除列表检查
                 await self.device_manager.add_device(device_sn, device_name, DEVICE_TYPE_WINDOW_OPENER, is_manual_pairing=True)
+                # v1.6.17（联审 F2）：固件在 003 绑定确认后立即推送设备
+                # 状态（新设备 position=-1 视图）；插件的 WS device_update
+                # 挂在 update_device_status 漏斗，此处直接 add_device 不
+                # 经过它——手动配对的新设备要等下一次 002/005 上报才出现
+                # 在小程序。补一次监听器通知（设备刚入缓存、无属性，
+                # 视图字段全 -1，与固件推送语义等价）。
+                if device_sn in self.device_manager.devices:
+                    self.device_manager._notify_status_listeners(device_sn)
                 # v1.6.11（审计 #2）：配对会话退出必须限定在"我们自己发起的
                 # 绑定确认"（bind_op=="bind"，_bind_ops 记账过）。此前无条件
                 # 退出：迟到/非请求的 003（id 无记账、设备恰好不在列表）会

@@ -61,6 +61,10 @@ class _MockDM:
     def get_all_devices(self):
         return list(self.devices.values())
 
+    def _notify_status_listeners(self, sn):
+        # v1.6.17 联审F2：003 绑定确认后新增的 WS device_update 通知
+        pass
+
     def is_device_manually_removed(self, sn):
         return sn in self._manually_removed_devices
 

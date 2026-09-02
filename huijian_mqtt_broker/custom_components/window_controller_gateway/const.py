@@ -166,6 +166,11 @@ WS_TOKEN_CHARSET: Final = frozenset(
 WS_MAX_CLIENTS: Final = 4              # 固件 MAX_WS_CLIENTS=4（握手认证成功才占槽）
 WS_MAX_FRAME_BYTES: Final = 1024       # 固件 WS_RX_BUF_SIZE：超长→error+断连
 WS_RECV_TIMEOUT_SECONDS: Final = 300   # 固件 recv_wait_timeout=300s 空闲断连
+# v1.6.17（联审）：小程序 gateway_list 的 online 判定口径。固件以
+# GATEWAY_OFFLINE_TIMEOUT_SEC=900（app_mqtt_business.c）把 15 分钟无上报
+# 的 LoRa 网关标为离线；插件 HA 内部 1800s 超时是实体可用性口径（改动
+# 面大且无必要），WS 视图层单独收紧到 900s 与固件展示语义对齐。
+WS_GATEWAY_ONLINE_STALE_SECONDS: Final = 900
 
 # ==================== 其他 ====================
 MANUFACTURER: Final = "慧尖"

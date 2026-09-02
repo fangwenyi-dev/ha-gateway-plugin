@@ -59,7 +59,7 @@
           "auto_discovery": "自动发现设备",
           "debug_logging": "调试日志",
           "ws_gateway_enabled": "允许慧尖小程序局域网直连（监听 ws://0.0.0.0:端口/ws）",
-          "ws_gateway_port": "小程序 WS 网关端口（固件同款默认 9001）",
+          "ws_gateway_port": "小程序 WS 网关端口（默认 9001；小程序/固件固定拨 9001，改动后局域网直连将不可用）",
           "ws_gateway_token": "小程序握手令牌（8-62 位 A-Za-z0-9_-；留空 = 不认证）"
         }
       },

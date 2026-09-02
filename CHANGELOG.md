@@ -3,6 +3,84 @@
 所有版本变更记录在此文件中。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.6.17] - 2026-09-03
+
+### 修复（小程序 ↔ 插件联审：四路独立审计 × 一手复核定案的 WS 联动缺陷批）
+
+流程：按 dsh-review-loop 四路并行只读审计（消息契约层/业务语义联动层/
+发现与网络配置层/握手会话层），所有 HIGH/MED 结论均由父代理对照固件
+`app_ws_gateway.c`/`app_protocol_bridge.cpp` 一手复核后才动手。
+**结论：协议骨架（cmd/type 键、令牌子协议握手、错误文案、-1 约定、
+帧限/槽位/心跳）三方逐字对齐**，真实缺口集中在视图层与解绑闭环。
+
+#### 插件侧（本仓库）
+
+- **WS 解绑幽灵设备（HIGH）**：`_cmd_unbind` 此前只发 003 bind=0 即
+  ack ok——本地删除在插件里由「设备→删除」按钮流程负责，003 解绑
+  确认分支明确注释"本地删除已由删除按钮流程完成"，而 **WS 通道不
+  经过按钮**：小程序解绑后设备永远留在缓存/注册表/映射，下次
+  get_devices 原样复活。修复：镜像按钮流程（发布 003 → 等
+  GATEWAY_READY_DELAY → `remove_device` 本地删除并登记手动删除
+  列表）；发布失败如实 ack `send failed`，不谎报 ok
+- **设备视图无入界校验（HIGH）**：`device_ws_view` 把 r_travel=255
+  （固件"未校准/离线"标记）原样显示为 255% 且推导 state=1（"已开"），
+  battery 垃圾值（voltage=0 → 0、过期缓存 → 240）照发。修复：与固件
+  同口径——position 仅接受 0..100 否则 -1、state 从钳制后值推导、
+  电池 raw 仅接受 [80,140]（固件 BATTERY_RAW_MIN/MAX，12V 锂电
+  9.5-12.6V 放宽 8-14V）否则 -1；HA 侧"未校准"sensor 语义不动
+- **control 脏值透传（MED）**：`value:""`（空串）与 bool（str() 出
+  "True"）此前放行发布 004；按固件语义拒为 missing fields；数字 0
+  仍合法（falsy 误杀回归护栏测试钉住）
+- **control 广播分歧（MED）**：映射缺失广播分支跳过 connected=False
+  网关——connected 是"1800s 无上报"业务口径，与 MQTT 发布成败无关；
+  固件 P2 定式无条件向全部网关发布。已对齐
+- **gateway_list online 比固件乐观（MED）**：固件 900s 无上报即显示
+  离线（GATEWAY_OFFLINE_TIMEOUT_SEC），插件 connected 位 1800s 才灭。
+  WS 视图层新增 `WS_GATEWAY_ONLINE_STALE_SECONDS=900` 双条件判定
+  （connected ∧ 900s 内有真实上报），HA 内部超时不动
+- **手动配对即时推送缺失（MED）**：003 绑定确认走 add_device 直达，
+  不经 update_device_status 的 device_update 推送漏斗——新设备要等
+  下次上报才出现在小程序。绑定分支补一次监听器通知（全 -1 视图，
+  与固件 pair 后推送语义等价）
+- **set_token 持久化失败漂移（LOW）**：固件 NVS 写失败回滚运行时
+  令牌；插件此前只告警——会形成"小程序已存新令牌、HA 重启回退旧
+  令牌"的永久 401。补同口径回滚
+- **槽位检查非原子（LOW）**：`len(_clients)>=4` 与 prepare 后入册之间
+  有 await 挂起点，并发握手可瞬时超 4；补在途握手预约计数
+- **重连风暴日志刷屏（LOW）**：aiohttp AppRunner access_log 默认每
+  连接一条 INFO，改 access_log=None（本模块已有中文连接/断开日志）
+- **文档**：options 端口文案加"改端口=直连失联"警示（微信 mDNS 不透传
+  TXT，小程序恒拨 9001）；加载项 README FAQ 补四条——连上但列表为空
+  （半开口径）、端口耦合、与固件共存实例区分、huijian.local A 记录
+  冲突提示
+
+#### 小程序侧（E:\AI\ha-yy\weichat-huijian-hz，同批修复）
+
+- **发现服务名恒 undefined**：读 `res.name`，当前微信 API 字段是
+  `serviceName`（真机日志"发现服务: undefined"根因）；补读正确字段
+  + 剥 mDNS 后缀 + 按 IP+实例名去重（固件/插件共存时第二台不再被藏）
+- **配对失败无感知**：`pair_ack ok:false` 此前只 console，页面照旧
+  轮询 60 秒黑洞才报"未发现新设备"；新增 `EVENT_PAIR_ACK` 事件并由
+  网关页消费——被拒立即退出配对态并 toast 原因；`type:"error"` 同样
+  透传 UI
+- **重连阶梯被无限续命**：真机日志"第1→4次→回到第1次"根因实锤——
+  页面 onShow/前台恢复走 `connect()` 默认手动语义清零计数且不清在途
+  定时器；`connect()` 入口统一清 `_reconnectTimer`，三处自动语义调用
+  点（index/app.js/broker-gateways.checkConnection）改传
+  `connect(false)`，仅「重连」按钮保留手动语义
+- **改令牌泄漏僵尸连接**：broker-setup 改令牌/换网关流程调
+  `_cleanup()` 只丢引用不 close——服务端旧连接占槽最长 300s（满 4 槽
+  即 503 拒新），且继续吃 device_update；`_cleanup` 补幂等 close
+- **fail 回调断自动链**：`wx.connectSocket` 的 fail 在部分平台是唯一
+  失败信号，此前不调 `_scheduleReconnect`——自动重连静默死亡；补上
+
+### 测试
+
+- 新增 9 项回归：position 255/越界/字符串形态、battery 固件域内外、
+  control 空串/bool 拒绝与 0 值护栏、广播含离线网关、gateway_list
+  900s 新鲜度、unbind 本地闭环与发布失败如实 ack、set_token 回滚、
+  配对通知记账；全量 **231 通过**，py_compile/JSON 校验绿
+
 ## [1.6.16] - 2026-09-02
 
 ### 修复（小程序局域网直连 9001 永不监听——默认开定案）

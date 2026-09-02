@@ -12,6 +12,7 @@
 """
 import asyncio
 import json
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -48,6 +49,7 @@ class FakeDM:
         self.gateway_sn = gateway_sn
         self.listeners = []
         self.status_calls = []
+        self.removed = []  # v1.6.17：WS unbind 本地闭环断言用
 
     def add_status_listener(self, cb):
         if cb not in self.listeners:
@@ -60,15 +62,27 @@ class FakeDM:
     async def update_gateway_status(self, status):
         self.status_calls.append(status)
 
+    async def remove_device(self, device_sn, is_manual=True):
+        self.removed.append(device_sn)
+        self.devices.pop(device_sn, None)
+
 
 class FakeHandler:
-    def __init__(self, gateway_sn, connected=True, fail004=False):
+    def __init__(self, gateway_sn, connected=True, fail004=False, fail_unbind=False,
+                 report_age=None):
         self.gateway_sn = gateway_sn
         self.connected = connected
         self.raw004 = []
         self.commands = []
         self.fail004 = fail004
         self.unbinds = []
+        self.fail_unbind = fail_unbind
+        # v1.6.17：gateway_list 在线口径 = connected ∧ 900s 内有上报
+        self.last_gateway_report_time = (
+            None if (not connected and report_age is None)
+            else (time.monotonic() - report_age if report_age is not None
+                  else time.monotonic())
+        )
 
     async def send_ws_raw_004(self, device_sn, attribute, value):
         self.raw004.append((device_sn, attribute, value))
@@ -79,6 +93,8 @@ class FakeHandler:
         return True
 
     async def unbind_device(self, device_sn):
+        if self.fail_unbind:
+            raise RuntimeError("broker gone")
         self.unbinds.append(device_sn)
 
 
@@ -164,10 +180,13 @@ class TestValidateNewToken:
 
 class TestDeviceView:
     def test_full_state(self):
-        dev = {"attributes": {"r_travel": 42, "voltage": 24.0}}
+        # v1.6.17：电压入界样本 10.5V（12V 锂电工作区间，raw 105）——
+        # 旧的 24.0/25.0 系随手编造，恰落在固件 [80,140] 有效域之外，
+        # 如今按固件语义钳为 -1（见 test_battery_out_of_fw_range）
+        dev = {"attributes": {"r_travel": 42, "voltage": 10.5}}
         v = device_ws_view("5005A1", "GW1", dev)
         assert v == {"sn": "5005A1", "gwSn": "GW1", "position": 42,
-                     "battery": 240, "state": 1}
+                     "battery": 105, "state": 1}
 
     def test_closed(self):
         v = device_ws_view("D", "G", {"attributes": {"r_travel": 0, "voltage": 12.3}})
@@ -180,6 +199,29 @@ class TestDeviceView:
     def test_bad_voltage_falls_to_minus_one(self):
         v = device_ws_view("D", "G", {"attributes": {"voltage": "abc", "r_travel": 5}})
         assert v["battery"] == -1 and v["state"] == 1
+
+    def test_position_255_uncalibrated_dropped(self):
+        # 联审契约F1：r_travel=255 是未校准/离线标记，固件钳为 -1，
+        # 插件旧实现原样透传并以 state=1（"已开"）误导小程序
+        v = device_ws_view("D", "G", {"attributes": {"r_travel": 255}})
+        assert v["position"] == -1 and v["state"] == -1
+
+    def test_position_out_of_range_and_string_form(self):
+        assert device_ws_view("D", "G", {"attributes": {"r_travel": 101}})["position"] == -1
+        assert device_ws_view("D", "G", {"attributes": {"r_travel": -5}})["position"] == -1
+        # 网关上报字段存在字符串形态（固件 parse_number_field 兼容）
+        v = device_ws_view("D", "G", {"attributes": {"r_travel": "88"}})
+        assert v["position"] == 88 and v["state"] == 1
+
+    def test_battery_out_of_fw_range_dropped(self):
+        # 联审契约F2：raw>140（如 0.5V→5、24V→240）是异常/溢出垃圾，
+        # 固件 BATTERY_RAW_MIN/MAX 判定丢弃，插件同口径
+        for volt, raw in ((24.0, 240), (0.0, 0), (14.1, 141), (7.9, 79)):
+            v = device_ws_view("D", "G", {"attributes": {"voltage": volt}})
+            assert v["battery"] == -1, (volt, raw)
+        # 边界内保留：8.0→80、14.0→140
+        assert device_ws_view("D", "G", {"attributes": {"voltage": 8.0}})["battery"] == 80
+        assert device_ws_view("D", "G", {"attributes": {"voltage": 14.0}})["battery"] == 140
 
 
 # ==================== 4. dispatch 核心语义 ====================
@@ -204,6 +246,19 @@ class TestDispatch:
         assert out == {"type": "gateway_list", "gateways": [{"sn": "GW1", "online": True}]}
 
     @pytest.mark.asyncio
+    async def test_gateway_list_stale_report_marks_offline(self):
+        # v1.6.17（联审）：online 口径 = connected ∧ 900s 内有真实上报。
+        # 固件 GATEWAY_OFFLINE_TIMEOUT_SEC=900（15 分钟静默即显示离线），
+        # 插件 HA 侧 1800s 超时不动，WS 视图层单独收紧，不得比固件乐观
+        h_fresh = FakeHandler("GW1", connected=True, report_age=100)
+        h_stale = FakeHandler("GW2", connected=True, report_age=901)
+        s = make_server(entries={"GW1": (h_fresh, FakeDM(gateway_sn="GW1")),
+                                 "GW2": (h_stale, FakeDM(gateway_sn="GW2"))})
+        out = await s.handle_json_message('{"cmd":"get_gateways"}')
+        assert out["gateways"] == [{"sn": "GW1", "online": True},
+                                   {"sn": "GW2", "online": False}]
+
+    @pytest.mark.asyncio
     async def test_device_list_shape(self):
         dm = FakeDM(devices={"5005A": {"attributes": {"r_travel": 0}}}, gateway_sn="GW1")
         s = make_server(entries={"GW1": (FakeHandler("GW1"), dm)})
@@ -224,7 +279,10 @@ class TestDispatch:
         assert h2.raw004 == []  # 定向，不广播
 
     @pytest.mark.asyncio
-    async def test_control_broadcasts_only_to_online_on_mapping_miss(self):
+    async def test_control_broadcasts_to_all_on_mapping_miss(self):
+        # v1.6.17（联审）：广播分支不再跳过 connected=False 的网关——
+        # 固件 P2 定式是无条件向全部网关发布；connected 是"1800s 无上报"
+        # 的业务口径，与"MQTT 发布能否成功"无关，跳过反而丢命令
         h_on, h_off = FakeHandler("GW1"), FakeHandler("GW2", connected=False)
         s = make_server(entries={"GW1": (h_on, FakeDM(gateway_sn="GW1")),
                                  "GW2": (h_off, FakeDM(gateway_sn="GW2"))})
@@ -233,7 +291,7 @@ class TestDispatch:
             "attribute": "rwp_wind_lock_mode", "value": 0}))
         assert out["ok"] is True
         assert h_on.raw004 == [("UNKNOWN_DEV", "rwp_wind_lock_mode", "0")]
-        assert h_off.raw004 == []  # 离线网关不收广播（固件同语义）
+        assert h_off.raw004 == [("UNKNOWN_DEV", "rwp_wind_lock_mode", "0")]
 
     @pytest.mark.asyncio
     async def test_control_global_mapping_hit(self):
@@ -284,6 +342,27 @@ class TestDispatch:
         assert out == {"type": "control_ack", "ok": False, "msg": "send failed"}
 
     @pytest.mark.asyncio
+    async def test_control_empty_string_and_bool_value_rejected(self):
+        # v1.6.17（联审）：固件把空字符串 value 判 missing fields；
+        # bool 经 str() 会变成 "True"/"False"（固件字面量是小写），
+        # 一律按 missing fields 拒绝
+        h = FakeHandler("GW1")
+        dm = FakeDM(devices={"5005A": {}}, gateway_sn="GW1")
+        s = make_server(entries={"GW1": (h, dm)})
+        for bad in ("", True, False):
+            out = await s.handle_json_message(json.dumps(
+                {"cmd": "control", "gwSn": "GW1", "devSn": "5005A",
+                 "attribute": "w_travel", "value": bad}))
+            assert out == {"type": "control_ack", "ok": False,
+                           "msg": "missing fields"}, bad
+        assert h.raw004 == []
+        # 数字 0 / 字符串 "0" 仍是合法值（既有广播测试 value:0 已钉）
+        out = await s.handle_json_message(json.dumps(
+            {"cmd": "control", "gwSn": "GW1", "devSn": "5005A",
+             "attribute": "w_travel", "value": 0}))
+        assert out["ok"] is True
+
+    @pytest.mark.asyncio
     async def test_pair_gated_on_gateway_online(self):
         h_off = FakeHandler("GW1", connected=False)
         h_on = FakeHandler("GW2")
@@ -309,7 +388,11 @@ class TestDispatch:
         assert h2.commands == [("GW2", "start_pairing")]  # 广播含离线（固件同语义）
 
     @pytest.mark.asyncio
-    async def test_unbind_prechecks_and_passthrough(self):
+    async def test_unbind_prechecks_and_passthrough(self, monkeypatch):
+        # 本地闭环含 1s 等待（GATEWAY_READY_DELAY，镜像删除按钮流程），
+        # 测试注入 0
+        import custom_components.window_controller_gateway.ws_gateway as gw_mod
+        monkeypatch.setattr(gw_mod, "GATEWAY_READY_DELAY", 0)
         dm = FakeDM(devices={"5005A": {}}, gateway_sn="GW1")
         h = FakeHandler("GW1")
         s = make_server(entries={"GW1": (h, dm)})
@@ -324,6 +407,21 @@ class TestDispatch:
         out = await s.handle_json_message('{"cmd":"unbind","gwSn":"GW1","devSn":"5005A"}')
         assert out == {"type": "unbind_ack", "ok": True}
         assert h.unbinds == ["5005A"]
+        # v1.6.17（联审F1 幽灵设备）：003 解绑发布后必须本地删除——
+        # WS 通道不经过 HA「删除」按钮，不闭环则设备永远留在缓存/注册表，
+        # 下次 get_devices 原样复活
+        assert dm.removed == ["5005A"] and "5005A" not in dm.devices
+
+    @pytest.mark.asyncio
+    async def test_unbind_publish_failure_honest_ack(self, monkeypatch):
+        import custom_components.window_controller_gateway.ws_gateway as gw_mod
+        monkeypatch.setattr(gw_mod, "GATEWAY_READY_DELAY", 0)
+        dm = FakeDM(devices={"5005A": {}}, gateway_sn="GW1")
+        h = FakeHandler("GW1", fail_unbind=True)
+        s = make_server(entries={"GW1": (h, dm)})
+        out = await s.handle_json_message('{"cmd":"unbind","gwSn":"GW1","devSn":"5005A"}')
+        assert out == {"type": "unbind_ack", "ok": False, "msg": "send failed"}
+        assert dm.removed == []  # 003 未送达不得单方面删本地
 
 
 # ==================== 5. set_token 与 device_update 推送 ====================
@@ -355,16 +453,36 @@ class TestSetTokenAndPush:
                 updated["options"] = options
 
         s.hass.config_entries = CE()
-        await s._persist_token("brandnew1")
+        await s._persist_token("brandnew1", "current1")
         assert updated["options"][CONF_WS_GATEWAY_TOKEN] == "brandnew1"
+        assert s._token == "brandnew1"  # 成功不回滚
+
+    @pytest.mark.asyncio
+    async def test_set_token_rolls_back_when_persist_fails(self):
+        # v1.6.17（联审F6）：固件 NVS 写失败回滚运行时令牌（内存==持久化）；
+        # 插件不回滚会形成"小程序已存新令牌、HA 重启回退旧令牌"的永久 401
+        s = make_server(token="current1")
+
+        class CE:
+            def async_entries(self, domain):
+                return [SimpleNamespace(entry_id="e1",
+                                        options={CONF_WS_GATEWAY_ENABLED: True})]
+
+            def async_update_entry(self, e, options=None):
+                raise RuntimeError("options write failed")
+
+        s.hass.config_entries = CE()
+        s._token = "brandnew1"
+        await s._persist_token("brandnew1", "current1")
+        assert s._token == "current1"
 
     def test_device_update_payload(self):
         dm = FakeDM(devices={"5005A": {"attributes": {
-            "r_travel": 30, "voltage": 24.0, "wind_lock_mode": "1"}}}, gateway_sn="GW1")
+            "r_travel": 30, "voltage": 10.5, "wind_lock_mode": "1"}}}, gateway_sn="GW1")
         s = make_server(entries={"GW1": (FakeHandler("GW1"), dm)})
         p = s._device_update_payload("GW1", "5005A")
         assert p == {"type": "device_update", "gwSn": "GW1", "devSn": "5005A",
-                     "position": 30, "battery": 240, "state": 1, "windLockMode": 1}
+                     "position": 30, "battery": 105, "state": 1, "windLockMode": 1}
         # 未知网关/设备 → None（不推）
         assert s._device_update_payload("NOPE", "5005A") is None
         assert s._device_update_payload("GW1", "ZZ") is None
@@ -538,14 +656,14 @@ class TestE2E:
                         "type": "gateway_list",
                         "gateways": [{"sn": "GW1", "online": True}]}
                     # 设备状态变化 → device_update 主动推送（监听器已挂）
-                    dm.devices["5005B"] = {"attributes": {"r_travel": 0, "voltage": 25.0}}
+                    dm.devices["5005B"] = {"attributes": {"r_travel": 0, "voltage": 12.0}}
                     for listener in dm.listeners:
                         listener("GW1", "5005B")
                     msg = await ws.receive(timeout=5)
                     pushed = json.loads(msg.data)
                     assert pushed["type"] == "device_update"
                     assert pushed["devSn"] == "5005B"
-                    assert pushed["position"] == 0 and pushed["battery"] == 250
+                    assert pushed["position"] == 0 and pushed["battery"] == 120
                     # control 经 WS → 网关 handler 实参
                     await ws.send_str(json.dumps(
                         {"cmd": "control", "gwSn": "GW1", "devSn": "5005B",
