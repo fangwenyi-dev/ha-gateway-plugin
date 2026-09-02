@@ -3,6 +3,36 @@
 所有版本变更记录在此文件中。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.6.21] - 2026-09-04
+
+### 新增（第七轮评分扣分项优化批——不动现有功能，纯增量）
+
+- **默认凭据提示（Web UI 概览新增"凭据状态"项）**：默认 MQTT 密码与默认
+  小程序 WS 令牌是公开同串（知道 SN + 内网即可连），此前无任何提醒。
+  现 run.sh status.json 输出 `mqtt_password_is_default`，集成新增只读视图
+  `/api/window_controller_gateway/security` 输出 `ws_token_is_default`
+  （仅布尔，零明文回显；无网关条目时 null 不误导）。概览页合并判定为
+  warn 提示。**只提示绝不自动改**——令牌双侧同步是既定契约，自动轮换
+  等于全客户永久 401。const.py 增 DEFAULT_MQTT_PASSWORD 交叉锚，测试钉
+  三处字面量同步。
+- **Gitee Release CI 自动化**（gitee-release job）：消除"发版后手动补
+  最新一条"人肉步骤；body 自动取 CHANGELOG 版本段、target_commitish 必
+  带、同 tag 幂等跳过、非 ASCII token（BOM）前置拦截报错。需仓库
+  Secrets 配置 GITEE_TOKEN（本次已配）。
+- **真栈 E2E job**（tests/e2e/run_e2e.sh）：eclipse-mosquitto:2 + HA Core
+  真实容器、REST onboarding、config flow 建 MQTT/慧尖 entry、真 MQTT 002
+  报文驱动、断言 entry loaded + 集成 devices 视图 gateway_online/子设备 +
+  WS 9001 常听 + 500 条 soak 吞吐。补"279 单测全在 mock 上"的真伪验证
+  债；盲调试期 continue-on-error，连绿后升硬门禁（脚本内注明）。
+
+### 明确不做（本批）
+
+- `mqtt_handler.py` 物理拆分：纯重构收益仅开发体验，风险波及 279 项内部
+  结构钉桩与六轮审计建立的行级熟悉度，与"不影响现有功能"约束冲突——
+  记为技术债非缺陷。
+- `huijian.local` A 记录冲突裁决：需真机现场（插件与固件同广播），无法
+  我方实证，维持文档"待真机验证"口径。
+
 ## [1.6.20] - 2026-09-04
 
 ### 变更（镜像主源回退 ghcr.io 源站——1.6.19 升级现场实测决策）

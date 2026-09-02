@@ -23,6 +23,34 @@ _LOGGER = logging.getLogger(__name__)
 def async_setup_api(hass: HomeAssistant) -> None:
     """Register the device-list REST view."""
     hass.http.register_view(WindowGatewayDevicesView())
+    hass.http.register_view(WindowGatewaySecurityView())
+
+
+class WindowGatewaySecurityView(http.HomeAssistantView):
+    """v1.6.21: 凭据健康只读视图——Web UI 用它提示"仍是默认小程序令牌"。
+
+    默认 WS 令牌与小程序内置值同串（const.DEFAULT_WS_GATEWAY_TOKEN），
+    知道 SN + 在内网即可连；提示改密是安全兜底，**绝不自动改**——
+    自动轮换会造成小程序侧永久 401（令牌必须两侧同步是既定契约）。
+    仅暴露布尔值，不回显任何令牌/密码明文。
+    """
+
+    url = "/api/window_controller_gateway/security"
+    name = "api:window_controller_gateway:security"
+
+    async def get(self, request):
+        """任一网关注项仍是默认令牌 → true；无网关条目 → None（无从判定）。"""
+        hass = request.app["hass"]
+        entries = hass.config_entries.async_entries(DOMAIN)
+        if not entries:
+            return self.json({"ws_token_is_default": None, "gateway_entries": 0})
+        from .const import CONF_WS_GATEWAY_TOKEN, DEFAULT_WS_GATEWAY_TOKEN
+        is_default = any(
+            entry.options.get(CONF_WS_GATEWAY_TOKEN, DEFAULT_WS_GATEWAY_TOKEN)
+            == DEFAULT_WS_GATEWAY_TOKEN
+            for entry in entries
+        )
+        return self.json({"ws_token_is_default": is_default, "gateway_entries": len(entries)})
 
 
 class WindowGatewayDevicesView(http.HomeAssistantView):

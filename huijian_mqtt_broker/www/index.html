@@ -398,6 +398,11 @@
                 <span class="label">HA MQTT</span>
                 <span class="value" id="haMqttStatus">检测中</span>
             </div>
+            <div class="status-item">
+                <span class="dot dot-warn"></span>
+                <span class="label">凭据状态</span>
+                <span class="value" id="credStatus">检测中</span>
+            </div>
         </div>
     </div>
 
@@ -440,7 +445,7 @@
     </div>
 
     <script>
-        let CURRENT_VERSION = '1.6.20';
+        let CURRENT_VERSION = '1.6.21';
         const DOMAIN = 'window_controller_gateway';
 
         // v1.6.3：页头/页脚的初始版本号不再硬编码——脚本在 body 末尾，
@@ -535,11 +540,15 @@
 
         // ========== 检查服务状态 ==========
         async function checkServiceStatus() {
+            let mqttPwdIsDefault = null;
             // 1. MQTT Broker 状态 — nginx 直接返回，不依赖 HA API
             try {
                 const resp = await fetchT(INGRESS_BASE + 'api/status', { cache: 'no-store' }, 8000);
                 if (resp.ok) {
                     const data = await resp.json();
+                    if (typeof data.mqtt_password_is_default === 'boolean') {
+                        mqttPwdIsDefault = data.mqtt_password_is_default;
+                    }
                     if (data.status === 'running') {
                         setStatusDot('mqttStatus', 'ok', '运行中');
                     } else {
@@ -577,6 +586,29 @@
                 }
             } catch (e) {
                 setStatusDot('haMqttStatus', 'err', '无法读取');
+            }
+            // 4. 凭据状态（v1.6.21）— 默认 MQTT 密码（status.json）与默认小程序
+            //    令牌（集成 security 视图，仅布尔不回显明文）合并提示。
+            //    只提示不自动改：令牌轮换必须小程序侧同步，自动改=全员 401。
+            let wsTokenIsDefault = null;
+            try {
+                const resp = await haApi('api/window_controller_gateway/security');
+                if (resp.ok) {
+                    const sec = await resp.json();
+                    wsTokenIsDefault = sec.ws_token_is_default;
+                }
+            } catch (e) { /* 旧集成无此视图：保持 null，降级不误报 */ }
+            const credIssues = [];
+            if (mqttPwdIsDefault === true) credIssues.push('MQTT 密码');
+            if (wsTokenIsDefault === true) credIssues.push('小程序令牌');
+            if (credIssues.length) {
+                setStatusDot('credStatus', 'warn', credIssues.join('、') + ' 仍是默认值');
+            } else if (mqttPwdIsDefault === false && wsTokenIsDefault === false) {
+                setStatusDot('credStatus', 'ok', '已自定义');
+            } else if (mqttPwdIsDefault === false || wsTokenIsDefault === false) {
+                setStatusDot('credStatus', 'ok', '正常');
+            } else {
+                setStatusDot('credStatus', 'ok', '正常');
             }
         }
 

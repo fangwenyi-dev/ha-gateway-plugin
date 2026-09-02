@@ -603,8 +603,12 @@ PORT_HEX=$(printf '%04X' "${MQTT_PORT}")
             RUNNING=false
         fi
         PID_NOW=$(cat /run/mosquitto.pid 2>/dev/null || echo 0)
-        jq -n --argjson r "${RUNNING}" --argjson p "${PID_NOW:-0}" --argjson l "${LISTENERS:-0}" --argjson pt "${MQTT_PORT}" \
-            '{status:(if $r then "running" else "stopped" end), running:$r, broker:"mosquitto", port:$pt, pid:$p, listeners:$l, updated:(now|todate)}' \
+        # v1.6.21: 默认密码提示位——与 config.yaml schema default 同串（交叉
+        # 引用见 const.py DEFAULT_MQTT_PASSWORD 注释）；Web UI 概览据此提示改密
+        DP_IS_DEFAULT=false
+        if [ "${PASSWORD}" = "huijian2022" ]; then DP_IS_DEFAULT=true; fi
+        jq -n --argjson r "${RUNNING}" --argjson p "${PID_NOW:-0}" --argjson l "${LISTENERS:-0}" --argjson pt "${MQTT_PORT}" --argjson dp "${DP_IS_DEFAULT}" \
+            '{status:(if $r then "running" else "stopped" end), running:$r, broker:"mosquitto", port:$pt, pid:$p, listeners:$l, mqtt_password_is_default:$dp, updated:(now|todate)}' \
             > /usr/share/nginx/html/status.json.tmp 2>/dev/null \
             && mv /usr/share/nginx/html/status.json.tmp /usr/share/nginx/html/status.json 2>/dev/null \
             || echo "[警告] status.json 写入失败——页面状态将冻结，重点排查"

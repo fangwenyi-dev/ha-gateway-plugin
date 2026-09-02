@@ -162,6 +162,11 @@ DEFAULT_WS_GATEWAY_PORT: Final = 9001
 # 8123=HA core，1883=外部 broker 惯用口。
 WS_RESERVED_PORTS: Final = frozenset({2022, 8099, 8123, 1883})
 DEFAULT_WS_GATEWAY_TOKEN: Final = "hIZ56jhQ-wzA3ENiP2xGzo55PXsewUWM"
+
+# 交叉引用锚（v1.6.21）：run.sh 的 mqtt_password_is_default 判定与
+# config.yaml schema 的 password default 都写死 "huijian2022" 字符串——
+# 改默认值必须同步 run.sh（grep huijian2022）与本行，测试钉桩会拦截脱节
+DEFAULT_MQTT_PASSWORD: Final = "huijian2022"
 WS_GATEWAY_PATH: Final = "/ws"
 WS_TOKEN_MIN_LEN: Final = 8            # 固件：新 token 至少 8 字符（防弱 token）
 WS_TOKEN_MAX_LEN: Final = 63           # 固件判式 strlen >= sizeof(s_ws_token)-1（63）即拒绝 → 允许 ≤62
