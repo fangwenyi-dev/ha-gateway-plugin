@@ -132,6 +132,22 @@ GitHub 同理走 `gh auth token` 注入一次性 URL（WSL 无 GCM 交互）。
 
 ---
 
+## 小程序局域网直连 WS 网关（v1.6.15 引入，v1.6.16 默认开定案）
+
+- 集成内置 aiohttp WS 服务器（`ws_gateway.py`），1:1 复刻固件
+  `app_ws_gateway.c` 的 JSON-over-WebSocket 协议：`ws://<HA主机>:9001/ws`，
+  令牌走 Sec-WebSocket-Protocol 子协议头握手（不匹配不发 101）。
+- **默认开**（`DEFAULT_WS_GATEWAY_ENABLED=True`）：对齐固件"配网完成即
+  常听"语义（matter-broker main.cpp 无条件 `app_ws_gateway_start`，无用户
+  开关）。教训实锤（2026-09-02）：默认关导致小程序 mDNS 发现网关后
+  9001 恒 Connection refused，且客户无从知晓该隐藏开关。
+- 安全门禁与固件同构：令牌握手 401 拒连（默认令牌 = 小程序内置同值，
+  **自定义令牌必须两侧同步**，否则握手全拒）、认证成功才占槽（≤4）、
+  空闲 300s 断开、帧长上限；options 可显式关闭/改端口/令牌。
+- 生效条件：加载项升级后必须 **重启 HA**（集成代码随加载项落盘、HA 启动
+  时加载，运行中容器不换代码）。1.6.15 在线实例可先在「集成→慧尖→
+  选项」勾选"小程序局域网直连"立即启用。
+
 ## Supervisor API（2026-08-27 实测定案，v1.6.3 纠偏）
 
 ### 权限要求

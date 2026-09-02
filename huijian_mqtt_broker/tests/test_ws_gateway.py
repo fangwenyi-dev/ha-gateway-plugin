@@ -385,9 +385,14 @@ class TestWantedConfig:
                    for i, opt in enumerate(options_list)]
         return SimpleNamespace(config_entries=self._CE(entries))
 
-    def test_none_when_disabled(self):
+    def test_none_only_when_explicitly_disabled(self):
+        # v1.6.16 默认开：仅显式 False 才不启动
         assert ws_gateway_wanted(self._hass([{CONF_WS_GATEWAY_ENABLED: False}])) is None
-        assert ws_gateway_wanted(self._hass([{}])) is None
+
+    def test_empty_options_starts_with_defaults(self):
+        # v1.6.16 用户定案：老 entry 从未存过该键（options={}）也默认拉起——
+        # 实证 2026-09-02 小程序 mDNS 发现网关后 9001 Connection refused
+        assert ws_gateway_wanted(self._hass([{}])) == (9001, DEFAULT_WS_GATEWAY_TOKEN)
 
     def test_first_enabled_wins_defaults(self):
         w = ws_gateway_wanted(self._hass([

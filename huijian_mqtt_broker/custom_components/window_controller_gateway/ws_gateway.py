@@ -177,8 +177,9 @@ def device_ws_view(device_sn: str, gateway_sn: str, device: Dict[str, Any]) -> D
 class WsGatewayServer:
     """慧尖小程序 WS-JSON 网关服务器（aiohttp，HA 事件循环内运行）。
 
-    生命周期由 async_ensure_ws_gateway 管理：任一 entry 的 options 开启
-    ws_gateway_enabled 即启动（单例）；全部关闭/卸载即停止。命令处理
+    生命周期由 async_ensure_ws_gateway 管理：任一 entry 未显式关闭
+    ws_gateway_enabled 即启动（v1.6.16 默认开，对齐固件常听语义；
+    单例）；全部显式关闭/卸载即停止。命令处理
     每次实时遍历 hass.data[DOMAIN] 取当前 entry 集合，entry 增删无需
     重启服务器。
     """
@@ -581,8 +582,8 @@ class WsGatewayServer:
 # ==================== 生命周期入口（__init__.py 调用） ====================
 
 def ws_gateway_wanted(hass: HomeAssistant) -> Optional[Tuple[int, str]]:
-    """聚合各 entry options：返回 (port, token)——取第一个开启 WS 的
-    entry 的配置；无任何 entry 开启 → None。"""
+    """聚合各 entry options：返回 (port, token)——取第一个未显式关闭
+    WS 的 entry 的配置（v1.6.16 默认开）；全部显式关闭/无 entry → None。"""
     for entry in hass.config_entries.async_entries(DOMAIN):
         options = entry.options or {}
         if not options.get(CONF_WS_GATEWAY_ENABLED, DEFAULT_WS_GATEWAY_ENABLED):

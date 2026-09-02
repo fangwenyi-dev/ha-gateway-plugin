@@ -5,6 +5,28 @@
 
 ## [1.6.16] - 2026-09-02
 
+### 修复（小程序局域网直连 9001 永不监听——默认开定案）
+
+**实证**（2026-09-02 小程序日志 + 我方端口探测）：mDNS 已发现
+`_mqtt._tcp → 192.168.1.91:2022`（探活 2022 OPEN），但
+`ws://192.168.1.91:9001/ws` 恒 `Connection refused(111)`。根因非小程序/
+非网络：v1.6.15 集成侧 `DEFAULT_WS_GATEWAY_ENABLED=False`——WS 服务器
+根本不启动，9001 无监听；而固件（matter-broker main.cpp:231/735）是
+**配网完成即 `app_ws_gateway_start` 常听、无任何用户开关**。小程序按
+"固件同款设备"预期直撞 9001，插件的显式 opt-in 设计打破了该预期，
+客户更无从知晓存在隐藏开关。
+
+- `DEFAULT_WS_GATEWAY_ENABLED` False → **True**：任一网关 entry 存在即默认
+  监听（options 仍可显式关闭/改端口/令牌）；安全门禁不变——握手子协议
+  令牌校验（默认令牌=小程序内置同值）401 拒连、认证成功才占槽（≤4）、
+  空闲 300s 断开、帧长上限，与固件同构
+- config_flow / ws_gateway 三处 docstring 同步定案措辞；测试改造：
+  `test_none_only_when_explicitly_disabled`（仅显式 False 不启动）+
+  `test_empty_options_starts_with_defaults`（老 entry 空 options 也默认
+  拉起——正是本次事故形状），全量 224 通过
+- **升级生效条件**：HA 重启（集成代码随加载项落盘、HA 启动时加载；
+  1.6.15 在线实例默认关定死在代码里，勾选 options 可先行启用）
+
 ### 修复（cover 原生卡片开/停/关三键任何状态恒可点——用户定案）
 
 **根因实锤**（home-assistant/frontend `src/data/cover.ts`）：

@@ -682,8 +682,9 @@ class OptionsFlow(config_entries.OptionsFlow):
         保留并已真实接线（mqtt_handler._auto_discovery_enabled 门控 002
         自动添加）；三个字段与 strings/zh-CN 的 options.step.options 对齐。
 
-        v1.6.15 新增「小程序局域网直连」三项：enabled 默认关（9001 是
-        暴露到局域网的新监听面，必须显式开启）；令牌按固件握手规则
+        v1.6.15 新增「小程序局域网直连」三项；v1.6.16 起 enabled 默认**开**
+        （对齐固件"配网完成即常听"，令牌握手 401 门禁保留，可显式关闭）；
+        令牌按固件握手规则
         预校验（B4 教训：含空格/逗号的令牌会拆散子协议造成永久自锁），
         空串 = 不认证并如实提示。
         """

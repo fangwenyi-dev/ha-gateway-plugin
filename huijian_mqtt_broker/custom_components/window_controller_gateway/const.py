@@ -148,7 +148,13 @@ DEVICE_SN_PREFIX_WIND_LOCK: Final = "5005"  # 支持内倒/平开模式的LoRa�
 CONF_WS_GATEWAY_ENABLED: Final = "ws_gateway_enabled"
 CONF_WS_GATEWAY_PORT: Final = "ws_gateway_port"
 CONF_WS_GATEWAY_TOKEN: Final = "ws_gateway_token"
-DEFAULT_WS_GATEWAY_ENABLED: Final = False
+# v1.6.16 用户定案：默认**开**。实证 2026-09-02 小程序日志——mDNS 已发现
+# 网关（2022 OPEN）但 9001 Connection refused：默认关使"开箱即可直连"落空，
+# 且客户无从知晓还有隐藏开关。对齐固件行为（matter-broker main.cpp：
+# 配网完成/WiFi 就绪即 app_ws_gateway_start，无任何用户侧开关——常听）。
+# 安全面不变：握手子协议令牌校验（默认令牌=小程序内置共享值）401 拒连、
+# 认证成功才占槽（≤4）、帧长与空闲限制照固件；options 仍可显式关闭。
+DEFAULT_WS_GATEWAY_ENABLED: Final = True
 DEFAULT_WS_GATEWAY_PORT: Final = 9001
 DEFAULT_WS_GATEWAY_TOKEN: Final = "hIZ56jhQ-wzA3ENiP2xGzo55PXsewUWM"
 WS_GATEWAY_PATH: Final = "/ws"
