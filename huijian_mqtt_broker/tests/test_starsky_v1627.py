@@ -216,17 +216,20 @@ class TestEmptySlotsTransparent:
         assert "min-height: 262px" in dev, "5005 统一高度锚"
         assert "height" not in dev.replace("min-height", ""), "禁止固定高度"
 
-    def test_reduced_motion_static_sky_visible(self):
-        """v1.6.28 用户端"没动图没流星"根因：meteor base opacity:0 靠动画
-        投影，reduce 一停动画就整批隐身。兜底必须"静止但可见"：
-        .meteor 显影 + 7 颗各自冻结在斜穿半空的位置。"""
+    def test_reduced_motion_meteor_keeps_flowing(self):
+        """v1.6.29 官网同款口径：减弱动画下流星**不停**——官网尾注注入
+        duration !important 穿透其 reduce 守卫（用户同浏览器实证官网照见
+        流星），母本行为即标准。流星走 slow 关键帧慢速流动、其余动画静止。
+        禁回潮两版旧口径（全隐身 v1.6.28 / 静态冻结 v1.6.29 初版）"""
         seg = CSS[CSS.index("@media (prefers-reduced-motion: reduce)"):]
         m = re.search(r"\.meteor \{([^}]*)\}", seg).group(1)
-        assert "animation: none" in m and "opacity: .8" in m
-        frozen = re.findall(r"\.meteor-\d \{ transform: translateY\((\d+)px\) rotate\(18deg\); \}", seg)
-        assert len(frozen) == 7, "7 颗静态流星齐备"
-        ys = [int(v) for v in frozen]
-        assert len(set(ys)) == 7 and all(0 < y < 1100 for y in ys), "各异且在天幕行程内"
+        assert "animation-name: meteor-fall-slow !important" in m
+        assert "animation-duration: var(--mdur, 12s) !important" in m
+        assert "animation-iteration-count: infinite !important" in m
+        assert "translateY(260px)" not in seg, "静态冻结口径已作废"
+        kf = CSS[CSS.index("@keyframes meteor-fall-slow"):][:280]
+        assert "translateY(850px)" in kf and "opacity: .9" in kf and "opacity: .5" in kf, \
+            "slow 关键帧温和参数（峰 .9 尾 .5 程 850px）"
 
     def test_brand_logo_image(self):
         """页头＝慧尖真 logo（v1.6.29 用户指定，替换 📡 emoji），素材入 www/img

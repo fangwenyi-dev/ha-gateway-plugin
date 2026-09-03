@@ -183,6 +183,14 @@ body {
     70%  { opacity: 1; }
     100% { transform: translateY(1100px) rotate(18deg); opacity: 0; }
 }
+/* reduce 慢速变体（官网 meteor-fall-slow 同款几何节奏）：亮度峰值 .9 尾段
+   .5、行程收短到 850px，比全速温和但仍斜穿天幕 */
+@keyframes meteor-fall-slow {
+    0%   { transform: translateY(0) rotate(18deg); opacity: 0; }
+    5%   { opacity: .9; }
+    90%  { opacity: .5; }
+    100% { transform: translateY(850px) rotate(18deg); opacity: 0; }
+}
 
 /* =====================================================================
  * z1 内容层：.page —— 根背景 transparent（规矩①），悬浮于星空上
@@ -538,18 +546,15 @@ input[type="range"]:focus-visible { outline: 2px solid var(--primary-light); }
     .toast { left: 12px; right: 12px; bottom: 12px; max-width: none; justify-content: center; }
 }
 @media (prefers-reduced-motion: reduce) {
-    /* 标准哲学"运动宁慢勿快"，无障碍场景直接停掉星空所有动画与视差 */
+    /* 标准哲学"运动宁慢勿快"，无障碍场景停掉星空动画与视差 */
     *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
-    /* 静态夜空兜底（v1.6.29，用户端"没动图没流星"根因）：流星 base 是
-       opacity:0，靠动画投影——动画一停就整批隐身，星空看起来"死了"。
-       reduce 场景改为"静止但可见"：7 颗冻结在斜穿半空的各异位置，
-       形成静态流星雨（无位移=合规减弱动效，有画面=不空旷） */
-    .meteor { animation: none; opacity: .8; }
-    .meteor-1 { transform: translateY(260px) rotate(18deg); }
-    .meteor-2 { transform: translateY(540px) rotate(18deg); }
-    .meteor-3 { transform: translateY(170px) rotate(18deg); }
-    .meteor-4 { transform: translateY(760px) rotate(18deg); }
-    .meteor-5 { transform: translateY(420px) rotate(18deg); }
-    .meteor-6 { transform: translateY(95px) rotate(18deg); }
-    .meteor-7 { transform: translateY(650px) rotate(18deg); }
+    /* 流星例外＝官网同款行为（2026-09-07 用户同浏览器实证：系统减弱动画
+       下官网流星照动——官网尾注 JS 注入的 .meteor duration !important
+       级联后插队，穿透其 L70 reduce 守卫）。母本行为即标准：reduce 下
+       流星不停、走更温和的 slow 关键帧；星点/行星/星云等仍静止合规 */
+    .meteor {
+        animation-name: meteor-fall-slow !important;
+        animation-duration: var(--mdur, 12s) !important;
+        animation-iteration-count: infinite !important;
+    }
 }
