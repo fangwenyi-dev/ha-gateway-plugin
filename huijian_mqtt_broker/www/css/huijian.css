@@ -345,7 +345,9 @@ body {
 }
 
 /* ===== Devices ===== */
-.device-list { margin-top: 12px; display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; }
+/* align-items:start＝留空原则的纵向推论（用户校准 2026-09-07）：每块
+   设备玻璃只比自身内容大一圈，不被同行高件拉伸出空玻璃段 */
+.device-list { margin-top: 12px; display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; align-items: start; }
 @keyframes fadeUp { from { opacity: 0; transform: translateY(8px) scale(.99); } to { opacity: 1; transform: none; } }
 .device-item {
     display: flex; flex-direction: column;

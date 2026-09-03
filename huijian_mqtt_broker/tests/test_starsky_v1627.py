@@ -181,3 +181,11 @@ class TestEmptySlotsTransparent:
         assert "--bg-card" in hdr and "backdrop-filter" in hdr, "网关头部须自持玻璃"
         dev = self._rule(".device-item")
         assert "--bg-card" in dev and "backdrop-filter" in dev, "设备瓷砖须真玻璃（含磨砂）"
+
+    def test_tiles_hug_own_content(self):
+        """用户校准：设备玻璃框=比单独设备内容大一圈的方框——网格禁止
+        纵向拉伸（默认 stretch 会把矮内容拉成带空玻璃段的大板）。"""
+        grid = self._rule(".device-list")
+        assert "align-items: start" in grid, "设备瓷砖不得被行拉伸"
+        dev = self._rule(".device-item")
+        assert "height" not in dev, "设备框必须随内容自适应"
