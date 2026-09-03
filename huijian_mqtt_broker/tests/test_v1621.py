@@ -119,7 +119,24 @@ def test_ci_e2e_and_gitee_jobs():
     ci = (HERE.parent.parent / ".github" / "workflows" / "ci.yaml").read_text(
         encoding="utf-8")
     assert "bash huijian_mqtt_broker/tests/e2e/run_e2e.sh" in ci
-    assert "continue-on-error: true" in ci  # 盲调试期约定，连绿后摘除
+    # v1.6.23 定案反转：E2E 连绿转正为硬门禁——e2e job 段【不得】再挂
+    # continue-on-error（防无凭据复活挂绳），manifest 必须以 e2e 为 needs
+    # 前置（失败即不晋升 tag/latest）。
+    def _job_seg(name):
+        lines, hit = [], False
+        for ln in ci.splitlines():
+            if ln.startswith(f"  {name}:"):
+                hit = True
+            elif hit and ln.startswith("  ") and not ln.startswith("   "):
+                break  # 下一个 2 缩进 job key
+            elif hit:
+                lines.append(ln)
+        assert hit, f"ci.yaml 缺 {name} job"
+        return "\n".join(lines)
+    assert "continue-on-error" not in _job_seg("e2e"), \
+        "E2E 已连绿转正，挂绳不得复活（如需复活先证明真栈回归全绿）"
+    assert "needs: [prepare, init, build, e2e]" in _job_seg("manifest"), \
+        "manifest 必须 gate 在 e2e 之后（硬门禁拓扑）"
     assert "Create Gitee Release (idempotent)" in ci
     assert "target_commitish" in ci
     # BOM 防线：token 必须 ASCII（.gitee_token 曾带 BOM 打崩 API）

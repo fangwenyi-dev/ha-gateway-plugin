@@ -181,7 +181,8 @@ jobs:
 
   manifest:
     name: Manifest
-    needs: [prepare, init, build]
+    # e2e 为 v1.6.23 起的硬门禁（详见 e2e job 注释）
+    needs: [prepare, init, build, e2e]
     runs-on: ubuntu-latest
     steps:
       - name: Publish multi-arch manifest
@@ -346,12 +347,13 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # ========== 5. 真栈 E2E（真 HA + 真 mosquitto，第七轮评分补"mock≠真"债） ==========
-  # 首阶段 continue-on-error：无本地 docker 只能 CI 盲调试，稳定连绿后
-  # 摘除升为硬门禁（README/CLAUDE.md 均记录此约定）。
+  # v1.6.23 定案：本地真栈 9 轮 + CI 真栈连绿两轮（b228ce5/dff0efa）后摘除
+  # continue-on-error 升为发布硬门禁——e2e 前移与 build 并行（测试对象是
+  # 源码 bind 挂载 + :stable HA，不依赖本仓库镜像），并作为 manifest 前置：
+  # E2E 失败 = 不合并 manifest = 版本 tag/latest 均不晋升。
   e2e:
     name: E2E real stack
-    needs: [prepare, manifest]
-    continue-on-error: true
+    needs: [prepare]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
