@@ -3,6 +3,37 @@
 所有版本变更记录在此文件中。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.6.25] - 2026-09-06
+
+### Changed（纯重构批，行为零变化）
+- **mqtt_handler 拆包**：1774 行单文件 → `mqtt_handler/` 包（组合类 + 5 个按消息
+  生命周期内聚的 mixin：lifecycle/protocol/ctypes/commands/callbacks，全部 <600 行）。
+  机械逐字拆分（1514 个非空正文行多重集比对逐字节一致）；对外 import 面、ack 方向
+  契约、dedup 语义、weakref 回调设计零触碰；logger 名钉死拆分前值
+- **Web UI 三文件化**：index.html 1468 → 90 行；内联样式/脚本逐字节外置为
+  `www/css/huijian.css`(356) + `www/js/huijian.js`(1022)（唯一形态变化：
+  CURRENT_VERSION 语句逐字移至 index.html 内联单行，全仓唯一声明面有钉桩守护）；
+  外置脚本保持 body 末尾同步执行（与原内联时序严格一致）；css/js 自动继承
+  `location /` 的 no-store 缓存定案（新增双份配置防回退钉桩，nginx 零改动）
+- **run.sh 维持单文件的定案**：加载项规范要求唯一入口，且 30+ 测试锚/桥 e2e/
+  凭据生成资产逐字锚定该文件——拆 shell 会连锁重写全部实证资产，风险收益倒挂
+
+### Added
+- `tests/e2e/z2m_direct_e2e.sh` + `gen_z2m_authenv.py`：zigbee2mqtt 直连慧尖全链路
+  实证（生产认证形态 Z1-Z4 用 run.sh 原文生成区逐字产出 + 真 HA 消费 Z5），
+  实测全绿；实证 mosquitto 2.x 对 ACL 拒绝 PUBLISH 静默丢弃不断连（零投递硬断言）
+- `ARCHITECTURE.md`：mermaid 全拓扑 + ASCII 简版（Gitee 兜底）+ 三条连接主线
+  （分发/数据/接口）+ 安全边界索引；README 挂链
+- `tests/test_webui_split_v1625.py`：三文件化 8 项钉桩（字节搬运/相对路径/
+  no-store 覆盖/脚本时序/onclick 可得性）
+
+### Notes
+- z2m 直连交付结论定案：只装慧尖即可——z2m 配 `mqtt://<host>:2022` +
+  `huijian_z2m` 账号；Supervisor 源码证实 `mqtt:need` 无启动闸，官方
+  Mosquitto 非 z2m 启动前提
+- 全量回归 314 绿（含本批新增 8 项）+ 真 HA 栈 E2E 全断言（HA 实载拆包代码）
+  + Z 矩阵重跑；bash -n / py_compile 全过
+
 ## [1.6.24] - 2026-09-06
 
 ### Added

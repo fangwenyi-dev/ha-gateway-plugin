@@ -683,7 +683,9 @@ class TestStaticPins:
         # 源站 216KB/s 稳定，42MB≈3-4 分钟可接受
         assert "ghcr.io/fangwenyi-dev" in img
         assert "nju" not in img and "1ms" not in img
-        assert 'version: "1.6.24"' in src
+        import re as _re
+        assert _re.search(r'^version: "\d+\.\d+\.\d+"$', src, _re.M), \
+            "config.yaml 缺规范 version 字段（v1.6.25 起动态断言，bump 不再改本测试）"
 
     def test_ci_warm_arm64_mapping_and_guards(self):
         src = (HERE.parent.parent / ".github" / "workflows" / "ci.yaml").read_text(
@@ -694,7 +696,10 @@ class TestStaticPins:
         assert '[ -z "$MAN" ]' in src and '[ -z "$BLOBS" ]' in src
 
     def test_version_files_consistent(self):
-        ver = "1.6.24"
+        import re as _re
+        # 权威源=config.yaml 的 version（v1.6.25 起动态提取，防 bump 遗漏）
+        cfg = (HERE.parent / "config.yaml").read_text(encoding="utf-8")
+        ver = _re.search(r'^version: "(\d+\.\d+\.\d+)"$', cfg, _re.M).group(1)
         assert ver in (HERE.parent / "www" / "version.json").read_text(encoding="utf-8")
         assert f"CURRENT_VERSION = '{ver}'" in (HERE.parent / "www" / "index.html").read_text(encoding="utf-8")
         mf = json.loads((PKG / "manifest.json").read_text(encoding="utf-8"))
