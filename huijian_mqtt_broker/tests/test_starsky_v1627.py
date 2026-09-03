@@ -130,6 +130,11 @@ class TestStarskyJs:
         assert re.search(r"between\(55, 75\)", SKY), "漂移 55~75s"
         assert re.search(r"between\(3\.5, 7\)", SKY), "明灭 3.5~7s"
         assert "(i % 10) < 6" in SKY, "60% 星云区偏置"
+        # 偏置区必须随官网三团落点重排（左上蓝/中上金/右下青），
+        # 禁仍指旧单团左下（x2-52/y52-96）
+        assert "between(2, 42)" in SKY and "between(55, 88)" in SKY and "between(60, 97)" in SKY, \
+            "行星偏置区须对位官网三团"
+        assert "between(52, 96)" not in SKY, "旧单团左下偏置区已作废"
         assert re.search(r"pick\(\[3, 3, 4, 4, 6\]\)", SKY), "3/4/6px 三档"
         # 双层独立时钟 = 两个 DOM 层各自 animation（漂移在 .orbit-wrap，
         # 明灭在 .planet）——CSS 侧耦合回潮即红

@@ -66,9 +66,18 @@
         var palette = ['#7dd3fc', '#38bdf8', '#0ea5e9', '#e0f2fe'];
         var frag = document.createDocumentFragment();
         for (var i = 0; i < 16; i++) {
-            var inNebula = (i % 10) < 6;   // 60% 压进左下星云区（标准偏置）
-            var x = inNebula ? between(2, 52) : between(2, 96);
-            var y = inNebula ? between(52, 96) : between(2, 96);
+            var inNebula = (i % 10) < 6;   // 60% 压进星云团区（标准偏置）
+            // v1.6.27 星云改官网三团口径后，偏置区随团重排：
+            // 蓝团左上 / 金团中上 / 青团右下（::before/::after/.nebula3 落点）
+            var x, y;
+            if (inNebula) {
+                var blob = i % 6;
+                if (blob < 2)      { x = between(2, 42);  y = between(2, 45);  } // 蓝团
+                else if (blob < 4) { x = between(55, 88); y = between(8, 48);  } // 金团
+                else               { x = between(60, 97); y = between(42, 85); } // 青团
+            } else {
+                x = between(2, 96); y = between(2, 96);
+            }
             var size = pick([3, 3, 4, 4, 6]);       // 三档，小星占多
             var drift = between(55, 75);            // 漂移一圈 55~75s
             var twk = between(3.5, 7);              // 明灭单周期 3.5~7s
