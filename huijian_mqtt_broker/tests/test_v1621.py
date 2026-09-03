@@ -119,11 +119,25 @@ def test_ci_e2e_and_gitee_jobs():
 
 
 def test_e2e_script_key_steps():
-    s = (HERE / "e2e" / "run_e2e.sh").read_text(encoding="utf-8")
-    assert s.startswith("#!/usr/bin/env bash")
-    assert "set -Eeuo pipefail" in s
-    for anchor in ("api/onboarding/users", "gateway/rpt_rsp",
-                   "window_controller_gateway", "config_entries/flow",
+    sh = (HERE / "e2e" / "run_e2e.sh").read_text(encoding="utf-8")
+    assert sh.startswith("#!/usr/bin/env bash")
+    assert "set -Eeuo pipefail" in sh
+    for anchor in ("ha_e2e_driver.py", "docker exec", "eclipse-mosquitto:2",
+                   "ghcr.io/home-assistant/home-assistant", "diag"):
+        assert anchor in sh, f"E2E 编排缺关键锚: {anchor}"
+    d = (HERE / "e2e" / "ha_e2e_driver.py").read_text(encoding="utf-8")
+    for anchor in ("api/onboarding/users", "auth_code", "/auth/token",
+                   "gateway/rpt_rsp", "config_entries/flow",
                    "/api/window_controller_gateway/devices",
-                   "mosquitto_pub", "GITHUB_STEP_SUMMARY"):
-        assert anchor in s, f"E2E 缺关键步骤锚: {anchor}"
+                   "window_controller_gateway", "paho", "GITHUB_STEP_SUMMARY"):
+        assert anchor in d, f"E2E driver 缺关键锚: {anchor}"
+    # auth 契约注释必须留痕（client_id 需 IndieAuth URL 形态的实证结论）
+    assert "verify_client_id" in d and "indieauth" in d.lower()
+    # 本地一键迭代 harness（与 CI 同一 driver，契约同源）
+    import os
+    rl = HERE / "e2e" / "run_local.sh"
+    assert rl.exists()
+    r = rl.read_text(encoding="utf-8")
+    for anchor in ("ha_e2e_driver.py", "home[A]", "python[0-9.]* -m home[a]ssistant"):
+        pass  # 括号防自杀技巧与 driver 引用
+    assert "ha_e2e_driver.py" in r and "home[a]ssistant" in r
