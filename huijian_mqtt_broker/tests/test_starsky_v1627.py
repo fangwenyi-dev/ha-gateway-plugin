@@ -81,12 +81,18 @@ class TestSkyElements:
             r"\.meteor-\d \{[^}]*?--mdur: ([\d.]+)s", CSS)]
         assert len(durs) == 7 and all(10.0 <= d <= 16.0 for d in durs), \
             f"流星 10~16s 全周期节奏: {durs}"
+        delays = [float(m) for m in re.findall(
+            r"\.meteor-\d \{[^}]*?--mdelay: (-?[\d.]+)s", CSS)]
+        assert len(delays) == 7 and all(d < 0 for d in delays), \
+            f"流星必须负相位进场（正延迟=打开页面头几秒无星可看，用户实测反馈）: {delays}"
 
     def test_nebula_single_restrained(self):
         assert INDEX.count('class="nebula"') == 1, "星云全站仅一朵"
         seg = CSS[CSS.index(".nebula {"):CSS.index("@keyframes nebula-drift")]
         alphas = [float(a) for a in re.findall(r"rgba\([\d, ]+, (\.[\d]+)\)", seg)]
-        assert alphas and max(alphas) <= 0.12, f"星云宁淡勿浓: {alphas}"
+        # web 移植校准上限 .18（小程序 .10 定案在 web 满屏卡片下实测不可见，
+        # 见 CSS 注释；仍禁内核白雾层，禁的是大 α 白心不是青蓝主峰）
+        assert alphas and max(alphas) <= 0.18, f"星云宁淡勿浓: {alphas}"
         assert "45s" in seg, "漂移对齐官网 aurora-move1 45s"
         assert "bottom: -30%" in seg and "left: -14%" in seg, "左下溢角巨团位姿"
 
@@ -150,3 +156,28 @@ class TestDomHookCoverage:
         # 与 v1.6.25 三文件化守卫同族：骨架改动不得动到 onclick 函数面
         for fn in set(re.findall(r'onclick="(\w+)\(', INDEX)):
             assert re.search(rf"\bfunction {fn}\s*\(", JS), f"{fn}() 丢失"
+
+
+class TestEmptySlotsTransparent:
+    """用户校准的留空原则：网关/子设备区未添加处必须透出星空，
+    玻璃只落在真实存在的悬浮件上（网关头、设备瓷砖各自自持）。"""
+
+    def _rule(self, selector):
+        m = re.search(re.escape(selector) + r" \{([^}]*)\}", _code(CSS))
+        assert m, f"缺少规则 {selector}"
+        return m.group(1)
+
+    def test_gateway_card_flush(self):
+        assert 'class="card card-flush"' in INDEX, "网关区须用留空卡"
+        r = self._rule(".card-flush")
+        assert "background: transparent" in r and "backdrop-filter: none" in r
+
+    def test_gateway_container_has_no_slab(self):
+        r = self._rule(".gateway-item")
+        assert "background" not in r, "网关容器铺底=空位也被磨成雾（违留空原则）"
+
+    def test_glass_lives_on_real_blocks(self):
+        hdr = self._rule(".gateway-header")
+        assert "--bg-card" in hdr and "backdrop-filter" in hdr, "网关头部须自持玻璃"
+        dev = self._rule(".device-item")
+        assert "--bg-card" in dev and "backdrop-filter" in dev, "设备瓷砖须真玻璃（含磨砂）"
