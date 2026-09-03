@@ -94,9 +94,26 @@ https://github.com/fangwenyi-dev/ha-gateway-plugin
 
 填 `huijian.local`（mDNS 自动发现）或 HA 的 IP 地址，端口 `2022`。插件内置 Python zeroconf 会广播 `huijian.local` 主机名，网关可自动发现并连接。
 
-### Q: 可以和 HA 官方 Mosquitto broker 共存吗？
+### Q: 可以和官方 "Mosquitto broker" 加载项 / zigbee2mqtt 共存吗？
 
-可以。本插件使用端口 `2022`，不会与官方 broker 的 `1883` 冲突，两个 broker 可同时运行。
+**可以（v1.6.24 起全自动，零配置改动）。** 需要澄清两点：
+
+1. 两个 broker 端口不同（本插件 `2022`、官方 `1883`），进程层面从不冲突；
+2. 真正的约束是 **HA 的 MQTT 集成全局只能连接一个 broker**（慧尖默认指向
+   内置 `127.0.0.1:2022`）。
+
+v1.6.24 的解法：慧尖每 30 秒探测本机 `1883`——检测到官方 Mosquitto 加载项
+在运行时，**自动为内置 broker 添加通往它的桥接**（主题双向转发），官方卸载
+后自动拆除。效果：
+
+- zigbee2mqtt 保持默认配置连官方 broker，其设备发现/状态经桥到达慧尖内置
+  broker → HA 正常建现实体；
+- 慧尖开窗器完全不受影响；**双方插件均无需修改任何配置**；
+- 桥引发的内置 broker 重启约 5 秒（LoRa 网关固件自动重连，无感）。
+
+未安装官方 Mosquitto 时桥不存在，纯慧尖用户体验与旧版完全一致。
+（诊断字段 `coexist_bridge` / `official_peer_up` 见插件 status.json，无界面
+展示，供售后排障。）
 
 ### Q: 如何升级插件？
 

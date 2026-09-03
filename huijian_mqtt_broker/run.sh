@@ -142,11 +142,14 @@ EOF
     if [ "${HA_MQTT_USER_CREATED}" = "true" ]; then
         cat <<EOF
 
-# ${HA_MQTT_USERNAME}（HA MQTT 集成）：MQTT discovery 需要 homeassistant/# 全权限
+# ${HA_MQTT_USERNAME}（HA MQTT 集成）：全主题读写——HA MQTT 集成本质是
+# 通用消费者（任意 MQTT 插件的发现/状态/命令主题都要订阅与发布），
+# 官方 Mosquitto 加载项 + HA 的组合历来如此，安全水位与官方生态等同。
+# v1.6.24 共存桥：z2m 等第三方插件的消息经桥进入内置 broker 后，HA 须
+# 能订阅 zigbee2mqtt/# 等主题。LoRa 网关用户(${USERNAME})保持最小权限不变。
 user ${HA_MQTT_USERNAME}
 
-# HA MQTT 集成 discovery 主题
-topic readwrite homeassistant/#
+topic readwrite #
 
 # 慧尖网关协议主题
 topic readwrite gateway/+
@@ -578,9 +581,88 @@ fi
 # host_network 下容器网络命名空间=主机，看到的即真实监听。
 # 本循环是后台子 shell；v1.6.3 起主脚本无 exec 语义（wait 自愈循环常驻），
 # 主脚本退出后由 init 接管继续运行。
+# ---------- 7b. 第三方共存自动桥（v1.6.24） ----------
+# 场景：用户后装官方「Mosquitto broker」加载项 + zigbee2mqtt（z2m 默认连
+# core-mosquitto:1883；host_network 下即主机 127.0.0.1:1883）。HA MQTT 集成
+# 全局唯一、已由慧尖指向内置 :2022——为让两个插件"零配置改动"共存，内置
+# broker 自动向 1883 搭桥（topic # both 双向转发）：z2m 的发现/状态经桥到达
+# 内置 broker → HA 可见；gateway/# 反向到达官方 broker（z2m 侧无害）。
+# 状态机：每 30s 对账一次——1883 在且无桥→写 conf 并由主自愈循环重启
+# mosquitto（计划内重启：RUN_SECS>=60 时崩溃计数器归零，不触发
+# MAX_MOSQUITTO_RESTARTS 防护）；1883 消失且桥在→删段重启。冷却 120s 防抖。
+BRIDGE_MARKER="AUTO-COEXIST-BRIDGE"
+MOSQ_CONF="/etc/mosquitto/mosquitto.conf"
+OFFICIAL_PORT_HEX=$(printf '%04X' 1883)
+_bridge_peer_up() {
+    # 复用本脚本的 /proc/net/tcp 扫描法（busybox 环境零进程开销）：
+    # 本地任意地址 LISTEN(0A) 端口 :1883
+    awk -v pat=":${OFFICIAL_PORT_HEX}$" 'FNR>1 && $2 ~ pat && $4=="0A" {found=1} END{exit !found}' \
+        /proc/net/tcp /proc/net/tcp6 2>/dev/null
+}
+_bridge_present() { grep -q "BEGIN ${BRIDGE_MARKER}" "${MOSQ_CONF}" 2>/dev/null; }
+_bridge_on() {
+    _bridge_present && return 0
+    cat >> "${MOSQ_CONF}" <<EOF
+
+# BEGIN ${BRIDGE_MARKER}（自动管理——1883 官方 broker 出现/消失时对账同步）
+connection core_mosquitto
+address 127.0.0.1:1883
+# 方向分离桥（真栈风暴实证禁 both：mosquitto 2.0.22 桥对 both 模式无
+# origin 防环，retained 消息两 broker 间乒乓自激复制）——
+# out：HA 侧经内置 broker 发的 z2m 控制命令送出去；
+# in：z2m 状态 + MQTT discovery 配置注入内置 broker 供 HA 消费。
+# homeassistant/# 只进不出（HA 不发 discovery 主题，且防慧尖网关侧
+# 心跳主题回灌官方 broker 干扰其用户）。
+topic zigbee2mqtt/# out 1
+topic zigbee2mqtt/# in 1
+topic homeassistant/# in 1
+# gateway/# 双向（真栈 7 行版，须 S3 复测）：官方加载项声明 integration:
+# mqtt 时 Supervisor 会把 HA 的 MQTT 条目反向推给 core-mosquitto:1883——
+# 此时 HA 在官方侧消费慧尖，须靠本桥把网关上报送过去、把 req 命令送回来。
+# 双向兼容后：HA 条目指 2022（慧尖接管态）或指 1883（Supervisor 推送态）
+# 均全链路可用，才真正兑现"零配置改动"。
+topic gateway/# out 1
+topic gateway/# in 1
+# END ${BRIDGE_MARKER}
+EOF
+    echo "[共存] 检测到官方 Mosquitto(:1883) → 自动写入桥接，重启 broker 生效"
+    kill -TERM "$(cat /run/mosquitto.pid 2>/dev/null)" 2>/dev/null || true
+}
+_bridge_off() {
+    _bridge_present || return 0
+    sed -i "/# BEGIN ${BRIDGE_MARKER}/,/# END ${BRIDGE_MARKER}/d" "${MOSQ_CONF}"
+    echo "[共存] 官方 Mosquitto(:1883) 已消失 → 移除桥接，重启 broker 生效"
+    kill -TERM "$(cat /run/mosquitto.pid 2>/dev/null)" 2>/dev/null || true
+}
+
 PORT_HEX=$(printf '%04X' "${MQTT_PORT}")
+BRIDGE_TICK=0
 (
     while true; do
+        # v1.6.24 共存桥对账：每 30s（6×5s tick）一次；动作后冷却 120s，
+        # 防官方 Mosquitto 安装中/重启期端口闪现闪无导致 broker 连环重启
+        BRIDGE_TICK=$((BRIDGE_TICK + 1))
+        if [ $((BRIDGE_TICK % 6)) -eq 0 ]; then
+            LAST_TS=$(cat /run/bridge_last_ts 2>/dev/null || echo 0)
+            NOW_TS=$(date +%s)
+            if [ $((NOW_TS - LAST_TS)) -ge 120 ] 2>/dev/null; then
+                # 仅"真实状态迁移"（peer 在而无桥 / 桥在而无 peer）才动作并
+                # 记录冷却时间戳——noop tick 不续期，否则冷却永不过期、
+                # 桥拆不掉（本行缺陷为自查实证发现，冷却语义=两次"重启动作"
+                # 的最小间隔）
+                if _bridge_peer_up; then
+                    if ! _bridge_present; then
+                        _bridge_on || true
+                        echo "${NOW_TS}" > /run/bridge_last_ts
+                    fi
+                else
+                    if _bridge_present; then
+                        _bridge_off || true
+                        echo "${NOW_TS}" > /run/bridge_last_ts
+                    fi
+                fi
+            fi
+        fi
         # 单次扫描同时得到 ESTABLISHED 连接数与 LISTEN 套接字数
         CONN_STATS=$(awk -v pat=":${PORT_HEX}$" 'FNR>1 && $2 ~ pat {
                             if ($4 == "01") c++; else if ($4 == "0A") l++
@@ -607,8 +689,16 @@ PORT_HEX=$(printf '%04X' "${MQTT_PORT}")
         # 引用见 const.py DEFAULT_MQTT_PASSWORD 注释）；Web UI 概览据此提示改密
         DP_IS_DEFAULT=false
         if [ "${PASSWORD}" = "huijian2022" ]; then DP_IS_DEFAULT=true; fi
-        jq -n --argjson r "${RUNNING}" --argjson p "${PID_NOW:-0}" --argjson l "${LISTENERS:-0}" --argjson pt "${MQTT_PORT}" --argjson dp "${DP_IS_DEFAULT}" \
-            '{status:(if $r then "running" else "stopped" end), running:$r, broker:"mosquitto", port:$pt, pid:$p, listeners:$l, mqtt_password_is_default:$dp, updated:(now|todate)}' \
+        # v1.6.24 共存桥状态位（诊断/支持用，无展示面——产品定案同凭据提示）
+        # 必须 if 形：`x && y` 短路 false 的行尾返回值会触发本 subshell 继承
+        # 的 set -e（v1.6.3 :343 起生效），巡检循环会被静默杀死（v1.6.4 的
+        # || echo 防御与 v1.6.2 假状态是同族教训）
+        BRIDGE_ON_F=false
+        if _bridge_present; then BRIDGE_ON_F=true; fi
+        PEER_UP_F=false
+        if _bridge_peer_up; then PEER_UP_F=true; fi
+        jq -n --argjson r "${RUNNING}" --argjson p "${PID_NOW:-0}" --argjson l "${LISTENERS:-0}" --argjson pt "${MQTT_PORT}" --argjson dp "${DP_IS_DEFAULT}" --argjson bc "${BRIDGE_ON_F}" --argjson pu "${PEER_UP_F}" \
+            '{status:(if $r then "running" else "stopped" end), running:$r, broker:"mosquitto", port:$pt, pid:$p, listeners:$l, mqtt_password_is_default:$dp, coexist_bridge:$bc, official_peer_up:$pu, updated:(now|todate)}' \
             > /usr/share/nginx/html/status.json.tmp 2>/dev/null \
             && mv /usr/share/nginx/html/status.json.tmp /usr/share/nginx/html/status.json 2>/dev/null \
             || echo "[警告] status.json 写入失败——页面状态将冻结，重点排查"
@@ -618,6 +708,12 @@ PORT_HEX=$(printf '%04X' "${MQTT_PORT}")
 
 # ---------- 8. 后台启动 mosquitto，验证 MQTT 协议可用后再继续 ----------
 echo "[运行] Broker 以前台模式运行..."
+
+# v1.6.24：官方 Mosquitto 若已在运行，先写桥再接管启动（免一次计划内重启）
+if _bridge_peer_up; then
+    _bridge_on
+    date +%s > /run/bridge_last_ts
+fi
 
 # 先后台启动 mosquitto
 mosquitto -c /etc/mosquitto/mosquitto.conf &

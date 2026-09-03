@@ -3,6 +3,45 @@
 所有版本变更记录在此文件中。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.6.24] - 2026-09-06
+
+### Added
+- **第三方 MQTT 共存自动桥**：慧尖内置 broker 每 30s 探测本机 `1883` 端口，
+  检测到官方「Mosquitto broker」加载项（zigbee2mqtt 等的默认依赖）在运行时
+  自动建立**方向分离桥**（`zigbee2mqtt/#` 双向、`homeassistant/#` 只进、
+  `gateway/#` 双向），其消失后自动拆除——z2m 设备发现/状态经桥进入慧尖内置
+  broker，HA MQTT 集成（全局唯一）即可正常建实 z2m 实体，HA 下发的 z2m
+  控制命令经 out 方向送回；`gateway/#` 双向则保证即使 Supervisor 把 HA 的
+  MQTT 条目反向推给官方加载项（其 `integration: mqtt` 声明行为），慧尖也
+  全链路可用。**慧尖用户与 z2m 用户双方插件都无需修改任何配置**；
+  未装官方 Mosquitto 的纯慧尖用户桥不存在、行为与旧版完全一致。
+- 桥变更引发的 broker 重启走既有主自愈循环（计划内重启，崩溃计数器
+  60s 语义不误伤），120s 冷却防 1883 端口抖动连环重启。
+- `status.json` 新增诊断字段 `coexist_bridge` / `official_peer_up`
+  （售后支持面，无界面展示——与凭据提示产品定案同边界）。
+
+### Changed
+- 内置 broker ACL：`ha_mqtt`（HA 集成账号）放开为全主题读写——桥转发来的
+  `zigbee2mqtt/#` 等主题 HA 须可订阅（与"官方 Mosquitto + HA"组合历来
+  的安全水位等同）；**LoRa 网关账号维持最小权限不变**。
+
+### Fixed
+- （机制实证发现×2，均钉为 tests/test_v1624.py 红线）：
+  1. `topic # both 1` 全量双向桥在 mosquitto 2.0.22 真栈实测发生 retained
+     乒乓自激风暴（两条消息放大至数百条），改为方向分离 + 前缀白名单；
+  2. 桥块禁止掺入 `notifications` / `notification_interval` /
+     `try_initialize` 等未测选项——实测为 unknown 配置变量，任一入块即
+     broker 整进程拒启（真栈 crash-loop 复现两轮后钉死）。
+
+### 验证
+- 真栈机制实证（本地 mosquitto 2.0.22 双实例 + paho，函数区从 run.sh 原文
+  抽取执行、非手写复刻）：peer 出现→桥自动写入→自愈重启→六项语义逐条
+  （z2m 状态/discovery 穿 in 达 HA 各恰 1 条、HA 控制命令穿 out 达 z2m、
+  网关上报穿 out 达 1883 侧、1883 侧 req 穿 in 达固件、固件命令零回显、
+  总消息数=6+1 无风暴）→peer 消失→自动拆桥→内置服务无恙→peer 重现→桥
+  可逆重装，S0-S6 全链路通过。
+- tests/test_v1624.py 9 项静态钉桩（含桥块逐行红线）+ 全量回归。
+
 ## [1.6.23] - 2026-09-05
 
 ### Added
