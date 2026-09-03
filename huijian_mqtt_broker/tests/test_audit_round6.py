@@ -683,7 +683,7 @@ class TestStaticPins:
         # 源站 216KB/s 稳定，42MB≈3-4 分钟可接受
         assert "ghcr.io/fangwenyi-dev" in img
         assert "nju" not in img and "1ms" not in img
-        assert 'version: "1.6.21"' in src
+        assert 'version: "1.6.22"' in src
 
     def test_ci_warm_arm64_mapping_and_guards(self):
         src = (HERE.parent.parent / ".github" / "workflows" / "ci.yaml").read_text(
@@ -694,7 +694,7 @@ class TestStaticPins:
         assert '[ -z "$MAN" ]' in src and '[ -z "$BLOBS" ]' in src
 
     def test_version_files_consistent(self):
-        ver = "1.6.21"
+        ver = "1.6.22"
         assert ver in (HERE.parent / "www" / "version.json").read_text(encoding="utf-8")
         assert f"CURRENT_VERSION = '{ver}'" in (HERE.parent / "www" / "index.html").read_text(encoding="utf-8")
         mf = json.loads((PKG / "manifest.json").read_text(encoding="utf-8"))

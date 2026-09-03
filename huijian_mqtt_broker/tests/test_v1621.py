@@ -97,15 +97,23 @@ def test_status_json_carries_default_flag():
 # ---------- Web UI 提示面 ----------
 
 def test_webui_credential_status_wired():
+    """v1.6.22 定案反转：Web UI 不得展示凭据状态提示。
+
+    MQTT 密码/令牌轮换必须与 LoRa 网关固件侧同步修改，终端用户无
+    处置能力——展示"仍是默认值"只会造成困惑与误操作（用户 2026-09
+    明确要求移除）。后端 security 视图与 status.json 字段保留为
+    只读诊断面（零展示面），故此处的 UI 钉桩转为负向防复活。
+    """
     html = (HERE.parent / "www" / "index.html").read_text(encoding="utf-8")
-    assert 'id="credStatus"' in html
-    assert "api/window_controller_gateway/security" in html
-    assert "mqtt_password_is_default" in html
-    # 明文令牌/密码不得出现在前端比较逻辑（只消费布尔）
-    assert "hIZ56jhQ" not in html
+    assert "credStatus" not in html
+    assert "凭据状态" not in html
+    assert "wsTokenIsDefault" not in html
+    # 后端诊断面仍在（保留决策）：
+    import pathlib
+    api = (HERE.parent / "custom_components" / "window_controller_gateway" /
+           "api.py").read_text(encoding="utf-8")
+    assert "WindowGatewaySecurityView" in api
 
-
-# ---------- CI 挂载 ----------
 
 def test_ci_e2e_and_gitee_jobs():
     ci = (HERE.parent.parent / ".github" / "workflows" / "ci.yaml").read_text(

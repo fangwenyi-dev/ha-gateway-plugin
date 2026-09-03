@@ -3,6 +3,22 @@
 所有版本变更记录在此文件中。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.6.22] - 2026-09-05
+
+### Removed
+- **Web UI 移除「凭据状态」提示项**（用户定案）：MQTT 密码/小程序令牌
+  轮换必须与 LoRa 网关固件侧同步修改，终端用户无处置能力，展示
+  "仍是默认值"只会造成困惑。后端只读诊断面保留：集成
+  `/api/window_controller_gateway/security` 视图与 status.json 的
+  `mqtt_password_is_default` 字段继续存在（零展示面，供远程支持排查），
+  UI 钉桩转负向防复活（tests/test_v1621.py）。
+
+### Infrastructure（同批推送，不改变已发布行为）
+- 真栈 E2E 驱动器定稿（tests/e2e/ha_e2e_driver.py + run_local.sh）：
+  本地 WSL 真 HA Core + 真 mosquitto 六轮迭代全绿——onboarding
+  IndieAuth URL client_id 契约、confirm_add 二步流、500 条上报
+  ~199/s soak、ack 现场实证；CI 编排 summary 断链修复。
+
 ## [1.6.21] - 2026-09-04
 
 ### 新增（第七轮评分扣分项优化批——不动现有功能，纯增量）
