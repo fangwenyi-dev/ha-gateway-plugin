@@ -552,17 +552,29 @@ class TestCleanupUnloadsPlatforms:
 
 
 class TestVersionFields:
-    """1.6.26 五处字段一致 + 历史注释防 bump 漂移（MEMORY 铁律）。"""
+    """五处字段一致 + 历史注释防 bump 漂移（MEMORY 铁律）。
+
+    want 从 config.yaml 动态读（v1.6.25「测试动态版本锚根治」定案）——
+    否则每次升版都要回来改这个字面量，与"版本单一真源"自相矛盾。
+    """
 
     def test_fields(self):
-        want = "1.6.26"
         cfg = (ROOT / "config.yaml").read_text(encoding="utf-8")
+        want = re.search(r'^version: "([\d.]+)"', cfg, re.M).group(1)
         mf = json.loads((ROOT / "custom_components/window_controller_gateway/manifest.json").read_text(encoding="utf-8"))
         vj = json.loads((ROOT / "www/version.json").read_text(encoding="utf-8"))
-        assert re.search(rf'^version: "{want}"', cfg, re.M)
+        assert want, "config.yaml 未解析出版本"
         assert mf["version"] == want
         assert vj["addon_version"] == want == vj["integration_version"]
         assert f"CURRENT_VERSION = '{want}'" in INDEX
+
+    def test_changelog_contains_current_version_section(self):
+        """动态锚：CHANGELOG 必须已含 config.yaml 同版本段（发布铁律的
+        机器化——忘写 CHANGELOG 就升版当场红）。"""
+        cfg = (ROOT / "config.yaml").read_text(encoding="utf-8")
+        want = re.search(r'^version: "([\d.]+)"', cfg, re.M).group(1)
+        chg = (ROOT.parent / "CHANGELOG.md").read_text(encoding="utf-8")
+        assert f"## [{want}]" in chg, f"CHANGELOG 缺 [{want}] 段"
 
     def test_historical_comments_not_drifted(self):
         # 拆包/共存桥/三文件化的历史注释必须仍指认真实引入版本

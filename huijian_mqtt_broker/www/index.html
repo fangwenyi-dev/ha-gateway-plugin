@@ -3,12 +3,24 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="theme-color" content="#4f46e5">
+    <meta name="theme-color" content="#030712">
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='0.9em' font-size='90'%3E%F0%9F%93%A1%3C/text%3E%3C/svg%3E">
     <title>慧尖 LoRa 网关</title>
     <link rel="stylesheet" href="css/huijian.css">
 </head>
 <body>
+    <!-- v1.6.27「星辰大海」背景层（对齐小程序 UI 标准 0d2200c5）：
+         z0 固定星空（氛围底/星云一朵/星点/行星群由 css + starsky.js 生成，
+         流星 7 颗标记式——行程 1100px 全周期只准向下）；内容层 z1 悬浮玻璃。
+         aria-hidden：纯装饰，不进辅助技术。 -->
+    <div class="star-bg" aria-hidden="true">
+        <div class="nebula"></div>
+        <div class="stars-far" id="starsFar"></div>
+        <div class="stars-near" id="starsNear"></div>
+        <div class="planets" id="planets"></div>
+        <span class="meteor meteor-1"></span><span class="meteor meteor-2"></span><span class="meteor meteor-3"></span><span class="meteor meteor-4"></span><span class="meteor meteor-5"></span><span class="meteor meteor-6"></span><span class="meteor meteor-7"></span>
+    </div>
+    <div class="page">
     <div class="header">
         <div class="brand">
             <span class="brand-logo">📡</span>
@@ -83,10 +95,13 @@
              （JS 挂掉时更会永久错版）。版本单一真源＝下行 CURRENT_VERSION。 -->
         <p>慧尖 LoRa 网关一体化插件 <span id="footerVersion"></span></p>
     </div>
+    </div><!-- /.page -->
 
     <!-- v1.6.25 Web UI 三文件化：css/js 外置（相对路径，兼容 HA ingress 前缀）。
-         CURRENT_VERSION 按测试锚留在本文件；huijian.js 复用此全局 let 绑定。 -->
-    <script>let CURRENT_VERSION = '1.6.26';</script>
+         CURRENT_VERSION 按测试锚留在本文件；huijian.js 复用此全局 let 绑定。
+         v1.6.27 新增 starsky.js：纯装饰星野生成器（固定种子，零依赖零网络）。 -->
+    <script>let CURRENT_VERSION = '1.6.27';</script>
+    <script src="js/starsky.js"></script>
     <script src="js/huijian.js"></script>
 </body>
 </html>
