@@ -49,6 +49,8 @@ LoRa 网关 (MQTT 客户端)          微信「慧尖」小程序 (局域网)
 慧尖网关集成 → Cover / Button / Sensor / Number 实体
 ```
 
+> 📐 架构一图流（加载项/集成/broker 三层拓扑 + 共存桥 + 安全边界）见 [ARCHITECTURE.md](ARCHITECTURE.md)
+
 ## 安装步骤
 
 ### 1. 添加插件仓库
