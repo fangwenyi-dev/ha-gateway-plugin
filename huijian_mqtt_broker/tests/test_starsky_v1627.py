@@ -199,6 +199,12 @@ class TestEmptySlotsTransparent:
         dev = self._rule(".device-item")
         assert "--bg-card" in dev and "backdrop-filter" in dev, "设备瓷砖须真玻璃（含磨砂）"
 
+    def test_empty_hint_spans_row(self):
+        """empty-hint 是 .device-list 的子 <p>，grid 改造后必须横跨整行，
+        否则"暂无子设备"提示被挤进首根 ≤340px 轨道左偏（v1.6.28 实测逮获）"""
+        rule = self._rule(".device-list .empty-hint")
+        assert "grid-column: 1 / -1" in rule
+
     def test_tiles_hug_own_content(self):
         """用户校准：设备玻璃框=比单独设备内容大一圈的方框——网格禁止
         纵向拉伸（默认 stretch 会把矮内容拉成带空玻璃段的大板）。"""
