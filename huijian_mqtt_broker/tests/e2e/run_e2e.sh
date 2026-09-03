@@ -6,8 +6,8 @@
 # 本地复跑（WSL，无 docker）：bash tests/e2e/run_local.sh 一键完成
 # （重置→拉起 HA Core→跑同一 driver→失败落日志），契约与 CI 同源。
 #
-# 首阶段 ci.yaml continue-on-error（防 E2E 自身问题阻塞发布），
-# 连绿后摘除升硬门禁。失败 trap 落盘两侧容器日志尾部辅助排障。
+# E2E 自 v1.6.22 起已是发布**硬门禁**（ci.yaml 无 continue-on-error——
+# 本脚本失败即阻断 Build and Release）。失败 trap 落盘两侧容器日志尾部辅助排障。
 set -Eeuo pipefail
 
 CFG=/tmp/e2e-ha-config

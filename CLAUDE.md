@@ -43,7 +43,9 @@ CI 的 lint job 已跑 `pytest huijian_mqtt_broker/tests`（v1.6.3 起）。
 cd huijian_mqtt_broker
 /mnt/d/progrem/python/python.exe -m pytest tests -q
 bash -n run.sh                      # shell 语法
-python -m py_compile custom_components/window_controller_gateway/*.py
+# v1.6.26（审计 A-2）：必须 compileall 递归——py_compile 的 `*.py` glob 只
+# 匹配顶层，mqtt_handler/ 子包（v1.6.25 拆包引入）会整体漏出语法门。
+python -m compileall -q custom_components/window_controller_gateway
 ```
 
 给 registry 兼容层/事件属性等"静默失效面"加改动时，须补断言实参的测试
@@ -76,7 +78,8 @@ GitHub 同理走 `gh auth token` 注入一次性 URL（WSL 无 GCM 交互）。
 ### 一体化插件
 - **插件**: `huijian_mqtt_broker/` — Mosquitto Broker + mDNS + 网关集成
 - **集成**: `huijian_mqtt_broker/custom_components/window_controller_gateway/`
-- **Web UI**: `huijian_mqtt_broker/www/index.html`
+- **Web UI**: `huijian_mqtt_broker/www/`（三文件化：`index.html` 骨架 +
+  `css/huijian.css` + `js/huijian.js`，v1.6.25 起；`version.json` 供更新检查）
 
 ### 版本管理
 - `config.yaml` — 插件版本
@@ -215,7 +218,10 @@ Web UI 的"一键升级"按钮自 v1.5.3 起仅跳转加载项详情页（doUpgr
 
 ### API 代理路径（现状）
 - HA Core API: nginx `/api/ha/` → `http://supervisor/core/api/`（token 由 nginx 注入，不进浏览器）
-- 更新检查: `/api/gitee/`（默认源，200+空数组自动回退 GitHub）、`/api/github/`（回退）
+- 更新检查: `/api/gitee/releases` + `/api/github/releases` **双源并集取版本号
+  最大者**（v1.6.7 定案，见 huijian.js fetchLatestRelease；旧"默认源→失败回退"
+  记载与代码不符——Gitee Release 自 v1.6.21 起才由 CI 自动补发且可能滞后，
+  单信任何一源都会把"最新发布版"误判成旧值）
 - 本地状态: `/api/status`（status.json 探活）、`/api/broker`（连接数）、`/api/version`、`/api/integration`
 
 ---

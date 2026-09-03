@@ -326,6 +326,13 @@ server {
 }
 NGINXEOF
 
+# v1.6.26（第八轮审计 W-1）：本文件含 nginx 注入用的明文 SUPERVISOR_TOKEN
+# ——与 passwd/acl 的 600/700 同口径收紧（同族"静默失防面"：passwd/acl 都
+# 有 chmod，唯独此文件默认 umask 022 → 644，容器内任何低权进程可读 token
+# 并经 /api/ha/ 代理调用 HA Core 全套 REST API）。nginx master 以 root 读
+# 配置、worker 不读 conf，600 不影响运行。
+chmod 600 /etc/nginx/http.d/ingress.conf 2>/dev/null || true
+
 # v1.6.18 运行期兜底：alpine nginx 包自带 http.d/default.conf（listen 80
 # default_server + listen [::]:80）。本加载项 host_network，该默认站会抢绑
 # 宿主 80——宿主 80 空闲时是"插件白占 80"，被占时（NAS 常见：DSM 反代/其他
@@ -352,8 +359,14 @@ nginx || {
         echo "[Ingress] nginx 启动失败（错误见上），侧边栏可能不可用"
         # 追加配置语法测试辅助定位（语法问题与运行时问题分开看）
         nginx -t 2>&1 || true
-        # 端口占用现场取证（busybox netstat 基础镜像自带）
-        netstat -ltnp 2>/dev/null | grep -E '[:.](80|8099)[[:space:]]' || true
+        # 端口占用现场取证（v1.6.26 第八轮审计 E-4 根治）：旧版用 netstat，
+        # 但 HA alpine base 镜像没有 netstat（本文件 §7 的 v1.6.4 注释早已
+        # 实锤"apk 包仅 bash/bind-tools/…"且据此改用 /proc 方案——当时漏改
+        # 了这处取证，宿主 80/8099 被占时恰在最需要时无输出）。复用
+        # /proc/net/tcp{,6} 扫描：state 0A=LISTEN；80=0050、8099=1F9B
+        awk -v p80=':0050$' -v p99=':1F9B$' \
+            'FNR>1 && ($2 ~ p80 || $2 ~ p99) && $4=="0A" { print "  [取证] LISTEN " $2 }' \
+            /proc/net/tcp /proc/net/tcp6 2>/dev/null
     }
 }
 
@@ -614,12 +627,30 @@ fi
 # MAX_MOSQUITTO_RESTARTS 防护）；1883 消失且桥在→删段重启。冷却 120s 防抖。
 BRIDGE_MARKER="AUTO-COEXIST-BRIDGE"
 MOSQ_CONF="/etc/mosquitto/mosquitto.conf"
+# v1.6.26（第八轮审计 D-3）：共存桥总开关（默认开=保持 v1.6.24"零配置
+# 共存"语义）。判据只认本机 :1883 LISTEN，宿主上任何第三方进程占该口都会
+# 被当官方 broker 搭桥（out 腿送 z2m 控制命令、in 腿注入 discovery——桥
+# 消息不受本地 ACL 约束）。给谨慎用户一个显式熔断：置 false 后不建新桥，
+# 已存在的桥由对账循环自动拆除。
+BRIDGE_ENABLED=$(bashio::config 'coexist_bridge_enabled')
 # 官方 broker 侧桥凭据（可选，见桥块注释）。净化防换行注入——加载项配置
 # 值直通 heredoc 会允许在 mosquitto.conf 里伪造任意配置行
 BRIDGE_PEER_USER=$(bashio::config 'coexist_official_user')
 BRIDGE_PEER_PASSWORD=$(bashio::config 'coexist_official_password')
 BRIDGE_PEER_USER=$(printf '%s' "${BRIDGE_PEER_USER}" | tr -cd 'A-Za-z0-9_-')
 BRIDGE_PEER_PASSWORD=$(printf '%s' "${BRIDGE_PEER_PASSWORD}" | tr -d '\n\r')
+# v1.6.26（第八轮审计 D-2）：凭据只在**双非空**时成对输出——旧实现 password
+# 行按 USER 非空门控，"只填用户名"会展开 `password `（空值行），mosquitto
+# 2.x conf__parse_string 对空值直接判 Error 拒载**整份 conf**（上游 v2.0.22
+# conf.c 实锤）→ 内置 broker 拒启、加载项全挂。半填形态降级为匿名桥并大声
+# 警告（对端 7.x 强制认证时桥不通，但慧尖自身服务无恙）。
+BRIDGE_CREDS=""
+if [ -n "${BRIDGE_PEER_USER}" ] && [ -n "${BRIDGE_PEER_PASSWORD}" ]; then
+    BRIDGE_CREDS="username ${BRIDGE_PEER_USER}
+password ${BRIDGE_PEER_PASSWORD}"
+elif [ -n "${BRIDGE_PEER_USER}" ] || [ -n "${BRIDGE_PEER_PASSWORD}" ]; then
+    echo "[共存] 警告: coexist_official_user/password 须成对填写（当前只填了一边）→ 桥按匿名方式连接"
+fi
 OFFICIAL_PORT_HEX=$(printf '%04X' 1883)
 _bridge_peer_up() {
     # 复用本脚本的 /proc/net/tcp 扫描法（busybox 环境零进程开销）：
@@ -646,8 +677,9 @@ notifications false
 # allow_anonymous 时代终结）——匿名桥会被对端拒绝（实测：桥不通但慧尖
 # 自身服务无恙）。在插件配置填官方 broker 有效凭据即带认证建桥（实测
 # 端到端穿透）；留空=匿名，兼容老版官方/customize 关认证场景。
-${BRIDGE_PEER_USER:+username ${BRIDGE_PEER_USER}}
-${BRIDGE_PEER_USER:+password ${BRIDGE_PEER_PASSWORD}}
+# v1.6.26（D-2）：改由 BRIDGE_CREDS 预构造（双非空才成对输出，杜绝
+# `password ` 空值行拒载整份 conf，见 §7b 头部注释）。
+${BRIDGE_CREDS}
 topic zigbee2mqtt/# out 1
 topic zigbee2mqtt/# in 1
 topic homeassistant/# in 1
@@ -657,6 +689,10 @@ topic homeassistant/# in 1
 # broker 抢走，慧尖需人工把条目改回 127.0.0.1:2022（README 已知边界）。
 # END ${BRIDGE_MARKER}
 EOF
+    # v1.6.26（第八轮审计 D-5）：桥段刚写入即含对端凭据（若配置了），与
+    # passwd/acl 同口径收紧 600——mosquitto 以 root 读 conf（进程内降权后
+    # 不再回读），容器内 nginx worker/mosquitto 用户等低权进程不再可读。
+    chmod 600 "${MOSQ_CONF}" 2>/dev/null || true
     echo "[共存] 检测到官方 Mosquitto(:1883) → 自动写入桥接，重启 broker 生效"
     kill -TERM "$(cat /run/mosquitto.pid 2>/dev/null)" 2>/dev/null || true
 }
@@ -688,7 +724,9 @@ BRIDGE_TICK=0
                 # 记录冷却时间戳——noop tick 不续期，否则冷却永不过期、
                 # 桥拆不掉（本行缺陷为自查实证发现，冷却语义=两次"重启动作"
                 # 的最小间隔）
-                if _bridge_peer_up; then
+                # v1.6.26（D-3）：coexist_bridge_enabled=false 时短路 peer 判定
+                # → 走 else 分支拆已有桥，且不再建新桥
+                if [ "${BRIDGE_ENABLED}" = "true" ] && _bridge_peer_up; then
                     if ! _bridge_present; then
                         _bridge_on || true
                         echo "${NOW_TS}" > /run/bridge_last_ts
@@ -748,7 +786,8 @@ BRIDGE_TICK=0
 echo "[运行] Broker 以前台模式运行..."
 
 # v1.6.24：官方 Mosquitto 若已在运行，先写桥再接管启动（免一次计划内重启）
-if _bridge_peer_up; then
+# v1.6.26（D-3）：同样受 coexist_bridge_enabled 总开关约束
+if [ "${BRIDGE_ENABLED}" = "true" ] && _bridge_peer_up; then
     # || true：初启路径在 set -e 主 shell、mosquitto 首启之前——写失败
     # （盘满等）不能杀死整个 run.sh（比循环死重得多），留给 tick 对账重试
     _bridge_on || true
@@ -801,8 +840,9 @@ if command -v mosquitto_pub >/dev/null 2>&1; then
         else
             echo "[诊断] /etc/mosquitto/passwd 文件不存在 ← 重点排查"
         fi
-        echo "[诊断] mosquitto.conf 内容:"
-        cat /etc/mosquitto/mosquitto.conf 2>/dev/null | sed 's/^/  /'
+        echo "[诊断] mosquitto.conf 内容（凭据已脱敏，v1.6.26 第八轮审计 D-4——与 v1.6.3 'passwd 只 cut 用户名防哈希入日志'定案同口径；桥块含对端 username/password，此前全文入 Supervisor 日志）:"
+        sed -E 's/^([[:space:]]*)(password|remote_password|username|remote_username)([[:space:]]+).*/\1\2 ***REDACTED***/' \
+            /etc/mosquitto/mosquitto.conf 2>/dev/null | sed 's/^/  /'
     fi
 fi
 

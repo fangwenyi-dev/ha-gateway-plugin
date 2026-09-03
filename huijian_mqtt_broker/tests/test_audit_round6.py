@@ -467,7 +467,7 @@ class TestIgnoreFlow:
 # ============ B-LOW7：add_gateway 三连修 ============
 class TestAddGateway:
 
-    def _flow(self, monkeypatch, update_entry):
+    def _flow(self, monkeypatch, update_entry, clash=None):
         flow = object.__new__(cf_mod.OptionsFlow)
         entry = SimpleNamespace(entry_id="e1", data={}, entry_id_="e1",
                                 options={"ws_gateway_port": 9100,
@@ -487,6 +487,11 @@ class TestAddGateway:
                 async_entries=lambda d: [],
                 async_update_entry=fake_update,
                 async_reload=reload_calls.append,
+                # v1.6.26（D-2）：add_gateway 的 unique_id 撞车**前置判重**
+                # 走此 API（真 HA 2026.x 的 async_update_entry 对重复 uid
+                # 不抛异常——except ValueError 兜底永不触发，源码实证）。
+                # clash=None 表示无撞车；用例注入 SimpleNamespace(entry_id=…)
+                async_entry_for_domain_unique_id=lambda d, uid: clash,
             )
         )
         flow._reload_calls = reload_calls
@@ -509,13 +514,32 @@ class TestAddGateway:
 
     @pytest.mark.asyncio
     async def test_uid_conflict_shows_error(self):
-        def raise_v(e, *, data=None, unique_id=None):
-            raise ValueError("dup")
-        flow, _ = self._flow(None, raise_v)
+        """v1.6.26（D-2 订正钉桩）：真 HA 2026.x 撞车**不抛 ValueError**
+        （_async_update_entry 只 error 日志后照写，源码实证）——查重必须
+        由 async_entry_for_domain_unique_id 前置拦下。另一条目（entry_id
+        不同）已占该 uid 时回显 already_configured 且**不写 update_entry**。"""
+        written = []
+
+        def spy_update(e, *, data=None, unique_id=None):
+            written.append(unique_id)
+        flow, _ = self._flow(None, spy_update,
+                             clash=SimpleNamespace(entry_id="other-entry"))
         res = await flow.async_step_add_gateway(
             {c.CONF_GATEWAY_SN: "100122501208", c.CONF_GATEWAY_NAME: "x"})
         assert res["type"] == "form"
         assert res["errors"][c.CONF_GATEWAY_SN] == "already_configured"
+        assert written == [], "撞车条目绝不允许被写入 uid/data"
+
+    @pytest.mark.asyncio
+    async def test_uid_clash_on_self_entry_passes(self):
+        """撞车方就是本条目（重复提交同 SN）——前置判重按 entry_id 排除，
+        不误伤正常保存路径（update listener 重载语义不受影响）。"""
+        flow, updated = self._flow(
+            None, None, clash=SimpleNamespace(entry_id="e1"))
+        res = await flow.async_step_add_gateway(
+            {c.CONF_GATEWAY_SN: "100122501208", c.CONF_GATEWAY_NAME: "x"})
+        assert res["type"] == "create"
+        assert updated["unique_id"] == "100122501208"
 
 
 # ============ B-LOW8/9：无 SN 分支 ============

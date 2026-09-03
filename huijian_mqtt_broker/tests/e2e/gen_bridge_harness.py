@@ -9,6 +9,7 @@
   /run/bridge_last_ts           → $MOSQ_LOCAL/bridge_last_ts
   对端 127.0.0.1:1883 → 1884（e2e 沙盒端口，避开本机常驻服务；机制与端口无关）
   bashio::config 'coexist_official_*' → 测试环境变量（source 时求值）
+   bashio::config 'coexist_bridge_enabled' → TEST_BRIDGE_ENABLED（v1.6.26）
 
 lib 为纯生成物：整文件覆写，无增量合并（历史事故：增量保留过旧 selfheal）。
 mock selfheal 必须**逐行对齐生产主循环**（v1.6.24 教训：mock 凭记忆写了
@@ -34,7 +35,11 @@ fns = (m.group(1)
        .replace("bashio::config 'coexist_official_user'",
                 'echo "${TEST_BRIDGE_USER:-}"')
        .replace("bashio::config 'coexist_official_password'",
-                'echo "${TEST_BRIDGE_PASS:-}"'))
+                'echo "${TEST_BRIDGE_PASS:-}"')
+        # v1.6.26（D-3）：总开关进 harness（默认 true=生产默认；e2e 可置
+        # TEST_BRIDGE_ENABLED=false 验证熔断/拆桥）
+        .replace("bashio::config 'coexist_bridge_enabled'",
+                 'echo "${TEST_BRIDGE_ENABLED:-true}"'))
 
 MOCK = """
 # —— 主自愈循环模拟：**逐行对齐 run.sh 真实主循环**（v1.6.20 语义）：

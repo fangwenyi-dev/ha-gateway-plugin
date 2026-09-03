@@ -67,7 +67,15 @@ class TestRunShRuntimeGuard:
         # v1.6.4 教训延续：失败路径必须带现场取证，不得只剩 syntax ok 假象
         block = self.run_sh[self.run_sh.find("\nnginx ||"):]
         assert "重试" in block.split("}")[0], "nginx 启动失败须有一次重试（宿主服务竞态窗口）"
-        assert "netstat" in block, "重试仍失败时须打印 80/8099 占用取证"
+        # v1.6.26（第八轮审计 E-4）：取证必须用 /proc/net/tcp{,6} 扫描——
+        # alpine base 镜像**没有** netstat（本文件 §7 的 v1.6.4 注释早已
+        # 实锤据此改道，唯独这处取证漏改，恰在最需要时无输出）。
+        # 钉桩：新法在场 + **命令级** netstat 不得回潮（历史解释注释允许
+        # 提及 netstat 字样，故只禁行首命令形态）。
+        assert "/proc/net/tcp" in block, "取证须用 /proc/net/tcp 扫描（镜像内无 netstat）"
+        assert "0A" in block, "取证须按 LISTEN 态(0A)过滤端口"
+        assert not re.search(r"^\s*netstat\s", block, re.M), \
+            "netstat 命令在 HA alpine base 不存在，取证禁止回潮"
 
     def test_generated_ingress_conf_only_8099(self):
         m = re.search(

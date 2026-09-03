@@ -11,6 +11,8 @@
 import re
 import shutil
 import subprocess
+import sys
+import tempfile
 from pathlib import Path
 
 RUN = Path(__file__).resolve().parents[1] / "run.sh"
@@ -96,7 +98,7 @@ def test_watchdog_tick_and_cooldown():
 def test_boot_reconcile_before_first_start():
     """官方已在运行时的安装序：初启对账须先于 mosquitto 首次拉起
     （启动前写 conf = 零额外重启）"""
-    boot = TEXT.index('if _bridge_peer_up; then\n    # || true')
+    boot = TEXT.index('if [ "${BRIDGE_ENABLED}" = "true" ] && _bridge_peer_up; then\n    # || true')
     first_start = TEXT.index('MOSQUITTO_PID=$!')
     assert boot < first_start, "初启对账必须在首次启动 mosquitto 之前"
 
@@ -139,8 +141,7 @@ def test_bridge_conf_format_redline():
         "connection core_mosquitto",
         "address 127.0.0.1:1883",
         "notifications false",                                    # 2.0.22 实测可用
-        "${BRIDGE_PEER_USER:+username ${BRIDGE_PEER_USER}}",      # 空=匿名行归零
-        "${BRIDGE_PEER_USER:+password ${BRIDGE_PEER_PASSWORD}}",
+        "${BRIDGE_CREDS}",      # v1.6.26（D-2）双非空才成对输出，见下行测试
         "topic zigbee2mqtt/# out 1",
         "topic zigbee2mqtt/# in 1",
         "topic homeassistant/# in 1",
@@ -163,3 +164,110 @@ def test_planned_restart_uses_selfheal_semantics():
     不引入第二套进程管理；两处函数各自 kill 一次"""
     fn_seg = _seg(r'_bridge_on\(\) \{', r'PORT_HEX=', "桥函数区")
     assert fn_seg.count('kill -TERM') == 2, "on/off 各计划内重启一次"
+
+
+# ============ v1.6.26 第八轮审计：D-2 凭据成对性 / D-3 总开关 / 生成物漂移 ============
+
+def _run_bridge_creds_case(user: str, password: str):
+    """把 run.sh 里**真实的** BRIDGE_CREDS 预构造段抽出来在 bash 里执行，
+    返回 (creds, stdout)。注入变量置于段首，段文本与生产逐字一致。
+    ⚠️ 必须走临时**文件**而非 `bash -c` argv：Windows→WSL 的 wsl.exe 参数
+    转译会吞掉 `$`（本机实锤 X=u3;echo F[$X] → F[]），argv 形态下本测试
+    在开发机恒假失败；ubuntu CI 原生 bash 两种都行，文件形态通吃。"""
+    seg = _seg(r'BRIDGE_CREDS=""', r'OFFICIAL_PORT_HEX=', "桥凭据预构造段")
+    script = (f"BRIDGE_PEER_USER='{user}'\nBRIDGE_PEER_PASSWORD='{password}'\n"
+              + seg + 'printf "CREDS<%s>\\n" "$BRIDGE_CREDS"\n')
+    import os
+    fd, tmp = tempfile.mkstemp(suffix=".sh")
+    try:
+        # newline="\n" 关键：Windows 文本模式默认写 CRLF，WSL bash 对
+        # `"..."\r` 后续行会报 syntax error near unexpected token `elif`
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+            f.write(script)
+        last = None
+        for cand in _posix_candidates(Path(tmp)):
+            # 二进制捕获后按 UTF-8 解码——Windows Python text=True 默认
+            # 用 GBK 解码子进程输出，中文警告会变乱码致断言假阴
+            r = subprocess.run(["bash", cand], capture_output=True)
+            r.stdout = r.stdout.decode("utf-8", "replace")
+            r.stderr = r.stderr.decode("utf-8", "replace")
+            if r.returncode == 0 and "CREDS<" in (r.stdout or ""):
+                break
+            last = r
+            if "No such file" in (r.stderr or ""):
+                continue
+        else:
+            raise AssertionError(f"bash 执行凭据段失败: {last.stderr if last else '?'}")
+        out = r.stdout
+    finally:
+        os.unlink(tmp)
+    creds = re.search(r"CREDS<(.*?)>\n", out, re.S).group(1)
+    return creds, out
+
+
+def test_bridge_creds_pairwise_no_empty_password_line():
+    """D-2（mosquitto v2.0.22 conf.c 实锤）：`password `（空值行）会让
+    conf__parse_string 判 MOSQ_ERR_INVAL **拒载整份 conf** → 内置 broker
+    拒启、加载项全挂。旧实现 `${USER:+password ${PASS}}` 按 USER 门控
+    PASSWORD，"只填用户名"恰 produce 该毒行。现四形态行为钉死："""
+    if shutil.which("bash") is None:
+        import pytest
+        pytest.skip("本机无 bash")
+    both, _ = _run_bridge_creds_case("u1", "p1")
+    assert both.splitlines() == ["username u1", "password p1"], \
+        "双非空 → 恰好两行成对凭据"
+    only_u, out_u = _run_bridge_creds_case("u1", "")
+    assert "password" not in only_u and "username" not in only_u, \
+        f"只填用户名不得产出任何凭据行（毒行零复现）: {only_u!r}"
+    assert "警告" in out_u, "半填形态须大声降级警告"
+    only_p, _ = _run_bridge_creds_case("", "p1")
+    assert only_p == "", "只填口令同样降级匿名（旧版此处 username/password 双双不落）"
+    none, out_n = _run_bridge_creds_case("", "")
+    assert none == "" and "警告" not in out_n, "全空=匿名桥（v1.6.24 语义），不警告"
+
+
+def test_bridge_enabled_master_switch():
+    """D-3：误桥熔断开关——判据仅"本机 :1883 LISTEN"，宿主第三方进程占口
+    也会被搭桥（out 送控制命令/in 注 discovery，不受本地 ACL 约束）。
+    钉桩：config.yaml 默认 true + schema bool + run.sh 两处决策点全部
+    门控（对账循环 + 初启路径），false 时走 else 分支自动拆已存桥。"""
+    cfg = (RUN.parent / "config.yaml").read_text(encoding="utf-8")
+    assert "coexist_bridge_enabled: true" in cfg, "开关默认 true（保持零配置共存语义）"
+    assert re.search(r"coexist_bridge_enabled:\s*bool", cfg), "schema 须声明 bool"
+    gated = re.findall(
+        r'\[\s*"\$\{BRIDGE_ENABLED\}"\s*=\s*"true"\s*\]\s*&&\s*_bridge_peer_up', TEXT)
+    assert len(gated) == 2, \
+        f"对账循环+初启两处决策点都须门控，实际 {len(gated)} 处"
+    assert "BRIDGE_ENABLED=$(bashio::config 'coexist_bridge_enabled')" in TEXT
+
+
+def test_bridge_harness_lib_in_sync_with_run_sh():
+    """生成物漂移防护：bridge_harness_lib.sh 必须由 gen_bridge_harness.py
+    从 run.sh 现文逐字生成（v1.6.24 惯例"e2e 跑生产代码本体"的前提就是
+    零漂移）。该文件 gitignored——CI fresh checkout 没有它（e2e 脚本自身
+    先跑生成器），此时改在沙盒验证生成链完整 + 关键映射在场；本地存在时
+    则逐字比对，改 run.sh 忘重生成 → 当场红。"""
+    gen = Path(__file__).resolve().parent / "e2e" / "gen_bridge_harness.py"
+    lib = gen.parent / "bridge_harness_lib.sh"
+    committed = lib.read_text(encoding="utf-8") if lib.exists() else None
+    with tempfile.TemporaryDirectory() as td:
+        # 复刻仓库相对布局（生成器按 __file__ 父级定位 run.sh），在沙盒里
+        # 重生成——不触碰工作树
+        root = Path(td) / "huijian_mqtt_broker"
+        (root / "tests" / "e2e").mkdir(parents=True)
+        shutil.copy(RUN, root / "run.sh")
+        shutil.copy(gen, root / "tests" / "e2e" / "gen_bridge_harness.py")
+        r = subprocess.run(
+            [sys.executable, str(root / "tests" / "e2e" / "gen_bridge_harness.py")],
+            capture_output=True, text=True)
+        assert r.returncode == 0, f"生成器锚丢失（run.sh 桥区被移动/改名）: {r.stderr}"
+        fresh = (root / "tests" / "e2e" / "bridge_harness_lib.sh").read_text(
+            encoding="utf-8")
+    if committed is None:
+        assert "${BRIDGE_CREDS}" in fresh, "v1.6.26（D-2）凭据形态未进 harness"
+        assert 'TEST_BRIDGE_ENABLED:-true' in fresh, "v1.6.26（D-3）开关未进 harness"
+        assert "bashio" not in fresh, "harness 残留 bashio 调用（替换清单缺项）"
+        return
+    assert fresh == committed, (
+        "bridge_harness_lib.sh 与 run.sh 漂移——重跑 "
+        "python3 huijian_mqtt_broker/tests/e2e/gen_bridge_harness.py")

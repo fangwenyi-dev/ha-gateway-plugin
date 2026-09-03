@@ -1,6 +1,6 @@
 # 慧尖 LoRa 网关一体化插件
 
-[![版本](https://img.shields.io/badge/version-1.6.17-blue)]()
+[![版本](https://img.shields.io/github/v/release/fangwenyi-dev/ha-gateway-plugin?color=blue)](https://github.com/fangwenyi-dev/ha-gateway-plugin/releases)
 [![HA Add-on](https://img.shields.io/badge/HA-Add--on-green)]()
 
 慧尖开窗器 LoRa 网关的 Home Assistant 一体化插件。**内置 Mosquitto Broker + mDNS 自动发现 + 网关集成，安装一个插件即可获得全部能力**。
@@ -115,6 +115,15 @@ broker 停止/卸载后桥自动拆除。注意官方加载项 **7.x 起强制�
 源码实锤），此时需在慧尖「配置」页填 `coexist_official_user/password`
 （官方自己配置页 logins 添加的任一账号）桥才连得上——不填的后果仅桥不通，
 慧尖自身服务无恙（实测）。老版官方（allow_anonymous 时代）留空即可。
+⚠️ 两个凭据字段**必须成对填写**：只填一半时 v1.6.26 起按匿名桥降级并打
+警告（旧版会因此写出 mosquitto 拒载的空值配置行，殃及内置 broker 启动）。
+
+**误桥警示与总开关（v1.6.26）**：桥的判据只有"本机 `1883` 有进程在听"——
+若该端口是**其他第三方服务**（非官方 Mosquitto），慧尖会把它当对端搭桥：
+`out` 腿会把 HA 发出的 z2m 控制命令送往该服务，`in` 腿允许它向内置 broker
+注入 discovery 消息（桥消息不受慧尖本地 ACL 约束）。NAS 上跑过占 `1883`
+服务的用户，请在慧尖「配置」页把 `coexist_bridge_enabled` 置 **false**：
+不建新桥、已建桥自动拆除；纯慧尖用户保持默认 `true` 零感知。
 
 **为什么桥不转发慧尖 `gateway/#` 主题**：桥的 in 方向等于把对端 broker 的
 信任域直连慧尖的执行器——实测证明局域网匿名客户端可经 `1883 → 桥 → 固件`

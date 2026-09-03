@@ -172,10 +172,22 @@ class WindowControllerCover(WindowControllerBaseEntity, RestoreEntity, CoverEnti
         if device.get("status") not in (None, DEVICE_STATUS_UNKNOWN, DEVICE_STATUS_CONNECTED):
             return  # 本会话已有实时上报，不覆盖
         attributes = {}
-        pos = (last_state.attributes or {}).get("position")
+        last_attrs = last_state.attributes or {}
+        # v1.6.26（第八轮审计 B-2）：优先恢复**原始** r_travel——旧实现只存
+        # 钳制后 position，未校准标记 255 被洗成 100，重启后"未校准"语义
+        # 永久丢失（固件口径 255 直接丢弃，WS 视图应维持 -1）。raw 越界时
+        # 只回填开关状态、位置保持未知；无 raw 字段的 v1.6.25 旧数据按
+        # 钳制值回填（向后兼容）。
+        raw = last_attrs.get("r_travel_raw")
         try:
-            if pos is not None:
-                attributes["r_travel"] = max(0, min(100, int(pos)))
+            if raw is not None:
+                raw = int(raw)
+                if 0 <= raw <= 100:
+                    attributes["r_travel"] = raw
+            else:
+                pos = last_attrs.get("position")
+                if pos is not None:
+                    attributes["r_travel"] = max(0, min(100, int(pos)))
         except (ValueError, TypeError):
             pass
         status = DEVICE_STATUS_OPEN if last_state.state == "open" else DEVICE_STATUS_CLOSED
@@ -219,7 +231,11 @@ class WindowControllerCover(WindowControllerBaseEntity, RestoreEntity, CoverEnti
             r_travel = attributes.get("r_travel")
             if r_travel is not None:
                 try:
-                    attrs["position"] = max(0, min(100, int(r_travel)))
+                    raw = int(r_travel)
+                    attrs["position"] = max(0, min(100, raw))
+                    # v1.6.26（第八轮审计 B-2）：一并持久化原始值，
+                    # 恢复路径据此区分"真 100%"与"未校准 255 被钳成 100"
+                    attrs["r_travel_raw"] = raw
                 except (ValueError, TypeError):
                     pass
         return attrs

@@ -19,6 +19,7 @@ from ..const import (
     DEVICE_TYPE_WINDOW_OPENER,
     PROTOCOL_HEAD,
     TOPIC_GATEWAY_RSP,
+    TOPIC_GATEWAY_REQ_FORMAT,
 )
 
 # logger 名钉死为拆分前模块 __name__ 值——日志输出零差异（回归要求）
@@ -137,7 +138,14 @@ class _ProtocolMixin:
                                     break
                             
                             if not already_configured:
-                                from .discovery import async_discover_gateway
+                                # v1.6.26（第八轮审计 A-1）：v1.6.25 拆包回归——
+                                # 旧单文件里 `from .discovery` 解析到集成根的
+                                # discovery.py；下沉进 mqtt_handler/ 包后同一
+                                # 字面量指向不存在的 mqtt_handler.discovery，
+                                # ModuleNotFoundError 被外层 except 吞成一行
+                                # 日志，多网关发现/替换网关静默失效。正确目标
+                                # 在上一层：..discovery。
+                                from ..discovery import async_discover_gateway
                                 gateway_name = f"网关 {response_sn[-4:]}"
                                 
                                 # 检查是否处于替换模式
@@ -155,6 +163,24 @@ class _ProtocolMixin:
                             _LOGGER.error("触发未配置网关发现失败: %s", e)
                         return
                     
+                    # v1.6.26（第八轮审计 D-4）：SN 大小写自纠——条目存用户录入
+                    # 原样、入站匹配大小写不敏感，但 MQTT 主题大小写敏感：含
+                    # 字母 SN 录错大小写会呈现"网关在线、指令全部无动作"。以
+                    # 网关实际上报的形态为准，内存订正 gateway_sn（发布主题与
+                    # payload sn 全部路径的单一真源），警告行保留用户原录入；
+                    # 不改写注册表 data（低频场景，重启后首条上报再次订正）。
+                    if response_sn != self.gateway_sn:
+                        _LOGGER.warning(
+                            "网关上报 SN 形态与条目存储不一致（%s → %s），已按上报值订正",
+                            self.gateway_sn, response_sn,
+                        )
+                        self.gateway_sn = response_sn
+                        # TOPIC_GATEWAY_REQ 在 __init__ 一次性 format 定型，
+                        # 必须同步重建——否则"订正"只改了 payload sn、req 主题
+                        # 仍发往错误大小写（症状原样残留）
+                        self.TOPIC_GATEWAY_REQ = TOPIC_GATEWAY_REQ_FORMAT.format(
+                            gateway_sn=response_sn)
+
                     # 更新最后上报时间 - 只要收到网关消息就认为在线（单调时钟）
                     self.last_gateway_report_time = time.monotonic()
                     

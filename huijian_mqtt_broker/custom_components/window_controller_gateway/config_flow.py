@@ -52,6 +52,19 @@ class MockDeviceManager:
     """用于连接测试的模拟设备管理器"""
     def __init__(self):
         self._manually_removed_devices = set()
+        # v1.6.26（第八轮审计 D-3）：补齐 handler 侧真实契约面——连接测试
+        # 窗口内到达的 003 会走 _save_manually_removed_devices / devices 判定
+        # / _notify_status_listeners，_auto_discovery_enabled 读 .entry.options
+        # （getattr 已对 None 安全）。同族问题 v1.6.11 #6 已为
+        # allocate_device_number 修过一次，勿再留缺口。
+        self.devices = {}
+        self.entry = None
+
+    def _save_manually_removed_devices(self):
+        pass
+
+    def _notify_status_listeners(self, device_sn):
+        pass
     
     async def update_gateway_status(self, status):
         pass
@@ -668,6 +681,18 @@ class OptionsFlow(config_entries.OptionsFlow):
                         errors[CONF_GATEWAY_SN] = "already_configured"
                         break
 
+                # v1.6.26（第八轮审计 D-2）：HA 2026.x 的 async_update_entry
+                # 对 unique_id 撞车**不抛异常**——只 error 日志后照写
+                # （config_entries.py 源码实证），下方 except ValueError 兜底
+                # 永不触发。判重前置：另一条目已占该 uid（其 data 无 SN 的
+                # 极端形态会被上方扫描漏掉）即回显 already_configured。
+                if not errors:
+                    clash = self.hass.config_entries.async_entry_for_domain_unique_id(
+                        DOMAIN, gateway_sn.lower()
+                    )
+                    if clash is not None and clash.entry_id != self._config_entry.entry_id:
+                        errors[CONF_GATEWAY_SN] = "already_configured"
+
                 if not errors:
                     if not gateway_name:
                         gateway_name = f"{DEFAULT_GATEWAY_NAME} {gateway_sn[-4:]}"
@@ -675,8 +700,10 @@ class OptionsFlow(config_entries.OptionsFlow):
                     # 更新 config entry DATA（不是 options）
                     # v1.6.19（第六轮审计 B-LOW7）三处纠偏：
                     # ① 顺手写 unique_id（引导性空条目原本无 uid，补上让
-                    #   HA 原生查重/忽略对这条生效）；uid 撞车抛 ValueError
-                    #   时按"已配置"回显；
+                    #   HA 原生查重/忽略对这条生效）；真查重在上方
+                    #   async_entry_for_domain_unique_id 前置（v1.6.26 D-2），
+                    #   此处 except ValueError 仅留作老 HA 时代保险丝——
+                    #   2026.x 撞车不抛异常、只 error 日志后照写（源码实证）；
                     # ② 删除显式 async_reload——条目 setup 时注册了 update
                     #   listener，async_update_entry 本身就会触发整条目重载，
                     #   原双路径 = 双重载（MQTT 重订阅、实体瞬断两次）；

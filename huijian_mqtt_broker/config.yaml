@@ -1,5 +1,5 @@
 name: 慧尖 LoRa 网关
-version: "1.6.25"
+version: "1.6.26"
 slug: huijian_mqtt_broker
 description: 慧尖开窗器 LoRa 网关一体化插件，内置 Mosquitto Broker + 网关集成，安装即用
 url: 'https://github.com/fangwenyi-dev/ha-gateway-plugin'
@@ -67,9 +67,18 @@ options:
   password: huijian2022
   auto_setup_ha_mqtt: true
   install_integration: true
-  # v1.6.25 共存桥：官方「Mosquitto broker」加载项 7.x+ 强制认证时须填其
-  # 任一有效账号（配置页 logins 添加的），桥才连得上；留空=匿名桥，兼容
-  # 老版官方或 customize 关认证场景。纯慧尖用户永远无需理会本项。
+  # v1.6.26（D-3）：共存桥总开关。判据是"本机 :1883 有进程 LISTEN"即自动
+  # 向对端搭方向分离桥（v1.6.24 零配置语义）。谨慎用户或宿主上跑有第三方
+  # 1883 服务时置 false 熔断：不建新桥、已建桥自动拆除。纯慧尖用户保持
+  # 默认 true 即零感知。
+  coexist_bridge_enabled: true
+  # v1.6.24 引入（未单独发布，随 v1.6.25 首发——此前注释被版本 bump 的
+  # 全局 sed 漂成过"v1.6.25"，v1.6.26 订正归属）：官方「Mosquitto broker」
+  # 加载项 7.x+ 强制认证时须填其任一有效账号（配置页 logins 添加的），
+  # 桥才连得上；留空=匿名桥，兼容老版官方或 customize 关认证场景。
+  # ⚠️ 两字段必须成对填写——v1.6.26（D-2）起半填形态按匿名桥降级
+  # （旧版会写出 `password ` 空值行导致 mosquitto 整份 conf 拒载）。
+  # 纯慧尖用户永远无需理会本项。
   coexist_official_user: ""
   coexist_official_password: ""
 schema:
@@ -79,5 +88,6 @@ schema:
   password: password
   auto_setup_ha_mqtt: bool
   install_integration: bool
+  coexist_bridge_enabled: bool
   coexist_official_user: str?
   coexist_official_password: password?

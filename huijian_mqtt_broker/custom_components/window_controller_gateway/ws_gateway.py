@@ -626,7 +626,18 @@ class WsGatewayServer:
             return web.Response(status=503, text="busy")
         # 认证成功才占槽（固件 M4 定式）：protocols 传入选中的令牌，
         # 使 101 回显 Sec-WebSocket-Protocol（对齐 esp_http_server 行为）
-        protocols = {self._token} if self._token else None
+        # v1.6.26（第八轮审计 D-1）：空令牌（"空串=不认证"是 config_flow
+        # 明文支持的形态）下旧值 None 会让 aiohttp≥3.9 的 _handshake 对
+        # 带子协议头的请求执行 `proto in self._protocols` 抛 TypeError，
+        # 握手 500——而微信 connectSocket 恒带子协议，等于免认证直连态
+        # 整体不可用（活体复现+修复验证）。空元组可迭代、匹配不中不回显、
+        # 握手继续，恰与 esp_http_server 无认证行为一致。
+        protocols = {self._token} if self._token else ()
+        # v1.6.26（第八轮审计 D-6）定案注释：**故意不传** max_msg_size——
+        # 传了会让 aiohttp 在解析层对 >N 帧直接 1009 断连，绕过固件同款
+        # "command too long" JSON 错误回包语义。代价有界：分片重组窗口
+        # 由 aiohttp 默认 4MiB 兜住，业务层 WS_MAX_FRAME_BYTES 判定后
+        # 断开（最坏 4 槽 ≈16MB 瞬时内存，无功能分歧）。维持现状。
         ws = web.WebSocketResponse(
             protocols=protocols,
             autoclose=True,

@@ -3,6 +3,82 @@
 所有版本变更记录在此文件中。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.6.26] - 2026-09-07
+
+### Fixed（第八轮全量审计批：5 路独立只读审计 + 母节点逐条实证复核）
+- **多网关发现 / 替换网关整链失效**（阻断级）：v1.6.25 mqtt_handler 拆包时
+  函数体内惰性导入未随物理下沉升层（`from .discovery` → `mqtt_handler`
+  包内不存在该模块，ModuleNotFoundError 被外层 except 吞成一行 error 日志）。
+  改 `..discovery` + 补该分支实参断言测试（此前零覆盖——314 测试全绿与
+  真栈 E2E 均拦不住，教训已录 CLAUDE.md 同族规范）
+- **WS 令牌清空后握手 500**："空串=不认证"是 config_flow 明文支持的形态，
+  但 aiohttp≥3.9 的 `WebSocketResponse(protocols=None)` 收到带子协议头的
+  请求（微信 connectSocket 恒带）在 _handshake 抛 TypeError。改空元组，
+  免认证直连态恢复（aiohttp 3.13.5 活体 A/B 复现取证）
+- **半填桥凭据会打死内置 broker**：只填用户名时旧模板展开 `password `
+  空值行——mosquitto 2.x 解析器对空值判错**拒载整份 conf**。现凭据双非空
+  才成对输出，半填形态降级匿名桥并打警告；e2e harness 由 run.sh 现文重
+  生成，新增生成物漂移防护测试
+- **awaiting 条目"添加网关"后配置静默不生效**：该路径从不注册 update
+  listener、v1.6.19 删掉的显式 reload 兜底前提为假 → 用户见"已保存"但
+  无 handler/无实体，须重启 HA。现 setup 完成即注册，条目变更自动重载
+- **未校准设备重启后被写成"全开 100%"**：r_travel=255（未校准标记）经
+  钳制持久化再恢复被洗成 100。现持久化原始值，恢复仅 0-100 界内回填
+  位置，界外只恢复开关态、位置保持未知（固件"255 丢弃"口径维持）
+- **幽灵设备复活**：remove_device 在设备不在内存缓存时全部清理（映射/
+  注册表/setpoints/回调/bind_ops）静默整体跳过。现缓存无关清理无条件
+  幂等执行，缓存缺失打 warning，返回 bool
+- setup 在平台转发后失败不卸载平台 → 条目进错误态而实体残留（僵尸实体）
+- MQTT 尚未加载时心跳监听器永不武装（自动发现静默失效、无重试）→
+  后台等待 MQTT 就绪再武装（120s 上限，订阅前后条目存活双检）
+- awaiting-only 安装不启动小程序 WS 网关，与"条目存在即监听"定案口径
+  不符 → awaiting setup 同样 ensure
+- 含字母 SN 录错大小写呈现"在线但指令全无反应"（入站匹配不敏感、下发
+  主题敏感）→ 以网关实际上报形态内存自纠 gateway_sn 并打 warning
+- 选项添加网关 unique_id 撞车预检：HA 2026.x `async_update_entry` 对重复
+  uid **不抛异常**（仅 error 日志），旧 except 兜底永不触发（源码实证）
+- 配置流向导 MockDeviceManager 补齐 003 分支所需属性面（连接测试窗口内
+  到达的 003 曾抛 AttributeError 被任务面吞没）
+
+### 安全 / 门禁加固
+- nginx ingress.conf（含明文 SUPERVISOR_TOKEN）权限收紧 600——与
+  passwd/acl 600/700 同口径，堵容器内低权进程读 token 经代理打 HA API
+- 桥段写入后 mosquitto.conf 收紧 600（conf 含对端凭据时不再全局可读）
+- 崩溃诊断打印 mosquitto.conf 时 username/password 行脱敏（防密码入
+  Supervisor 日志，与 v1.6.3 "passwd 只 cut 用户名"定案同口径）
+- CI 语法门 `py_compile *.py` → `compileall` 递归（mqtt_handler 子包不再
+  漏出语法门——正是 A-1 那类拆包事故的第二道闸）；Release 正文 awk 补回
+  `## [版本]` 标题行；warm-mirrors 镜像仓名改由 image 字段派生（自定义
+  镜像改名后预热不再静默失效）
+
+### Added
+- **共存桥总开关 `coexist_bridge_enabled`**（默认 true 零感知）：桥判据是
+  "本机 :1883 有进程在听"，宿主第三方进程占口存在误桥面（out 腿外送控制
+  命令/in 腿注入 discovery，桥消息不受本地 ACL 约束）；置 false 熔断：
+  不建新桥、已建桥对账循环自动拆除（README 已加误桥警示）
+- Web 页脚版本改 JS 回填占位：消灭遗留硬编码 v1.5.1 的错版闪现
+- nginx 启动失败现场取证改用 /proc/net/tcp{,6} 扫描（base 镜像无
+  netstat，旧取证行恒空输出——恰在端口被占最需要时无声）
+
+### Changed（文档口径订正）
+- CLAUDE.md：更新检查订正为"Gitee+GitHub 双源并集取版本号最大者"（与
+  huijian.js v1.6.7 定案一致，旧"默认源→回退"记载与代码不符）；本地
+  回归命令同步 compileall；Web UI 架构描述三文件化
+- 根 README 与加载项 README 的版本硬字符串改动态引用（曾滞后 8 个版本）；
+  共存 FAQ 增补误桥警示/总开关/凭据成对填写要求；run_e2e.sh 过时的
+  "首阶段 continue-on-error"注释订正为 v1.6.22 起硬门禁
+- config.yaml 共存凭据注释归属订正（v1.6.24 引入、随 v1.6.25 首发——
+  历史版本号曾被 bump 全局 sed 漂错）
+
+### 特性公开归并（v1.6.24 未单独发布，本版本起对外可见——详情见 [1.6.24] 段）
+- **第三方共存自动桥**：官方 Mosquitto 在跑时自动搭方向分离桥
+  （仅 `zigbee2mqtt/#` 双向 + `homeassistant/#` 单向入），z2m 零配置共存；
+  对端消失自动拆桥，120s 冷却防抖；`gateway/#` 永久禁跨桥（安全评审定案）
+- 可选配置 `coexist_official_user/password`：官方加载项 7.x 强制认证时
+  填其 logins 任一账号即带认证建桥；**v1.6.26 起两字段必须成对填写**
+- z2m 直连账号 `huijian_z2m`（推荐路径，不装官方 Mosquitto 即可共存）
+- `status.json` 诊断位 `coexist_bridge` / `official_peer_up`（无 UI 展示面）
+
 ## [1.6.25] - 2026-09-06
 
 ### Changed（纯重构批，行为零变化）

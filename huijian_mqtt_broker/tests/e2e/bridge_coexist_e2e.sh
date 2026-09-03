@@ -230,8 +230,30 @@ grep -q hit "$L/t2.txt" \
     && echo "✅ T2 条件凭据桥：${TEST_BRIDGE_USER} 认证 + 端到端数据穿透" \
     || { fail "T2 认证桥未穿透: $(cat "$L/t2.txt" 2>/dev/null)"; }
 
+# T3 半填凭据（v1.6.26 D-2 真栈行为级回归）：只填用户名——旧模板展开出
+# `password ` 空值行，mosquitto 2.x conf__parse_string 空值判错**拒载整份
+# conf**（conf.c 源码实锤）→ 内置 broker 拒启。现降级匿名桥：conf 必须
+# **零凭据行**，且 _bridge_on 的 kill→自愈重启后 2022 存活 = 真实
+# eclipse-mosquitto:2 接受了该 conf（行为断言，不靠源码推断）。
+_bridge_off || true; sleep 6
+export TEST_BRIDGE_USER=half_only TEST_BRIDGE_PASS=""
+# shellcheck disable=SC1091
+source "$HERE/bridge_harness_lib.sh"
+OFFICIAL_PORT_HEX=$(printf '%04X' 1884)
+_bridge_on || fail "T3 半填凭据写桥失败"
+grep -Eq '^[[:space:]]*(username|password)([[:space:]]|$)' "$CONF" \
+    && fail "T3 半填形态泄漏凭据行（含毒行）: $(grep -nE '^[[:space:]]*(username|password)' "$CONF")"
+OK3=false
+for i in $(seq 1 12); do
+    "$MOSQ_DIR/usr/bin/mosquitto_pub" -p 2022 -i t3 -t gateway/t3 -m 1 && { OK3=true; break; }
+    sleep 1
+done
+"$OK3" && echo "✅ T3 半填凭据→匿名桥降级：零毒行 + conf 被 mosquitto 接受（2022 存活）" \
+    || fail "T3 半填凭据后 broker 写桥即死（D-2 回潮！查 e2e.out 的 Empty bridge remote_password）"
+_bridge_off || true; sleep 6
+
 kill -TERM "$PEER_PID" 2>/dev/null; wait "$PEER_PID" 2>/dev/null
 _bridge_off || true; sleep 6
 kill "$SH_PID" 2>/dev/null
 echo ""
-echo "═══ 共存自动桥机制全链路实证通过（S0-S6 + T1-T2）═══"
+echo "═══ 共存自动桥机制全链路实证通过（S0-S6 + T1-T3）═══"

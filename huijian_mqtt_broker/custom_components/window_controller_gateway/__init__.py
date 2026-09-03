@@ -150,9 +150,60 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 hass.data[DOMAIN][entry.entry_id]["_unsub_heartbeat"] = _unsub_heartbeat
                 _LOGGER.info("已启动网关心跳监听器，等待网关上电...")
             else:
-                _LOGGER.warning("MQTT 集成未就绪，心跳监听器未启动（网关需先手动添加 SN）")
+                # v1.6.26（第八轮审计 A-2）：旧实现只武装一次——加载项首启的
+                # 典型时序里 MQTT 条目由本集成的 bootstrap 稍后异步创建，
+                # is_mqtt_loaded 此刻为假即永久放弃，自动发现整链静默失效。
+                # 改为后台任务等待 MQTT 就绪后再订阅（进 _bg_tasks，卸载/
+                # 重载时统一取消；订阅前后双重检查条目数据仍在，防悬挂资源）。
+                async def _arm_heartbeat_when_mqtt_ready():
+                    from homeassistant.components import mqtt as mqtt_comp
+                    from .utils import async_wait_mqtt_loaded
+                    if not await async_wait_mqtt_loaded(hass, timeout=120.0):
+                        _LOGGER.warning(
+                            "等待 MQTT 集成 120s 仍未就绪，心跳监听器未武装"
+                            "（网关需在集成页手动添加 SN，MQTT 恢复后重载条目即可）"
+                        )
+                        return
+                    data_now = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+                    if data_now is None:
+                        return  # 条目已卸载/重载，放弃武装
+                    unsub = await mqtt_comp.async_subscribe(
+                        hass, TOPIC_GATEWAY_RSP, _heartbeat_listener, 1
+                    )
+                    data_now = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+                    if data_now is None:
+                        if unsub:
+                            unsub()
+                        return
+                    if unsub:
+                        data_now["_unsub_heartbeat"] = unsub
+                        _LOGGER.info("MQTT 就绪，已补装网关心跳监听器，等待网关上电...")
+
+                _arm_task = hass.async_create_task(
+                    _arm_heartbeat_when_mqtt_ready(),
+                    name=f"{DOMAIN}_heartbeat_arm_{entry.entry_id}",
+                )
+                hass.data[DOMAIN][entry.entry_id].setdefault("_bg_tasks", []).append(_arm_task)
+                _LOGGER.info("MQTT 尚未就绪，心跳监听器转入后台等待武装")
         except Exception as e:
             _LOGGER.warning("启动心跳监听器失败: %s（不影响手动添加）", e)
+
+        # v1.6.26（第八轮审计 B-1）：awaiting 条目的唯一"转正"入口是
+        # config_flow「添加网关」的 async_update_entry(data=+SN)——此前
+        # update listener 只在完整设置分支注册，awaiting 条目改 data 后无人
+        # 触发重载，配置静默不生效直至 HA 重启（v1.6.19 删显式 reload 时
+        # 注释的"listener 已覆盖"前提对该分支为假）。按完整分支同款注册；
+        # async_update_options 仅调 async_reload，awaiting 期重载是安全的。
+        entry.async_on_unload(entry.add_update_listener(async_update_options))
+
+        # v1.6.26（第八轮审计 A-3）：v1.6.16「半开口径」——条目存在即应监听
+        # 9001（小程序可连、列表为空属正常）。awaiting-only 安装此前从不
+        # 启动 WS 单例，小程序 mDNS 发现后恒 Connection refused。
+        try:
+            from .ws_gateway import async_ensure_ws_gateway
+            await async_ensure_ws_gateway(hass)
+        except Exception as e:
+            _LOGGER.error("小程序 WS 网关检查失败（不影响其余功能）: %s", e, exc_info=True)
 
         return True
 
@@ -328,7 +379,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _debug_logging_entries.discard(entry.entry_id)
         if not _debug_logging_entries:
             _LOGGER.setLevel(logging.NOTSET)
-        await _cleanup_partial_setup(mqtt_handler, device_manager, unsub_listeners)
+        await _cleanup_partial_setup(mqtt_handler, device_manager, unsub_listeners,
+                                     hass=hass, entry=entry)
         # 清理残留的 entry 数据，避免重试时读到脏状态
         hass.data[DOMAIN].pop(entry.entry_id, None)
         _LOGGER.warning("设置网关 [%s] 失败（可重试），已清理部分初始化资源", gateway_name)
@@ -339,12 +391,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _debug_logging_entries.discard(entry.entry_id)
         if not _debug_logging_entries:
             _LOGGER.setLevel(logging.NOTSET)
-        await _cleanup_partial_setup(mqtt_handler, device_manager, unsub_listeners)
+        await _cleanup_partial_setup(mqtt_handler, device_manager, unsub_listeners,
+                                     hass=hass, entry=entry)
         # 清理残留的 entry 数据，避免后续操作读到已清理的 manager 引用
         hass.data[DOMAIN].pop(entry.entry_id, None)
         return False
 
-async def _cleanup_partial_setup(mqtt_handler, device_manager, unsub_listeners) -> None:
+async def _cleanup_partial_setup(mqtt_handler, device_manager, unsub_listeners,
+                                 hass=None, entry=None) -> None:
     """清理 async_setup_entry 中途失败时已创建的部分资源（幂等，各步骤独立容错）"""
     if mqtt_handler:
         try:
@@ -361,6 +415,15 @@ async def _cleanup_partial_setup(mqtt_handler, device_manager, unsub_listeners) 
             unsub()
         except Exception as e:
             _LOGGER.debug("取消监听器异常: %s", e)
+    # v1.6.26（第八轮审计 A-1B）：forward 之后（:286 起）才抛异常的失败路径，
+    # 5 个平台已加载——不清则僵尸实体持已 cleanup 的 manager/handler 引用，
+    # "存在但永不更新"。对 forward 之前的失败本调用是安全 no-op（见本文件
+    # "PLATFORMS 对未加载平台卸载是安全 no-op" 定案注释）。
+    if hass is not None and entry is not None:
+        try:
+            await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+        except Exception as e:
+            _LOGGER.debug("失败清理时卸载平台异常: %s", e)
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """卸载配置条目"""

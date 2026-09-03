@@ -79,12 +79,14 @@
     </div>
 
     <div class="footer">
-        <p>慧尖 LoRa 网关一体化插件 <span id="footerVersion">v1.5.1</span></p>
+        <!-- v1.6.26（W-6）：留空占位——旧硬编码 v1.5.1 在 JS 回填前闪现错版
+             （JS 挂掉时更会永久错版）。版本单一真源＝下行 CURRENT_VERSION。 -->
+        <p>慧尖 LoRa 网关一体化插件 <span id="footerVersion"></span></p>
     </div>
 
     <!-- v1.6.25 Web UI 三文件化：css/js 外置（相对路径，兼容 HA ingress 前缀）。
          CURRENT_VERSION 按测试锚留在本文件；huijian.js 复用此全局 let 绑定。 -->
-    <script>let CURRENT_VERSION = '1.6.25';</script>
+    <script>let CURRENT_VERSION = '1.6.26';</script>
     <script src="js/huijian.js"></script>
 </body>
 </html>

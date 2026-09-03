@@ -673,107 +673,125 @@ class WindowControllerDeviceManager:
         # 只支持开窗器设备
         return "开窗器"
         
-    async def remove_device(self, device_sn: str, is_manual: bool = True):
-        """移除设备
-        
+    async def remove_device(self, device_sn: str, is_manual: bool = True) -> bool:
+        """移除设备（v1.6.26 第八轮审计 C-1：缓存无关的清理不再嵌在缓存 guard 内）
+
+        旧实现把 手动删除名单/映射清理/setpoints/设备注册表/移除回调/
+        bind_ops 全部包在 `if device_sn in self.devices:` 里——缓存与注册表
+        不一致时（reload 期 setup 命中手动名单跳过加载、设备先于缓存建到
+        注册表等）整体静默 no-op 且无日志：删除按钮/WS unbind 报成功，但
+        映射仍指本网关、注册表条目仍在，下一次 002 上报即"幽灵设备"复活。
+        现仅 `del self.devices[...]` 保留自身守卫，其余无条件执行（各步在
+        目标缺失时本就幂等 no-op），缓存缺失分支补 warning，name/type 用
+        SN 与主流设备类型兜底（消费方按 DEVICE_TYPE_WINDOW_OPENER 过滤，
+        None 会整段跳过实体清理；兜底对非开窗器类型是幂等 no-op）。
+
         Args:
             device_sn: 设备SN号
             is_manual: 是否手动删除（默认为True）
+
+        Returns:
+            True——含"彻底不存在"的幂等成功；原恒 None 返回保留给
+            调用方向后兼容（调用方只 catch 异常）。
         """
+        device_info = self.devices.get(device_sn) or {}
+        device_name = device_info.get("name") or device_sn
+        device_type = device_info.get("type") or DEVICE_TYPE_WINDOW_OPENER
         if device_sn in self.devices:
-            # 获取设备信息
-            device_info = self.devices[device_sn]
-            device_name = device_info.get("name")
-            device_type = device_info.get("type")
-            
             # 从内存中删除设备
             del self.devices[device_sn]
             _LOGGER.info("设备移除: %s", device_sn)
-            
-            # 如果是手动删除，将设备添加到手动删除列表中
-            # 这样设备不会自动同步回来，除非重新添加
-            if is_manual:
-                if device_sn not in self._manually_removed_devices:
-                    self._manually_removed_devices.add(device_sn)
-                    # 保存到持久化存储
-                    self._save_manually_removed_devices()
-                    _LOGGER.info("设备已添加到手动删除列表: %s", device_sn)
-                else:
-                    _LOGGER.debug("设备已在手动删除列表中: %s", device_sn)
-            
-            # 改进：从设备到网关映射表中删除设备
-            # 只有当设备在映射表中存在，且映射的网关是当前网关时，才从映射表中删除
-            if DEVICE_TO_GATEWAY_MAPPING in self.hass.data[DOMAIN]:
-                device_to_gateway_mapping = self.hass.data[DOMAIN][DEVICE_TO_GATEWAY_MAPPING]
-                if device_sn in device_to_gateway_mapping:
-                    existing_gateway_sn = device_to_gateway_mapping[device_sn]
-                    # 忽略大小写比较
-                    if existing_gateway_sn.lower() == self.gateway_sn.lower():
-                        del device_to_gateway_mapping[device_sn]
-                        self._save_device_to_gateway_mapping()
-                        _LOGGER.info("设备 %s 已从网关映射表中删除 (所属网关: %s)", 
-                            device_sn, self.gateway_sn)
-                    else:
-                        # 改为调试日志，避免产生过多警告
-                        _LOGGER.debug("设备 %s 映射到网关 %s，不是当前网关 %s，不从映射表中删除", 
-                            device_sn, existing_gateway_sn, self.gateway_sn)
-                else:
-                    _LOGGER.debug("设备 %s 不在网关映射表中", device_sn)
+        else:
+            _LOGGER.warning(
+                "设备 %s 不在内存缓存，继续清理映射/setpoints/注册表/回调残留"
+                "（幽灵设备根治）", device_sn,
+            )
 
-            # 清理该设备的参数设定值（速度/力度等），避免残留脏数据
-            setpoints = self.get_device_setpoints()
-            if device_sn in setpoints:
-                del setpoints[device_sn]
-                self._trigger_persistent_save()
-                _LOGGER.debug("设备 %s 的设定值已清理", device_sn)
-            
-            # 从 Home Assistant 设备注册表中删除设备
-            try:
-                device_registry = await self._get_device_registry()
-                # 查找设备
-                device = device_registry.async_get_device(
-                    identifiers={(DOMAIN, device_sn)}
-                )
-                if device:
-                    from .utils import call_registry_method as _call_reg
-                    await _call_reg(device_registry.async_remove_device, device.id)
-                    _LOGGER.info("设备已从 Home Assistant 设备注册表中删除: %s", device_sn)
+        # 如果是手动删除，将设备添加到手动删除列表中
+        # 这样设备不会自动同步回来，除非重新添加
+        if is_manual:
+            if device_sn not in self._manually_removed_devices:
+                self._manually_removed_devices.add(device_sn)
+                # 保存到持久化存储
+                self._save_manually_removed_devices()
+                _LOGGER.info("设备已添加到手动删除列表: %s", device_sn)
+            else:
+                _LOGGER.debug("设备已在手动删除列表中: %s", device_sn)
+
+        # 改进：从设备到网关映射表中删除设备
+        # 只有当设备在映射表中存在，且映射的网关是当前网关时，才从映射表中删除
+        if DEVICE_TO_GATEWAY_MAPPING in self.hass.data[DOMAIN]:
+            device_to_gateway_mapping = self.hass.data[DOMAIN][DEVICE_TO_GATEWAY_MAPPING]
+            if device_sn in device_to_gateway_mapping:
+                existing_gateway_sn = device_to_gateway_mapping[device_sn]
+                # 忽略大小写比较
+                if existing_gateway_sn.lower() == self.gateway_sn.lower():
+                    del device_to_gateway_mapping[device_sn]
+                    self._save_device_to_gateway_mapping()
+                    _LOGGER.info("设备 %s 已从网关映射表中删除 (所属网关: %s)", 
+                        device_sn, self.gateway_sn)
                 else:
-                    _LOGGER.debug("设备在注册表中未找到: %s", device_sn)
-            except Exception as e:
-                _LOGGER.error("从设备注册表中删除设备失败: %s", e)
-            
-            # 调用设备移除回调
-            _LOGGER.info("正在通知设备移除回调，设备: %s", device_sn)
-            for callback in self._device_removed_callbacks:
-                try:
-                    await callback(device_sn, device_name, device_type)
-                    _LOGGER.info("设备移除回调执行成功")
-                except Exception as e:
-                    _LOGGER.error("执行设备移除回调失败: %s", e)
-            
-            _LOGGER.info("设备移除流程完成: %s", device_sn)
-            
-            # 协议说明：002 是网关主动发起的上报，HA 无法主动触发设备发现
-            # 设备删除后，设备列表更新依赖网关下一次主动上报 002 消息
+                    # 改为调试日志，避免产生过多警告
+                    _LOGGER.debug("设备 %s 映射到网关 %s，不是当前网关 %s，不从映射表中删除", 
+                        device_sn, existing_gateway_sn, self.gateway_sn)
+            else:
+                _LOGGER.debug("设备 %s 不在网关映射表中", device_sn)
+
+        # 清理该设备的参数设定值（速度/力度等），避免残留脏数据
+        setpoints = self.get_device_setpoints()
+        if device_sn in setpoints:
+            del setpoints[device_sn]
+            self._trigger_persistent_save()
+            _LOGGER.debug("设备 %s 的设定值已清理", device_sn)
+        
+        # 从 Home Assistant 设备注册表中删除设备
+        try:
+            device_registry = await self._get_device_registry()
+            # 查找设备
+            device = device_registry.async_get_device(
+                identifiers={(DOMAIN, device_sn)}
+            )
+            if device:
+                from .utils import call_registry_method as _call_reg
+                await _call_reg(device_registry.async_remove_device, device.id)
+                _LOGGER.info("设备已从 Home Assistant 设备注册表中删除: %s", device_sn)
+            else:
+                _LOGGER.debug("设备在注册表中未找到: %s", device_sn)
+        except Exception as e:
+            _LOGGER.error("从设备注册表中删除设备失败: %s", e)
+        
+        # 调用设备移除回调
+        _LOGGER.info("正在通知设备移除回调，设备: %s", device_sn)
+        for callback in self._device_removed_callbacks:
             try:
-                # P2 修复：使用 hass.async_create_task（hass.create_task 已弃用），
-                # 并直接通过 entry_id 查找 MQTT 处理器，避免不必要的迭代
-                gateway_data = self.hass.data[DOMAIN].get(self.entry.entry_id)
-                if gateway_data and isinstance(gateway_data, dict):
-                    mqtt_handler = gateway_data.get("mqtt_handler")
-                    if mqtt_handler:
-                        # P0 设备复活守卫：删除时清除该设备的待处理绑定/解绑方向记录，
-                        # 晚到的 003 回复无法再按 id 匹配出"绑定"语义，将落入
-                        # _handle_ctype_003 的手动删除列表拒绝分支，防止设备复活。
-                        if hasattr(mqtt_handler, "_clear_bind_ops_for_device"):
-                            mqtt_handler._clear_bind_ops_for_device(device_sn)
-                        # trigger_discovery 现在是空实现，仅记录日志
-                        self.hass.async_create_task(mqtt_handler.trigger_discovery())
-            except KeyError as e:
-                _LOGGER.error("访问DOMAIN数据失败: %s", e)
+                await callback(device_sn, device_name, device_type)
+                _LOGGER.info("设备移除回调执行成功")
             except Exception as e:
-                _LOGGER.error("通知MQTT处理器设备删除失败: %s", e)
+                _LOGGER.error("执行设备移除回调失败: %s", e)
+        
+        _LOGGER.info("设备移除流程完成: %s", device_sn)
+        
+        # 协议说明：002 是网关主动发起的上报，HA 无法主动触发设备发现
+        # 设备删除后，设备列表更新依赖网关下一次主动上报 002 消息
+        try:
+            # P2 修复：使用 hass.async_create_task（hass.create_task 已弃用），
+            # 并直接通过 entry_id 查找 MQTT 处理器，避免不必要的迭代
+            gateway_data = self.hass.data[DOMAIN].get(self.entry.entry_id)
+            if gateway_data and isinstance(gateway_data, dict):
+                mqtt_handler = gateway_data.get("mqtt_handler")
+                if mqtt_handler:
+                    # P0 设备复活守卫：删除时清除该设备的待处理绑定/解绑方向记录，
+                    # 晚到的 003 回复无法再按 id 匹配出"绑定"语义，将落入
+                    # _handle_ctype_003 的手动删除列表拒绝分支，防止设备复活。
+                    if hasattr(mqtt_handler, "_clear_bind_ops_for_device"):
+                        mqtt_handler._clear_bind_ops_for_device(device_sn)
+                    # trigger_discovery 现在是空实现，仅记录日志
+                    self.hass.async_create_task(mqtt_handler.trigger_discovery())
+        except KeyError as e:
+            _LOGGER.error("访问DOMAIN数据失败: %s", e)
+        except Exception as e:
+            _LOGGER.error("通知MQTT处理器设备删除失败: %s", e)
+        return True
 
     async def update_device_status(self, device_sn: str, status: str, attributes: Optional[Dict[str, Any]] = None):
         """更新设备状态
