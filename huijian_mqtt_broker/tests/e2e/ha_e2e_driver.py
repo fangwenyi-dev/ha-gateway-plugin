@@ -111,10 +111,17 @@ if st != 200 or "flow_id" not in fl:
     die(f"mqtt flow 启动 HTTP {st}: {fl}")
 st, res = call("POST", f"/api/config/config_entries/flow/{fl['flow_id']}",
                json_body={"broker": MQTT_HOST, "port": str(MQTT_PORT)})
+# 版本兼容（CI :stable 2026.8 实锤 vs 本地 2026.1 全绿）：新版 MQTT user
+# step schema 要求 other_settings（advanced options 演进入 schema）——
+# 报该键 required 时带空串重交，两代 HA 同码通过。
+if isinstance(res, dict) and "other_settings" in json.dumps(res):
+    st, res = call("POST", f"/api/config/config_entries/flow/{fl['flow_id']}",
+                   json_body={"broker": MQTT_HOST, "port": str(MQTT_PORT),
+                              "other_settings": ""})
 if isinstance(res, dict) and res.get("type") == "form":
-    # 二次 form（如高级项）→ 原样再提交一次空输入结束流程
+    # 二次 form（如高级项）→ 补交 other_settings 结束流程
     st, res = call("POST", f"/api/config/config_entries/flow/{res['flow_id']}",
-                   json_body={"broker": MQTT_HOST, "port": str(MQTT_PORT)})
+                   json_body={"other_settings": ""})
 if not (isinstance(res, dict) and res.get("type") == "create_entry"):
     die(f"mqtt entry 创建失败: {res}")
 step("E", "等待 mqtt loaded")

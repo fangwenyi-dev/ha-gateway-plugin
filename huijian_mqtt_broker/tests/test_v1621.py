@@ -137,7 +137,8 @@ def test_e2e_script_key_steps():
     for anchor in ("api/onboarding/users", "auth_code", "/auth/token",
                    "gateway/rpt_rsp", "config_entries/flow",
                    "/api/window_controller_gateway/devices",
-                   "window_controller_gateway", "paho", "GITHUB_STEP_SUMMARY"):
+                   "window_controller_gateway", "paho", "GITHUB_STEP_SUMMARY",
+                   "other_settings"):
         assert anchor in d, f"E2E driver 缺关键锚: {anchor}"
     # auth 契约注释必须留痕（client_id 需 IndieAuth URL 形态的实证结论）
     assert "verify_client_id" in d and "indieauth" in d.lower()
