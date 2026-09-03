@@ -110,7 +110,6 @@ class TestSkyElements:
 
     def test_reduced_motion_kill_switch(self):
         assert "@media (prefers-reduced-motion: reduce)" in CSS
-
     def test_logo_dual_animation(self):
         seg = re.search(r"\.brand-logo \{[^}]*\}", _code(CSS)).group(0)
         assert "hero-float" in seg and "hero-breathe" in seg, \
@@ -205,12 +204,34 @@ class TestEmptySlotsTransparent:
         rule = self._rule(".device-list .empty-hint")
         assert "grid-column: 1 / -1" in rule
 
-    def test_tiles_hug_own_content(self):
-        """用户校准：设备玻璃框=比单独设备内容大一圈的方框——网格禁止
-        纵向拉伸（默认 stretch 会把矮内容拉成带空玻璃段的大板）。"""
+    def test_tiles_uniform_5005_height(self):
+        """v1.6.29 用户改令：全部子设备玻璃按 5005 统一高度——行内
+        stretch 拉齐 + min-height:262px（5005 满控件实测高）双保险，
+        作废 v1.6.27 的各自 hug 口径。"""
         grid = self._rule(".device-list")
-        assert "align-items: start" in grid, "设备瓷砖不得被行拉伸"
+        assert "align-items: start" not in grid, "hug 口径已作废，不得收缩"
         assert "minmax(280px, 340px)" in grid, \
-            "轨道须封顶（1fr 会把单设备行拉成超宽板；封顶后右侧整段留空透星空）"
+            "轨道封顶保留（单设备行右侧留空不拉伸）"
         dev = self._rule(".device-item")
-        assert "height" not in dev, "设备框必须随内容自适应"
+        assert "min-height: 262px" in dev, "5005 统一高度锚"
+        assert "height" not in dev.replace("min-height", ""), "禁止固定高度"
+
+    def test_reduced_motion_static_sky_visible(self):
+        """v1.6.28 用户端"没动图没流星"根因：meteor base opacity:0 靠动画
+        投影，reduce 一停动画就整批隐身。兜底必须"静止但可见"：
+        .meteor 显影 + 7 颗各自冻结在斜穿半空的位置。"""
+        seg = CSS[CSS.index("@media (prefers-reduced-motion: reduce)"):]
+        m = re.search(r"\.meteor \{([^}]*)\}", seg).group(1)
+        assert "animation: none" in m and "opacity: .8" in m
+        frozen = re.findall(r"\.meteor-\d \{ transform: translateY\((\d+)px\) rotate\(18deg\); \}", seg)
+        assert len(frozen) == 7, "7 颗静态流星齐备"
+        ys = [int(v) for v in frozen]
+        assert len(set(ys)) == 7 and all(0 < y < 1100 for y in ys), "各异且在天幕行程内"
+
+    def test_brand_logo_image(self):
+        """页头＝慧尖真 logo（v1.6.29 用户指定，替换 📡 emoji），素材入 www/img
+        随 Dockerfile COPY www/ 整目录进镜像"""
+        assert 'class="brand-logo"><img src="img/logo.png"' in INDEX.replace("\n", " ").replace("  ", " ") or 'img/logo.png' in INDEX
+        logo = Path(__file__).resolve().parents[1] / "www" / "img" / "logo.png"
+        assert logo.is_file() and logo.stat().st_size > 10_000, "logo 素材随包"
+        assert ".brand-logo img" in CSS, "img 铺盘样式在位"

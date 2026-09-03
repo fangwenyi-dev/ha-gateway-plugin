@@ -3,6 +3,23 @@
 所有版本变更记录在此文件中。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.6.29] - 2026-09-07
+
+### Fixed
+- **系统"减弱动画"下星空死透（用户端"没动图没流星"根因）**：流星 base
+  是 `opacity:0`、全靠动画投影，`prefers-reduced-motion: reduce` 一停动画
+  就整批隐身、星点静止。兜底改"静止但可见"：7 颗流星冻结在斜穿半空的
+  各异位置成静态流星雨（无位移仍合规减弱动效，画面不空）。同时告知：
+  要完整动效请开系统动画设置（Windows：设置→辅助功能→视觉效果→
+  动画效果；macOS：辅助功能→显示→减弱动态效果）
+
+### Changed
+- **子设备玻璃统一按 5005 高度**（用户改令，作废 v1.6.27"各自 hug"口径）：
+  行内 stretch + `.device-item` min-height 262px 双保险，无 5005 的行也齐高
+- **页头采用慧尖真 logo**：`www/img/logo.png`（563×563，取自插件
+  `logo.png` 素材）替换 📡 emoji，玻璃盘呼吸/悬浮动画保留；素材随
+  Dockerfile `COPY www/` 整目录进镜像
+
 ## [1.6.28] - 2026-09-07
 
 ### Fixed
