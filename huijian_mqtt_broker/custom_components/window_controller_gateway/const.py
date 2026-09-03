@@ -155,6 +155,13 @@ CONF_WS_GATEWAY_TOKEN: Final = "ws_gateway_token"
 # 安全面不变：握手子协议令牌校验（默认令牌=小程序内置共享值）401 拒连、
 # 认证成功才占槽（≤4）、帧长与空闲限制照固件；options 仍可显式关闭。
 DEFAULT_WS_GATEWAY_ENABLED: Final = True
+
+# v1.6.23：vivo HomeBridge（vivohomebridge）等第三方桥的 cover 枚举
+# 只放行 device_class==curtain（vbridge.py:385 源码实证），本集成
+# "开窗器"默认 WINDOW（HA 原生语义正确、不动存量用户）；勾选本项
+# 后以 CURTAIN 暴露，vivo 智慧生活才能选到该设备
+CONF_EXPOSE_COVER_AS_CURTAIN: Final = "expose_cover_as_curtain"
+DEFAULT_EXPOSE_COVER_AS_CURTAIN: Final = False
 DEFAULT_WS_GATEWAY_PORT: Final = 9001
 # v1.6.19（第六轮审计 B-LOW10）：本栈保留端口——WS 网关端口选项若撞上这些
 # 口，bind 失败只进 HA 日志、小程序恒 Connection refused 静默失联，

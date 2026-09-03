@@ -3,6 +3,24 @@
 所有版本变更记录在此文件中。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.6.23] - 2026-09-05
+
+### Added
+- 集成「配置 → 选项」新增**「以窗帘身份暴露开窗器」**开关（默认关闭）：
+  vivo 官方 ha_vivohomebridge 桥的 cover 枚举仅放行 `device_class == curtain`
+  （其 vbridge.py 源码实证），开窗器默认的 `window` 类目会被过滤导致在
+  vivo 智慧生活中选不到设备。勾选后（条目自动重载、秒级生效、双向可逆）
+  cover 以窗帘身份暴露，vivo 端可正常添加并开/关/停控制。
+- 默认关闭保证存量用户零影响（HA 原生语义仍为"窗"）；控制路径与
+  device_class 无关（开/关/停命令构建逐字节一致，真栈实证）。
+- tests/test_v1623.py 六条钉桩：默认值、双向 device_class、options 接线、
+  两处 setup 读取、双语描述完整性。
+
+### Fixed
+- 测试基建：conftest fake `CoverDeviceClass` 补 CURTAIN 成员；
+  round5 lifecycle fixture 如实模拟 `entry.options`（本功能首次真实消费
+  该属性暴露的代理对象缺口）。
+
 ## [1.6.22] - 2026-09-05
 
 ### Removed

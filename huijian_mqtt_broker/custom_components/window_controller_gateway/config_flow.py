@@ -17,6 +17,8 @@ from .const import (
     DEFAULT_GATEWAY_NAME,
     GATEWAY_CONNECT_TIMEOUT,
     CONF_WS_GATEWAY_ENABLED,
+    CONF_EXPOSE_COVER_AS_CURTAIN,
+    DEFAULT_EXPOSE_COVER_AS_CURTAIN,
     CONF_WS_GATEWAY_PORT,
     CONF_WS_GATEWAY_TOKEN,
     DEFAULT_WS_GATEWAY_ENABLED,
@@ -766,6 +768,12 @@ class OptionsFlow(config_entries.OptionsFlow):
                 vol.Optional(
                     "debug_logging",
                     default=self._config_entry.options.get("debug_logging", False)
+                ): bool,
+                vol.Optional(
+                    CONF_EXPOSE_COVER_AS_CURTAIN,
+                    default=self._config_entry.options.get(
+                        CONF_EXPOSE_COVER_AS_CURTAIN,
+                        DEFAULT_EXPOSE_COVER_AS_CURTAIN)
                 ): bool,
                 vol.Optional(
                     CONF_WS_GATEWAY_ENABLED,

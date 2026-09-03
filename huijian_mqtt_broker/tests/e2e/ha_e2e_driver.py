@@ -101,6 +101,13 @@ st, tk = call("POST", "/auth/token", form={
 if st != 200 or "access_token" not in tk:
     die(f"/auth/token HTTP {st}: {tk}")
 TOKEN = tk["access_token"]
+# 本地 harness 附加：token 落盘供后续复验脚本复用（一次性测试栈，CI 容器
+# 跑完即焚零敏感；run_local.sh 同机可直接读 /tmp/ha_e2e_token）
+try:
+    with open("/tmp/ha_e2e_token", "w") as _f:
+        _f.write(TOKEN)
+except OSError:
+    pass
 step("C", "owner token 到手 ✓")
 
 # ---------- D/E. MQTT 集成 entry ----------

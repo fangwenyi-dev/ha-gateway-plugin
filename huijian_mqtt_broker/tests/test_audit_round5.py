@@ -444,7 +444,8 @@ class TestCoverStatusCallback:
         dm = _DM()
         hass = SimpleNamespace(data={c.DOMAIN: {"e1": {"device_manager": dm,
                                                        "mqtt_handler": _MH()}}})
-        entry = SimpleNamespace(entry_id="e1", data={c.CONF_GATEWAY_SN: GW_SN})
+        entry = SimpleNamespace(entry_id="e1", data={c.CONF_GATEWAY_SN: GW_SN},
+                                options={})
         added_entities = []
 
         await cover_mod.async_setup_entry(hass, entry, lambda ents: added_entities.extend(ents))
@@ -507,6 +508,7 @@ class TestOptionsFlowSchema:
         # v1.6.15：新增 ws_gateway_* 三字段——真实消费方为
         # ws_gateway.ws_gateway_wanted（options 三键逐一被读，非死控件）
         assert keys == ["discovery_interval", "auto_discovery", "debug_logging",
+                        c.CONF_EXPOSE_COVER_AS_CURTAIN,
                         c.CONF_WS_GATEWAY_ENABLED, c.CONF_WS_GATEWAY_PORT,
                         c.CONF_WS_GATEWAY_TOKEN], \
             "字段必须与 __init__/mqtt_handler/ws_gateway 真实消费面一一对应"

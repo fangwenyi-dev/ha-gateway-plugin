@@ -28,6 +28,8 @@ from .const import (
     DEVICE_STATUS_UNKNOWN,
     DEVICE_STATUS_CONNECTED,
     SENSOR_TIMEOUT_MINUTES,
+    CONF_EXPOSE_COVER_AS_CURTAIN,
+    DEFAULT_EXPOSE_COVER_AS_CURTAIN,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -47,7 +49,8 @@ class WindowControllerCover(WindowControllerBaseEntity, RestoreEntity, CoverEnti
         gateway_sn: str,
         device_sn: str,
         device_name: str,
-        entry_id: str = None
+        entry_id: str = None,
+        as_curtain: bool = False
     ):
         """初始化开窗器Cover实体"""
         super().__init__(
@@ -60,7 +63,12 @@ class WindowControllerCover(WindowControllerBaseEntity, RestoreEntity, CoverEnti
         )
 
         self._attr_unique_id = f"{gateway_sn}_{device_sn}_cover"
-        self._attr_device_class = CoverDeviceClass.WINDOW
+        # v1.6.23：兼容 vivohomebridge——其 cover 枚举仅放行 device_class
+        # ==curtain（源码 vbridge.py 实证）；options 开启后以窗帘身份
+        # 暴露（cover 控制语义 open/close/stop/position 两侧协议一致）
+        self._attr_device_class = (
+            CoverDeviceClass.CURTAIN if as_curtain else CoverDeviceClass.WINDOW
+        )
         self._attr_name = "开窗器"
         self._entry_id = entry_id
         self._attr_supported_features = (
@@ -309,7 +317,10 @@ async def async_setup_entry(
                 gateway_sn,
                 device_sn,
                 device_name,
-                str(entry.entry_id)
+                str(entry.entry_id),
+                as_curtain=bool(entry.options.get(
+                    CONF_EXPOSE_COVER_AS_CURTAIN,
+                    DEFAULT_EXPOSE_COVER_AS_CURTAIN))
             )
             async_add_entities([cover])
             created_covers[device_sn] = cover
@@ -370,7 +381,10 @@ async def async_setup_entry(
                 gateway_sn,
                 device_sn,
                 device_name,
-                str(entry.entry_id)
+                str(entry.entry_id),
+                as_curtain=bool(entry.options.get(
+                    CONF_EXPOSE_COVER_AS_CURTAIN,
+                    DEFAULT_EXPOSE_COVER_AS_CURTAIN))
             )
             entities.append(cover)
             created_covers[device_sn] = cover

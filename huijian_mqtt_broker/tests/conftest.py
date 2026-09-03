@@ -183,7 +183,7 @@ ha_components_cover.CoverEntity = type("CoverEntity", (), {})
 ha_components_cover.CoverEntityFeature = type(
     "CoverEntityFeature", (), {"OPEN": 1, "CLOSE": 2, "STOP": 4}
 )
-ha_components_cover.CoverDeviceClass = type("CoverDeviceClass", (), {"WINDOW": "window"})
+ha_components_cover.CoverDeviceClass = type("CoverDeviceClass", (), {"WINDOW": "window", "CURTAIN": "curtain"})
 ha_components_number.NumberEntity = type("NumberEntity", (), {})
 ha_components_number.NumberMode = type("NumberMode", (), {"SLIDER": "slider"})
 
