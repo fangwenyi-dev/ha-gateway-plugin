@@ -3,9 +3,8 @@
 # 全部业务断言在 tests/e2e/ha_e2e_driver.py（本地/CI 单一事实源——auth
 # 契约经读 HA 2026.7.1 源码实证后重写，终止两轮 CI 盲打）。
 #
-# 本地复跑（WSL，无 docker）：先自拉 mosquitto(:2022) 与
-# python3 -m homeassistant --config <dir含custom_components> ，然后
-# E2E_SKIP_DOCKER=1 python3 tests/e2e/ha_e2e_driver.py 即可，同一契约。
+# 本地复跑（WSL，无 docker）：bash tests/e2e/run_local.sh 一键完成
+# （重置→拉起 HA Core→跑同一 driver→失败落日志），契约与 CI 同源。
 #
 # 首阶段 ci.yaml continue-on-error（防 E2E 自身问题阻塞发布），
 # 连绿后摘除升硬门禁。失败 trap 落盘两侧容器日志尾部辅助排障。
@@ -42,14 +41,14 @@ docker run -d --name ha-e2e --network host \
     ghcr.io/home-assistant/home-assistant:stable >/dev/null
 
 echo "==== 3. 驱动器（等待/认证/entry/002/断言/soak 全在其内） ===="
-# summary 文件传入容器（driver 检测到才写）
-touch /tmp/e2e-summary.md && chmod 666 /tmp/e2e-summary.md
+# summary 经 $CFG（已 bind 进容器 /config）双向共享——直接指容器内路径
+# （docker exec 无法临时挂载 runner 文件，第五轮自查断链修复）
 RC=0
 docker exec -e E2E_HA_URL=http://127.0.0.1:8123 -e E2E_MQTT_HOST=127.0.0.1 \
-    -e GITHUB_STEP_SUMMARY=/tmp/e2e-summary.md \
+    -e GITHUB_STEP_SUMMARY=/config/summary.md \
     ha-e2e python3 /config/ha_e2e_driver.py || RC=$?
-if [ -s /tmp/e2e-summary.md ] && [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
-    cat /tmp/e2e-summary.md >> "$GITHUB_STEP_SUMMARY"
+if [ -s "$CFG/summary.md" ] && [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+    cat "$CFG/summary.md" >> "$GITHUB_STEP_SUMMARY"
 fi
 [ "$RC" -eq 0 ] || { diag "driver rc=$RC"; exit "$RC"; }
 echo "==== E2E 编排完成 ✅ ===="
