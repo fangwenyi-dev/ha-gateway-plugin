@@ -88,27 +88,30 @@ body {
         radial-gradient(70% 55% at 50% 108%, rgba(99, 102, 241, .12), transparent 70%),
         var(--bg-main);
 }
-/* 星云：全站仅一朵，左下溢角巨团（标准 α0.22 核→此处 Web 铺底取 .10 偏淡守"宁淡"），
-   禁内核雾层；漂移 aurora-move1 45s */
-.nebula {
-    position: absolute;
-    bottom: -30%;
-    left: -14%;
-    /* web 移植校准（2026-09-07 用户实测"没看到星云"）：小程序 α.03~.10
-       定案的手机版式在 web 满屏卡片下核心被整块遮住、边沿漏出仅 +5/765
-       量级。放大团体并提亮峰值到 .16（实测净增 +35→约 +60/765），仍在
-       「克制的光」区间——禁的是内核白雾层与大 α，不是不可见的极淡。 */
-    width: 76%;
-    height: 86%;
-    background: radial-gradient(ellipse 60% 55% at 50% 50%, rgba(56, 189, 248, .16), rgba(14, 165, 233, .06) 45%, transparent 74%);
-    filter: blur(10px);
-    animation: nebula-drift 45s ease-in-out infinite alternate;
-    will-change: transform;
+/* 星云团：逐字移植官网母本 v0.0.1（www/index.html L104-117）的
+   .bg-aurora::before（左上蓝）+ ::after（右下青）+ .bg-aurora-3.v-gold
+   （中上金，α.07），45s/50s/60s 三组 aurora-move 各自漂移。
+   2026-09-07 用户校准：web 星云口径以官网为准（此前单团 α.16 小程序
+   适配版作废）；三团皆 radial 柔边、无 blur、无内核白雾——官网原文。 */
+.nebula { position: absolute; top: 0; left: 0; right: 0; bottom: 0; overflow: hidden; pointer-events: none; }
+.nebula::before {
+    content: ''; position: absolute; top: -30%; left: -10%; width: 60%; height: 80%;
+    background: radial-gradient(ellipse at center, rgba(14, 165, 233, .10) 0%, transparent 60%);
+    animation: aurora-move1 45s ease-in-out infinite;
 }
-@keyframes nebula-drift {
-    from { transform: translate3d(0, 0, 0) scale(1); }
-    to   { transform: translate3d(6%, -4%, 0) scale(1.08); }
+.nebula::after {
+    content: ''; position: absolute; bottom: -20%; right: -10%; width: 50%; height: 70%;
+    background: radial-gradient(ellipse at center, rgba(6, 182, 212, .08) 0%, transparent 60%);
+    animation: aurora-move2 50s ease-in-out infinite;
 }
+.nebula3 {
+    position: absolute; top: 5%; left: 50%; width: 40%; height: 50%;
+    background: radial-gradient(ellipse at center, rgba(245, 158, 11, .07) 0%, transparent 55%);
+    animation: aurora-move3 60s ease-in-out infinite; pointer-events: none;
+}
+@keyframes aurora-move1 { 0%, 100% { transform: translate(0, 0) scale(1); } 33% { transform: translate(50px, 25px) scale(1.08); } 66% { transform: translate(-30px, 40px) scale(0.95); } 50% { transform: translate(60px, 30px) scale(1.1); } }
+@keyframes aurora-move2 { 0%, 100% { transform: translate(0, 0) scale(1); } 33% { transform: translate(-40px, -15px) scale(1.06); } 66% { transform: translate(25px, -30px) scale(0.94); } 50% { transform: translate(-50px, -25px) scale(1.08); } }
+@keyframes aurora-move3 { 0%, 100% { transform: translate(0, 0) scale(1) rotate(0deg); } 50% { transform: translate(-60px, 40px) scale(1.15) rotate(10deg); } }
 /* 星点层（JS 注入 <i> 子元素，位置/明灭周期由内联 CSS 变量给） */
 .stars-far, .stars-near { position: absolute; inset: 0; }
 .stars-far i, .stars-near i {
@@ -346,8 +349,10 @@ body {
 
 /* ===== Devices ===== */
 /* align-items:start＝留空原则的纵向推论（用户校准 2026-09-07）：每块
-   设备玻璃只比自身内容大一圈，不被同行高件拉伸出空玻璃段 */
-.device-list { margin-top: 12px; display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; align-items: start; }
+   设备玻璃只比自身内容大一圈，不被同行高件拉伸出空玻璃段。
+   轨道封顶 340px（横向同款推论）：auto-fill 保留空轨道、1fr→340px 上限
+   让单设备行右侧整段留空透星空，瓷砖不被拉成超宽板 */
+.device-list { margin-top: 12px; display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 340px)); gap: 10px; align-items: start; }
 @keyframes fadeUp { from { opacity: 0; transform: translateY(8px) scale(.99); } to { opacity: 1; transform: none; } }
 .device-item {
     display: flex; flex-direction: column;

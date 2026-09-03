@@ -86,15 +86,27 @@ class TestSkyElements:
         assert len(delays) == 7 and all(d < 0 for d in delays), \
             f"流星必须负相位进场（正延迟=打开页面头几秒无星可看，用户实测反馈）: {delays}"
 
-    def test_nebula_single_restrained(self):
-        assert INDEX.count('class="nebula"') == 1, "星云全站仅一朵"
-        seg = CSS[CSS.index(".nebula {"):CSS.index("@keyframes nebula-drift")]
-        alphas = [float(a) for a in re.findall(r"rgba\([\d, ]+, (\.[\d]+)\)", seg)]
-        # web 移植校准上限 .18（小程序 .10 定案在 web 满屏卡片下实测不可见，
-        # 见 CSS 注释；仍禁内核白雾层，禁的是大 α 白心不是青蓝主峰）
-        assert alphas and max(alphas) <= 0.18, f"星云宁淡勿浓: {alphas}"
-        assert "45s" in seg, "漂移对齐官网 aurora-move1 45s"
-        assert "bottom: -30%" in seg and "left: -14%" in seg, "左下溢角巨团位姿"
+    def test_nebula_matches_official_master(self):
+        """星云＝官网母本 v0.0.1 (www/index.html L105-117) 的多团结构，
+        用户 2026-09-07 校准以官网为准（覆盖小程序单团旧适配）。
+        钉三团 + 三 keyframe 逐值，禁走样。"""
+        assert INDEX.count('class="nebula"') == 1 and 'class="nebula3"' in INDEX
+        code = _code(CSS)
+        # 蓝团 ::before 左上、青团 ::after 右下、金团 .nebula3 中上（官网值）
+        b = re.search(r"\.nebula::before \{([^}]*)\}", code).group(1)
+        a = re.search(r"\.nebula::after \{([^}]*)\}", code).group(1)
+        g = re.search(r"\.nebula3 \{([^}]*)\}", code).group(1)
+        assert "rgba(14, 165, 233, .10)" in b and "top: -30%" in b and "aurora-move1 45s" in b
+        assert "rgba(6, 182, 212, .08)" in a and "bottom: -20%" in a and "aurora-move2 50s" in a
+        assert "rgba(245, 158, 11, .07)" in g and "aurora-move3 60s" in g
+        # 三团 peak α 均 ≤.10（克制的光；官网原值）
+        for blk in (b, a, g):
+            alphas = [float(x) for x in re.findall(r"rgba\([\d, ]+, (\.[\d]+)\)", blk)]
+            assert alphas and max(alphas) <= 0.10, f"星云团宁淡勿浓: {alphas}"
+        # 三 keyframe 齐备（整体漂移，非内核缩放雾）
+        for kf in ("@keyframes aurora-move1", "@keyframes aurora-move2", "@keyframes aurora-move3"):
+            assert kf in code, f"缺官网漂移关键帧 {kf}"
+        assert "nebula-drift" not in code, "旧单团 nebula-drift 应已移除"
 
     def test_reduced_motion_kill_switch(self):
         assert "@media (prefers-reduced-motion: reduce)" in CSS
@@ -187,5 +199,7 @@ class TestEmptySlotsTransparent:
         纵向拉伸（默认 stretch 会把矮内容拉成带空玻璃段的大板）。"""
         grid = self._rule(".device-list")
         assert "align-items: start" in grid, "设备瓷砖不得被行拉伸"
+        assert "minmax(280px, 340px)" in grid, \
+            "轨道须封顶（1fr 会把单设备行拉成超宽板；封顶后右侧整段留空透星空）"
         dev = self._rule(".device-item")
         assert "height" not in dev, "设备框必须随内容自适应"
