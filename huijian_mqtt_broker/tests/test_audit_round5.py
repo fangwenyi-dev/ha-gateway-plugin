@@ -566,7 +566,11 @@ class TestPersistHardening:
 # ============ Web 超时契约（静态钉桩：JS 无法在 pytest 执行） ============
 class TestWebTimeoutContract:
     def setup_method(self):
-        self.html = (HERE.parent / "www" / "index.html").read_text(encoding="utf-8")
+        # v1.6.25 三文件化：index.html 的内联 script 已字节无损搬至 www/js/huijian.js。
+        # 检索面 = 三文件按拆分前顺序拼接（与原单文件搜索空间一致），断言语义不变。
+        www = HERE.parent / "www"
+        self.html = "".join((www / p).read_text(encoding="utf-8") for p in
+                            ("index.html", "css/huijian.css", "js/huijian.js"))
 
     def test_abort_reason_must_be_error(self):
         assert "abort(new Error(" in self.html, \

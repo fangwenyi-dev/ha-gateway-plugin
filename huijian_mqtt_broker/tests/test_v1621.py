@@ -104,7 +104,11 @@ def test_webui_credential_status_wired():
     明确要求移除）。后端 security 视图与 status.json 字段保留为
     只读诊断面（零展示面），故此处的 UI 钉桩转为负向防复活。
     """
-    html = (HERE.parent / "www" / "index.html").read_text(encoding="utf-8")
+    # v1.6.25 三文件化：UI 内容外置到 www/css、www/js，负向防复活钉桩覆盖
+    # 三文件拼接（= 拆分前单文件的检索面），断言语义不变。
+    www = HERE.parent / "www"
+    html = "".join((www / p).read_text(encoding="utf-8") for p in
+                   ("index.html", "css/huijian.css", "js/huijian.js"))
     assert "credStatus" not in html
     assert "凭据状态" not in html
     assert "wsTokenIsDefault" not in html
