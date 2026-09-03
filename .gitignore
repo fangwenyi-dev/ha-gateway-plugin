@@ -33,3 +33,4 @@ Thumbs.db
 .vibe-loop-agents/
 
 .gitee_token
+bridge_harness_lib.sh

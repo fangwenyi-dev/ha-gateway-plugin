@@ -102,6 +102,16 @@ else
     fi
 fi
 
+# v1.6.24：z2m 直连慧尖内置 broker 的专用最小权限账号（官方 7.x 强制认证
+# 环境下的推荐共存路径：z2m 加载项配置 mqtt://<本机>:2022 + 本账号）。
+# 创建失败仅影响直连路径（桥路径不依赖），不降级不告警刷屏。
+Z2M_USERNAME="huijian_z2m"
+if command -v mosquitto_passwd >/dev/null 2>&1; then
+    mosquitto_passwd -b "${PASSWD_FILE}" "${Z2M_USERNAME}" "${PASSWORD}" 2>/dev/null \
+        && echo "[OK] z2m 直连账号已创建: ${Z2M_USERNAME}" \
+        || echo "[提示] z2m 直连账号创建失败（不影响桥共存路径）"
+fi
+
 # bootstrap 标记使用哪个用户：ha_mqtt 创建成功才用，否则回退 ${USERNAME}
 BOOTSTRAP_USERNAME="${USERNAME}"
 if [ "${HA_MQTT_USER_CREATED}" = "true" ]; then
@@ -142,14 +152,14 @@ EOF
     if [ "${HA_MQTT_USER_CREATED}" = "true" ]; then
         cat <<EOF
 
-# ${HA_MQTT_USERNAME}（HA MQTT 集成）：全主题读写——HA MQTT 集成本质是
-# 通用消费者（任意 MQTT 插件的发现/状态/命令主题都要订阅与发布），
-# 官方 Mosquitto 加载项 + HA 的组合历来如此，安全水位与官方生态等同。
-# v1.6.24 共存桥：z2m 等第三方插件的消息经桥进入内置 broker 后，HA 须
-# 能订阅 zigbee2mqtt/# 等主题。LoRa 网关用户(${USERNAME})保持最小权限不变。
+# ${HA_MQTT_USERNAME}（HA MQTT 集成）：白名单与共存桥主题腿逐条对齐
+# （v1.6.24 安全评审定案：不用 readwrite # ——爆炸半径不超桥白名单；
+# HA 消费面 = discovery + 桥入向 zigbee2mqtt/# + 慧尖网关协议）。
+# 未来新增桥主题腿时必须同步扩本白名单（test_v1624 对齐钉桩）。
 user ${HA_MQTT_USERNAME}
 
-topic readwrite #
+topic readwrite homeassistant/#
+topic readwrite zigbee2mqtt/#
 
 # 慧尖网关协议主题
 topic readwrite gateway/+
@@ -166,6 +176,16 @@ EOF
 topic readwrite homeassistant/#
 EOF
     fi
+    cat <<EOF
+
+# ${Z2M_USERNAME}（zigbee2mqtt 直连慧尖内置 broker，v1.6.24）：
+# z2m 自身主题 + HA discovery（z2m 要发布发现配置）——不含 gateway/#，
+# 与桥白名单同边界。
+user ${Z2M_USERNAME}
+topic readwrite zigbee2mqtt/#
+topic readwrite homeassistant/#
+topic read \$SYS/#
+EOF
 } > "${ACL_FILE}"
 chmod 600 "${ACL_FILE}"
 chown mosquitto:mosquitto "${ACL_FILE}" 2>/dev/null || true
@@ -585,13 +605,21 @@ fi
 # 场景：用户后装官方「Mosquitto broker」加载项 + zigbee2mqtt（z2m 默认连
 # core-mosquitto:1883；host_network 下即主机 127.0.0.1:1883）。HA MQTT 集成
 # 全局唯一、已由慧尖指向内置 :2022——为让两个插件"零配置改动"共存，内置
-# broker 自动向 1883 搭桥（topic # both 双向转发）：z2m 的发现/状态经桥到达
-# 内置 broker → HA 可见；gateway/# 反向到达官方 broker（z2m 侧无害）。
+# broker 自动向 1883 搭**方向分离桥**（仅 z2m 生态主题，见 _bridge_on 内
+# 红线注释；全量 both 桥实测 retained 乒乓风暴已禁用，gateway/# 跨桥因
+# 匿名注入攻击链实锤被安全评审摘除）：z2m 的发现/状态经 in 注入内置
+# broker → HA 可见；HA 的 z2m 控制命令经 out 送达官方 broker。
 # 状态机：每 30s 对账一次——1883 在且无桥→写 conf 并由主自愈循环重启
 # mosquitto（计划内重启：RUN_SECS>=60 时崩溃计数器归零，不触发
 # MAX_MOSQUITTO_RESTARTS 防护）；1883 消失且桥在→删段重启。冷却 120s 防抖。
 BRIDGE_MARKER="AUTO-COEXIST-BRIDGE"
 MOSQ_CONF="/etc/mosquitto/mosquitto.conf"
+# 官方 broker 侧桥凭据（可选，见桥块注释）。净化防换行注入——加载项配置
+# 值直通 heredoc 会允许在 mosquitto.conf 里伪造任意配置行
+BRIDGE_PEER_USER=$(bashio::config 'coexist_official_user')
+BRIDGE_PEER_PASSWORD=$(bashio::config 'coexist_official_password')
+BRIDGE_PEER_USER=$(printf '%s' "${BRIDGE_PEER_USER}" | tr -cd 'A-Za-z0-9_-')
+BRIDGE_PEER_PASSWORD=$(printf '%s' "${BRIDGE_PEER_PASSWORD}" | tr -d '\n\r')
 OFFICIAL_PORT_HEX=$(printf '%04X' 1883)
 _bridge_peer_up() {
     # 复用本脚本的 /proc/net/tcp 扫描法（busybox 环境零进程开销）：
@@ -613,16 +641,20 @@ address 127.0.0.1:1883
 # in：z2m 状态 + MQTT discovery 配置注入内置 broker 供 HA 消费。
 # homeassistant/# 只进不出（HA 不发 discovery 主题，且防慧尖网关侧
 # 心跳主题回灌官方 broker 干扰其用户）。
+notifications false
+# 官方加载项 7.x 起 go-auth 强制认证（源码实锤 addons/mosquitto gtpl，
+# allow_anonymous 时代终结）——匿名桥会被对端拒绝（实测：桥不通但慧尖
+# 自身服务无恙）。在插件配置填官方 broker 有效凭据即带认证建桥（实测
+# 端到端穿透）；留空=匿名，兼容老版官方/customize 关认证场景。
+${BRIDGE_PEER_USER:+username ${BRIDGE_PEER_USER}}
+${BRIDGE_PEER_USER:+password ${BRIDGE_PEER_PASSWORD}}
 topic zigbee2mqtt/# out 1
 topic zigbee2mqtt/# in 1
 topic homeassistant/# in 1
-# gateway/# 双向（真栈 7 行版，须 S3 复测）：官方加载项声明 integration:
-# mqtt 时 Supervisor 会把 HA 的 MQTT 条目反向推给 core-mosquitto:1883——
-# 此时 HA 在官方侧消费慧尖，须靠本桥把网关上报送过去、把 req 命令送回来。
-# 双向兼容后：HA 条目指 2022（慧尖接管态）或指 1883（Supervisor 推送态）
-# 均全链路可用，才真正兑现"零配置改动"。
-topic gateway/# out 1
-topic gateway/# in 1
+# 禁 gateway/# 跨桥（v1.6.24 安全评审定案，实测取证）：in 腿等于把对端
+# 信任域直连慧尖执行器——匿名@1883 publish gateway/{sn}/req 可穿桥达固件
+# 实现未认证物理开窗。慧尖流量隔离在本 broker；若 HA 的 MQTT 条目被其他
+# broker 抢走，慧尖需人工把条目改回 127.0.0.1:2022（README 已知边界）。
 # END ${BRIDGE_MARKER}
 EOF
     echo "[共存] 检测到官方 Mosquitto(:1883) → 自动写入桥接，重启 broker 生效"
@@ -644,6 +676,12 @@ BRIDGE_TICK=0
         BRIDGE_TICK=$((BRIDGE_TICK + 1))
         if [ $((BRIDGE_TICK % 6)) -eq 0 ]; then
             LAST_TS=$(cat /run/bridge_last_ts 2>/dev/null || echo 0)
+            # 净化（审计定案）：含非数字的垃圾会让 $((...)) 语法错误杀死
+            # 整个巡检子 shell（v1.6.3 静默死同族故障）；空/非数字按 0 处理
+            # 并留意 0 开头会走八进制坑——一律归 0
+            case "${LAST_TS}" in
+                ''|*[!0-9]*) LAST_TS=0 ;;
+            esac
             NOW_TS=$(date +%s)
             if [ $((NOW_TS - LAST_TS)) -ge 120 ] 2>/dev/null; then
                 # 仅"真实状态迁移"（peer 在而无桥 / 桥在而无 peer）才动作并
@@ -711,8 +749,10 @@ echo "[运行] Broker 以前台模式运行..."
 
 # v1.6.24：官方 Mosquitto 若已在运行，先写桥再接管启动（免一次计划内重启）
 if _bridge_peer_up; then
-    _bridge_on
-    date +%s > /run/bridge_last_ts
+    # || true：初启路径在 set -e 主 shell、mosquitto 首启之前——写失败
+    # （盘满等）不能杀死整个 run.sh（比循环死重得多），留给 tick 对账重试
+    _bridge_on || true
+    date +%s > /run/bridge_last_ts 2>/dev/null || true
 fi
 
 # 先后台启动 mosquitto

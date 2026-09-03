@@ -9,6 +9,7 @@
 桥写入→自愈重启→双向穿桥→peer 消失→拆桥→重装可逆，全通过）。
 """
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -35,6 +36,8 @@ def _posix_candidates(p):
 
 
 def test_shell_syntax():
+    if shutil.which("bash") is None:
+        pytest.skip("本机无 bash（Windows 开发机无 Git Bash/WSL），跳过语法检查")
     """run.sh 是生产心脏，语法门必须钉进 pytest（CI lint job 顺带执行）"""
     last = None
     for cand in _posix_candidates(RUN):
@@ -93,24 +96,30 @@ def test_watchdog_tick_and_cooldown():
 def test_boot_reconcile_before_first_start():
     """官方已在运行时的安装序：初启对账须先于 mosquitto 首次拉起
     （启动前写 conf = 零额外重启）"""
-    boot = TEXT.index('if _bridge_peer_up; then\n    _bridge_on')
+    boot = TEXT.index('if _bridge_peer_up; then\n    # || true')
     first_start = TEXT.index('MOSQUITTO_PID=$!')
     assert boot < first_start, "初启对账必须在首次启动 mosquitto 之前"
 
 
-def test_ha_mqtt_acl_wide_but_gateway_minimal():
-    """ha_mqtt（HA 集成账号）放开 # ——桥转发来的 zigbee2mqtt/# 等主题
-    HA 须可订阅；同时负向钉桩：LoRa 网关账号 huijian 维持最小权限，
-    全文件 `topic readwrite #` 只允许出现在 HA_MQTT 段（=恰 1 处）。"""
-    assert TEXT.count("topic readwrite #") == 1, "readwrite # 必须唯一"
-    pos_wide = TEXT.index("topic readwrite #")
-    pos_ha_user = TEXT.index("user ${HA_MQTT_USERNAME}")
-    pos_gw_user = TEXT.index("user ${USERNAME}")
-    assert pos_gw_user < pos_ha_user < pos_wide, \
-        "readwrite # 必须位于 HA_MQTT 用户段（网关用户段之后），防网关账号越权"
-    # 回退分支（HA_MQTT 创建失败，huijian 兼权）不得带 #——仅 homeassistant/#
-    fb_seg = _seg(r"回退：\$\{HA_MQTT_USERNAME\} 创建失败", r'\} > "\$\{ACL_FILE\}"', "ACL 回退段")
-    assert "topic readwrite #" not in fb_seg, "回退段禁止全主题放开"
+def test_acl_bridge_alignment_no_wildcard():
+    """v1.6.24 安全评审定案（推翻早先 readwrite # 方案）：ha_mqtt 白名单
+    与桥主题腿逐条对齐（discovery + zigbee2mqtt + 网关协议），全文件禁止
+    `topic readwrite #` 通配——爆炸半径不超桥白名单；未来扩桥腿须同步扩
+    ACL（本测试的逐条相等断言即耦合点）。"""
+    assert "topic readwrite #" not in TEXT, \
+        "禁全主题通配（同密码换用户名提权链的放大器，审计定案摘除）"
+    ha_seg = _seg(r"user \$\{HA_MQTT_USERNAME\}", r"\$SYS 主题（只读）", "ha_mqtt ACL 段")
+    for need in ("topic readwrite homeassistant/#",
+                 "topic readwrite zigbee2mqtt/#",     # 桥 in 腿注入主题 HA 须可订阅
+                 "topic readwrite gateway/+",          # 慧尖协议三行自 1.6.x 沿用
+                 ):
+        assert need in ha_seg, f"ha_mqtt 段缺 {need}"
+    # LoRa 网关用户段不得含 zigbee2mqtt/#（z2m 域隔离）
+    gw_seg = _seg(r"\$\{USERNAME\}（LoRa 网关", r"\$SYS 主题（只读）", "huijian ACL 段")
+    assert "zigbee2mqtt" not in gw_seg, "网关账号不得触 z2m 域"
+    # z2m 直连专用账号存在且最小（不含 gateway/#）
+    z2m_seg = _seg(r"user \$\{Z2M_USERNAME\}", r'\} > "\$\{ACL_FILE\}"', "z2m ACL 段")
+    assert "topic readwrite zigbee2mqtt/#" in z2m_seg and "gateway" not in z2m_seg
 
 
 def test_status_diagnostics_fields():
@@ -122,25 +131,30 @@ def test_bridge_conf_format_redline():
     """真栈实证教训钉桩（bash-27/28 两轮 crash-loop 根因）：
     真栈两轮 crash-loop 教训：notification_interval / try_initialize 等未测
     桥选项在 mosquitto 2.0.22 为 unknown 变量 → broker 整进程拒启；
-    `topic # both` 引发 retained 乒乓风暴。桥块严格锁定为已实证的 5 配置行
+    `topic # both` 引发 retained 乒乓风暴。桥块严格锁定为已实证的配置行
     （connection/address/两 in 一 out 方向分离），任何增减都须先过真栈。"""
     seg = _seg(r"connection core_mosquitto", r"# END \$\{BRIDGE_MARKER\}", "桥配置块")
     lines = [l for l in seg.splitlines() if l.strip() and not l.strip().startswith("#")]
     assert lines == [
         "connection core_mosquitto",
         "address 127.0.0.1:1883",
+        "notifications false",                                    # 2.0.22 实测可用
+        "${BRIDGE_PEER_USER:+username ${BRIDGE_PEER_USER}}",      # 空=匿名行归零
+        "${BRIDGE_PEER_USER:+password ${BRIDGE_PEER_PASSWORD}}",
         "topic zigbee2mqtt/# out 1",
         "topic zigbee2mqtt/# in 1",
         "topic homeassistant/# in 1",
-        "topic gateway/# out 1",
-        "topic gateway/# in 1",
     ], f"桥块出现未实证行: {lines}"
+    # gateway 腿永久摘除的钉桩（匿名@1883 穿桥控固件=实锤攻击链，安全评审
+    # 定案）：桥块与 ACL 白名单都不得出现跨桥 gateway 的 topic 行
+    assert not any("topic gateway" in l for l in lines), \
+        "禁 gateway/# 跨桥（v1.6.24 安全评审：in 腿=未认证物理控制）"
     # both = 真栈实测 retained 乒乓风暴（无 origin 防环），配置行红线禁用
     # （注释里出现 "both" 是解释禁因，只检查生效行）
     assert not any(" both " in l for l in lines), "桥禁 both 方向（乒乓自激实证）"
     code = "\n".join(lines)
-    for banned in ("try_initialize", "notification", "roundrobin", "bridge_attempt",
-                   "cleansession", "local_protocol"):
+    for banned in ("try_initialize", "notification_interval", "roundrobin",
+                   "bridge_attempt", "cleansession", "local_protocol"):
         assert banned not in code, f"禁入桥块的未测选项: {banned}"
 
 

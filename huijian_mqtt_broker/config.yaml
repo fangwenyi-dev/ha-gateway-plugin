@@ -67,6 +67,11 @@ options:
   password: huijian2022
   auto_setup_ha_mqtt: true
   install_integration: true
+  # v1.6.24 共存桥：官方「Mosquitto broker」加载项 7.x+ 强制认证时须填其
+  # 任一有效账号（配置页 logins 添加的），桥才连得上；留空=匿名桥，兼容
+  # 老版官方或 customize 关认证场景。纯慧尖用户永远无需理会本项。
+  coexist_official_user: ""
+  coexist_official_password: ""
 schema:
   username: str
   # password 类型：Supervisor 配置页输入框脱敏显示（str 会明文回显在设置页）。
@@ -74,3 +79,5 @@ schema:
   password: password
   auto_setup_ha_mqtt: bool
   install_integration: bool
+  coexist_official_user: str?
+  coexist_official_password: password?

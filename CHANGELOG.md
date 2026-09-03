@@ -6,41 +6,53 @@
 ## [1.6.24] - 2026-09-06
 
 ### Added
-- **第三方 MQTT 共存自动桥**：慧尖内置 broker 每 30s 探测本机 `1883` 端口，
-  检测到官方「Mosquitto broker」加载项（zigbee2mqtt 等的默认依赖）在运行时
-  自动建立**方向分离桥**（`zigbee2mqtt/#` 双向、`homeassistant/#` 只进、
-  `gateway/#` 双向），其消失后自动拆除——z2m 设备发现/状态经桥进入慧尖内置
-  broker，HA MQTT 集成（全局唯一）即可正常建实 z2m 实体，HA 下发的 z2m
-  控制命令经 out 方向送回；`gateway/#` 双向则保证即使 Supervisor 把 HA 的
-  MQTT 条目反向推给官方加载项（其 `integration: mqtt` 声明行为），慧尖也
-  全链路可用。**慧尖用户与 z2m 用户双方插件都无需修改任何配置**；
-  未装官方 Mosquitto 的纯慧尖用户桥不存在、行为与旧版完全一致。
-- 桥变更引发的 broker 重启走既有主自愈循环（计划内重启，崩溃计数器
-  60s 语义不误伤），120s 冷却防 1883 端口抖动连环重启。
-- `status.json` 新增诊断字段 `coexist_bridge` / `official_peer_up`
-  （售后支持面，无界面展示——与凭据提示产品定案同边界）。
+- **第三方共存自动桥**：慧尖内置 broker 每 30s 探测本机 `1883`——检测到官方
+  「Mosquitto broker」加载项（zigbee2mqtt 默认依赖）时自动向其建立**方向分离
+  桥**（仅 `zigbee2mqtt/#` 双向 + `homeassistant/#` 单向入），z2m 用户无需改
+  慧尖任何配置即可与慧尖共存；官方 broker 停止/卸载后桥自动拆除。桥状态
+  变更走"计划内重启"（kill → 主自愈循环 5s 复活），120s 冷却防抖，仅在真实
+  状态迁移时记冷却戳（noop 续期缺陷已修）。纯慧尖客户桥**完全不存在**，零感知
+- 官方加载项 **7.x 起 go-auth 强制认证**（源码实锤），匿名桥会被拒——新增可选
+  配置 `coexist_official_user/password`（慧尖配置页），填官方 logins 任一账号
+  即带认证建桥（实测端到端穿透）；留空=匿名桥兼容老版官方。桥不通仅影响共存，
+  慧尖自身服务无恙（实测降级边界）
+- **z2m 直连账号 `huijian_z2m`**（推荐路径）：broker 启动时自动创建，ACL 仅
+  `zigbee2mqtt/# + homeassistant/#`，z2m 的 `mqtt.server` 填
+  `mqtt://<主机>:2022` 即可不装官方 Mosquitto 直接共存
+- `status.json` 诊断位 `coexist_bridge` / `official_peer_up`（无 UI 展示面，
+  与凭据诊断位同边界）
 
 ### Changed
-- 内置 broker ACL：`ha_mqtt`（HA 集成账号）放开为全主题读写——桥转发来的
-  `zigbee2mqtt/#` 等主题 HA 须可订阅（与"官方 Mosquitto + HA"组合历来
-  的安全水位等同）；**LoRa 网关账号维持最小权限不变**。
+- `ha_mqtt`（HA 集成账号）ACL 段新增 `zigbee2mqtt/#`（消费桥入向消息所必需），
+  保持白名单式（评审否决 `readwrite #` 通配方案——同密码换用户名的提权链
+  爆炸半径不超桥主题白名单）；LoRa 网关账号 `huijian` 权限保持最小不变
 
-### Fixed
-- （机制实证发现×2，均钉为 tests/test_v1624.py 红线）：
-  1. `topic # both 1` 全量双向桥在 mosquitto 2.0.22 真栈实测发生 retained
-     乒乓自激风暴（两条消息放大至数百条），改为方向分离 + 前缀白名单；
-  2. 桥块禁止掺入 `notifications` / `notification_interval` /
-     `try_initialize` 等未测选项——实测为 unknown 配置变量，任一入块即
-     broker 整进程拒启（真栈 crash-loop 复现两轮后钉死）。
+### Fixed / 安全定案（三路独立审计 + 真栈取证，1.6.24 未发布故记于本段）
+- **摘除 gateway/# 跨桥双腿**：匿名/弱认证官方 broker 场景下，`in` 腿等于把
+  对端信任域直连慧尖执行器——真栈实锤"匿名@1883 publish req → 桥 → 固件"
+  未认证物理开窗攻击链，已封堵并加负向 e2e 钉桩（S3：注入 req/rsp 零穿透）
+- mosquitto 桥块红线（两轮 crash-loop 实证教训）：禁 `topic # both`
+  （2.0.22 无 origin 防环，retained 乒乓风暴实测）、禁未实证选项
+  （`try_initialize`/`notification_interval` 等 unknown 变量 = broker 整进程
+  拒启）；`notifications false` 为实测可用形态（防桥在官方侧残留
+  `mosquitto/online` retained 痕迹）
+- 巡检子 shell `set -e` 隐患清除（`x && y` 短路行尾返回 false 会静默杀死
+  巡检循环——v1.6.3/1.6.4 同族教训）；`/run/bridge_last_ts` 垃圾内容净化
+  （防算术展开炸循环）；初启对账 `|| true` 包裹（写失败不得杀死 broker 启动）
+- `test_acl.py` 夹具与 run.sh 生成逻辑加**逐行耦合测试**（本次 v1.6.24 期间
+  夹具静默漂移被审计抓获的根因整改）；mqtt_match 测试模型修正 MQTT 规范
+  语义（通配符不匹配 `$` 前缀系统主题）
 
 ### 验证
-- 真栈机制实证（本地 mosquitto 2.0.22 双实例 + paho，函数区从 run.sh 原文
-  抽取执行、非手写复刻）：peer 出现→桥自动写入→自愈重启→六项语义逐条
-  （z2m 状态/discovery 穿 in 达 HA 各恰 1 条、HA 控制命令穿 out 达 z2m、
-  网关上报穿 out 达 1883 侧、1883 侧 req 穿 in 达固件、固件命令零回显、
-  总消息数=6+1 无风暴）→peer 消失→自动拆桥→内置服务无恙→peer 重现→桥
-  可逆重装，S0-S6 全链路通过。
-- tests/test_v1624.py 9 项静态钉桩（含桥块逐行红线）+ 全量回归。
+- 真栈机制实证（rootless mosquitto 2.0.22 双实例 + run.sh 原文函数抽取执行，
+  已固化为 `tests/e2e/bridge_coexist_e2e.sh` 永久资产）：S0-S6 状态机（无 peer
+  不建桥→探测→建桥→计划内重启激活→z2m 三向语义逐条恰 1→gateway 双向零穿透
+  →peer 消失拆桥→服务无恙→可逆重装）+ T1-T2 认证环境（匿名桥被拒但慧尖自身
+  正常→填凭据端到端穿透）全通过
+- 官方加载项行为源码实锤：home-assistant/addons `mosquitto` 7.1.0 go-auth
+  模板 + init 脚本逐行核对；全量回归 306 绿（含 v1.6.24 新增 14 项：test_v1624 9 + test_acl 5）
+
+。
 
 ## [1.6.23] - 2026-09-05
 
