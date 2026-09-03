@@ -117,11 +117,11 @@ st, res = call("POST", f"/api/config/config_entries/flow/{fl['flow_id']}",
 if isinstance(res, dict) and "other_settings" in json.dumps(res):
     st, res = call("POST", f"/api/config/config_entries/flow/{fl['flow_id']}",
                    json_body={"broker": MQTT_HOST, "port": str(MQTT_PORT),
-                              "other_settings": ""})
+                              "other_settings": {}})
 if isinstance(res, dict) and res.get("type") == "form":
     # 二次 form（如高级项）→ 补交 other_settings 结束流程
     st, res = call("POST", f"/api/config/config_entries/flow/{res['flow_id']}",
-                   json_body={"other_settings": ""})
+                   json_body={"other_settings": {}})
 if not (isinstance(res, dict) and res.get("type") == "create_entry"):
     die(f"mqtt entry 创建失败: {res}")
 step("E", "等待 mqtt loaded")
