@@ -112,7 +112,38 @@
         host.appendChild(frag);
     }
 
+    // v1.7.4 用户令「多颗星星聚一团、明暗变化」——官网 canvas Star 大星
+    // 口径的 CSS 对应物：4 团、每团 6~8 颗（半径 ±4.5%×6% 聚簇），每团
+    // 1~2 颗核心大星带 8px 晕；正弦明暗/三色配比同星点。固定种子=同一片天。
+    function makeClusters() {
+        var host = document.getElementById('clusters');
+        if (!host) return;
+        var frag = document.createDocumentFragment();
+        var centers = [[14, 47], [40, 55], [67, 44], [86, 62]];
+        for (var c = 0; c < centers.length; c++) {
+            var n = 6 + Math.floor(rnd() * 3);
+            for (var i = 0; i < n; i++) {
+                var s = document.createElement('i');
+                var big = i === 0 || (i === 1 && rnd() < 0.6);
+                var size = big ? between(2.6, 3.4) : between(1.4, 2.2);
+                var r = rnd();
+                s.className = (r >= 0.6 ? (r < 0.8 ? 's-blue' : 's-amber') : '') + (big ? ' s-glow' : '');
+                s.style.cssText =
+                    'left:' + (centers[c][0] + between(-4.5, 4.5)).toFixed(2) + '%;' +
+                    'top:' + (centers[c][1] + between(-6, 6)).toFixed(2) + '%;' +
+                    'width:' + size.toFixed(2) + 'px;height:' + size.toFixed(2) + 'px;' +
+                    '--dur:' + between(3, 7).toFixed(2) + 's;' +
+                    '--delay:-' + between(0, 7).toFixed(2) + 's;' +
+                    '--floor:' + (big ? '0.15' : '0.10') + ';' +
+                    '--peak:' + (big ? between(0.85, 1) : between(0.5, 0.8)).toFixed(2) + ';';
+                frag.appendChild(s);
+            }
+        }
+        host.appendChild(frag);
+    }
+
     makeStars('starsFar', 70, 1.8, 2.5, 3, 7, 0.55, 0.75, 2.4);
     makeStars('starsNear', 36, 2.5, 3.2, 3, 7, 0.8, 0.95, 2.9);
+    makeClusters();
     makePlanets();
 })();

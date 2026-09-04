@@ -135,6 +135,20 @@ body {
 .stars-far i.s-blue, .stars-near i.s-blue { background: #38bdf8; }
 .stars-far i.s-amber, .stars-near i.s-amber { background: #fbbf24; }
 .stars-near i.s-glow { box-shadow: 0 0 4px rgba(255, 255, 255, .6); }
+/* 星团层（v1.7.4 用户令「多颗星星聚一团、明暗变化」）——官网 canvas Star
+   大星口径：4 团、每团 6~8 颗聚簇，1~2 颗核心大星带 8px 晕（glow 晕
+   size×4 的 CSS 对应物），正弦明暗共用 star-twinkle，三色配比同星点 */
+.stars-cluster { position: absolute; inset: 0; }
+.stars-cluster i {
+    position: absolute;
+    border-radius: 50%;
+    background: #fff;
+    animation: star-twinkle var(--dur, 4s) ease-in-out var(--delay, 0s) infinite;
+    will-change: opacity;
+}
+.stars-cluster i.s-blue { background: #38bdf8; }
+.stars-cluster i.s-amber { background: #fbbf24; }
+.stars-cluster i.s-glow { box-shadow: 0 0 8px 2px rgba(224, 242, 254, .55); }
 /* 行星群：双层独立时钟——外层 .orbit-wrap 漂移（55~75s，≈1.5px/s），
    内层 .planet 明灭（3.5~7s），二者解耦（标准里耦合同一动画被否）。
    辉光宁淡：rgba .35 晕，半径随尺寸 4~7px。 */
@@ -185,6 +199,16 @@ body {
 .meteor-5 { --mx: 77%; --mdur: 12s; --mdelay: -1s; }
 .meteor-6 { --mx: 90%; --mdur: 13s; --mdelay: -8s; }
 .meteor-7 { --mx: 35%; --mdur: 15s; --mdelay: -4s; }
+/* v1.7.4 用户令流星三色——官网 createMeteor 配比 60% 白/25% 蓝/15% 琥珀
+   （7 道分配：蓝 2/琥珀 1），尾迹渐变头色 + 同色辉光（官网 box-shadow 口径） */
+.meteor.m-blue {
+    background: linear-gradient(180deg, rgba(56, 189, 248, 0), rgba(56, 189, 248, .5) 70%, #38bdf8);
+    filter: drop-shadow(0 0 6px rgba(56, 189, 248, .7));
+}
+.meteor.m-amber {
+    background: linear-gradient(180deg, rgba(251, 191, 36, 0), rgba(251, 191, 36, .5) 70%, #fbbf24);
+    filter: drop-shadow(0 0 6px rgba(251, 191, 36, .6));
+}
 @keyframes meteor-fall {
     0%   { transform: translateY(0) rotate(18deg); opacity: 0; }
     6%   { opacity: 1; }
@@ -597,7 +621,7 @@ input[type="range"]:focus-visible { outline: 2px solid var(--primary-light); }
        星星在减弱动画下照样漂移闪烁。小程序标准（0d2200c5）双层独立时钟
        同口径还原：明灭 var(--twk)/var(--dur)、漂移 var(--drift) 按各自
        JS 随机周期复流——仅星空装饰层豁免，内容层转场仍静止合规 */
-    .stars-far i, .stars-near i {
+    .stars-far i, .stars-near i, .stars-cluster i {
         animation-duration: var(--dur, 4s) !important;
         animation-iteration-count: infinite !important;
     }

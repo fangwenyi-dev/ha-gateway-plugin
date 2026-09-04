@@ -169,6 +169,29 @@ class TestStarskyJs:
         assert "#fbbf24" in CSS[CSS.index(".s-amber"):], "官网琥珀 #fbbf24"
         assert "box-shadow: 0 0 4px" in CSS[CSS.index(".s-glow"):], "大星 4px 白晕"
 
+    def test_meteor_tricolor(self):
+        """v1.7.4 用户令「流星还要官网黄/蓝流星」——官网 createMeteor 配比
+        60%白/25%蓝/15%琥珀：7 道 = 白4 + m-blue×2 + m-amber×1，
+        尾迹同色渐变头 + drop-shadow 辉光"""
+        assert INDEX.count('m-blue') == 2 and INDEX.count('m-amber') == 1, \
+            "7 道流星三色配比 4白/2蓝/1琥珀"
+        mb = re.search(r"\.meteor\.m-blue \{([^}]*)\}", CSS).group(1)
+        ma = re.search(r"\.meteor\.m-amber \{([^}]*)\}", CSS).group(1)
+        assert "#38bdf8" in mb and "drop-shadow" in mb, "官网蓝流星 #38bdf8"
+        assert "#fbbf24" in ma and "drop-shadow" in ma, "官网琥珀流星 #fbbf24"
+
+    def test_star_clusters(self):
+        """v1.7.4 用户令「多颗星星聚一团、明暗变化」（附官网截图）——
+        官网 canvas Star 大星口径：4 团 6~8 颗聚簇、核心大星 8px 晕、
+        正弦明暗；星团层同享 reduce 豁免"""
+        assert 'id="clusters"' in INDEX, "星团容器在位"
+        assert "function makeClusters()" in SKY and "makeClusters();" in SKY
+        assert SKY.count("if (!host) return") >= 3, "星团层也须静默跳过不反噬"
+        cl = re.search(r"\.stars-cluster i \{([^}]*)\}", CSS).group(1)
+        assert "star-twinkle" in cl, "星团复用正弦明灭"
+        glow = re.search(r"\.stars-cluster i\.s-glow \{([^}]*)\}", CSS).group(1)
+        assert "0 0 8px 2px" in glow, "核心大星 8px 晕（canvas glow size×4 对应）"
+
     def test_decorative_layer_isolation(self):
         assert "fetch" not in SKY and "XMLHttpRequest" not in SKY, \
             "装饰层零网络"
@@ -279,7 +302,7 @@ class TestEmptySlotsTransparent:
         = 星点 var(--dur)/漂移 var(--drift)/明灭 var(--twk) 三层在 reduce 下
         全部恢复各自周期 + infinite；内容层转场不受豁免（合规）。"""
         seg = CSS[CSS.index("@media (prefers-reduced-motion: reduce)"):]
-        for sel, var in ((".stars-far i, .stars-near i", "var(--dur, 4s)"),
+        for sel, var in ((".stars-far i, .stars-near i, .stars-cluster i", "var(--dur, 4s)"),
                          (".orbit-wrap", "var(--drift, 60s)"),
                          (".planet", "var(--twk, 5s)")):
             rule = re.search(re.escape(sel) + r" \{([^}]*)\}", seg)
