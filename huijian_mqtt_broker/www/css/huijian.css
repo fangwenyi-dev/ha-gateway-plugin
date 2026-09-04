@@ -598,7 +598,12 @@ input[type="range"]:focus-visible { outline: 2px solid var(--primary-light); }
        ——网关卡（含内部子设备瓦片）与蓝色玻璃说明框统一 320px 居中收窄，
        两侧留空让星空透出来，同"容器不铺满"留空原则 */
     .gateway-item { max-width: 320px; margin-left: auto; margin-right: auto; }
-    .info-box { max-width: 320px; margin-left: auto; margin-right: auto; }
+    /* v1.7.6 用户令「底部蓝色玻璃全部统一宽度，说明框 360px 居中」
+       ——conn-item 连接瓦片与 info-box 说明框统一 360px 居中。
+       width:100% 必带：grid 子项加 margin:auto 会收缩成内容宽（CDP 实测
+       145/227px 不统一），须撑满轨道再由 max-width 封顶 360 居中 */
+    .conn-item { max-width: 360px; width: calc(100% + 36px); margin-left: auto; margin-right: auto; }
+    .info-box { max-width: 360px; margin-left: auto; margin-right: auto; }
     .device-item { padding: 11px 12px; }
     .control-row { gap: 4px; }
     .control-row .btn-sm { flex: 1; min-width: 54px; padding: 7px 8px; font-size: 12px; min-height: 32px; }
