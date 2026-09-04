@@ -230,7 +230,7 @@ body {
 .page {
     position: relative;
     z-index: 1;
-    max-width: 1400px; /* v1.7.8 用户令「web 端两边太空」1140→1400 */
+    max-width: 1140px; /* v1.7.9 用户令「web 端改回去」：v1.7.8 的 1400 加宽作废 */
     margin: 0 auto;
     padding: 14px;
 }
@@ -405,9 +405,9 @@ body {
 /* 轨道封顶 340px（单设备行右侧留空透星空）。高度口径 v1.6.29 用户改令：
    由"各自 hug"改为**全按 5005 统一高度**——行内 stretch 拉齐 +
    min-height:262px（5005 满控件实测高）保证无 5005 的行同样齐高 */
-/* v1.7.8 用户令「web 端两边太空」：auto-fill+340 封顶作废（瓦片挤左半、
-   右半空星空）→ auto-fit 等分撑满整行；单设备由 .device-item max-width 兜底 */
-.device-list { margin-top: 12px; display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 10px; }
+/* v1.7.9 用户令「web 端改回去」：v1.7.8 auto-fit 等分撑满作废，
+   恢复 v1.6.29 口径 auto-fill + 340 封顶（单设备行右侧留空不拉伸） */
+.device-list { margin-top: 12px; display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 340px)); gap: 10px; }
 @keyframes fadeUp { from { opacity: 0; transform: translateY(8px) scale(.99); } to { opacity: 1; transform: none; } }
 .device-item {
     display: flex; flex-direction: column;
@@ -416,7 +416,6 @@ body {
     border: 1px solid var(--card-border); animation: fadeUp .35s ease both;
     backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur);
     min-height: 262px; /* 5005 满控件实测高——所有子设备统一（用户改令 v1.6.29） */
-    max-width: 680px; width: 100%; margin-left: auto; margin-right: auto; /* v1.7.8：宽屏瓦片等分撑满，单设备封顶 680 居中不拉成一条；width:100% 必带——grid 子项 margin:auto 会收缩成内容宽（CDP 实测 95px） */
 }
 .device-item:hover { border-color: rgba(56, 189, 248, .5); box-shadow: var(--shadow-md); transform: translateY(-1px); }
 .device-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }

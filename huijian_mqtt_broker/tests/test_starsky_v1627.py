@@ -275,11 +275,11 @@ class TestEmptySlotsTransparent:
         作废 v1.6.27 的各自 hug 口径。"""
         grid = self._rule(".device-list")
         assert "align-items: start" not in grid, "hug 口径已作废，不得收缩"
-        assert "minmax(300px, 1fr)" in grid and "auto-fit" in grid, \
-            "v1.7.8 用户令「两边太空」：瓦片等分撑满整行（340 封顶作废）"
+        assert "minmax(280px, 340px)" in grid and "auto-fill" in grid, \
+            "v1.7.9 用户令「web 端改回去」：恢复 v1.6.29 轨道封顶（单设备行右侧留空不拉伸）"
         dev = self._rule(".device-item")
         assert "min-height: 262px" in dev, "5005 统一高度锚"
-        assert "max-width: 680px" in dev, "单设备封顶 680 居中兜底"
+        assert "max-width" not in dev, "v1.7.8 的 680 封顶兜底已随回退作废"
         assert "height" not in dev.replace("min-height", ""), "禁止固定高度"
 
     def test_reduced_motion_meteor_keeps_flowing(self):

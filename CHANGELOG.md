@@ -3,6 +3,16 @@
 所有版本变更记录在此文件中。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.7.9] - 2026-09-07
+
+### Changed
+- **Web 端（桌面）改回 v1.7.7 样式**（用户令「web 端改回去」）：`.page`
+  max-width 1400→**1140px** 复原；`.device-list` 恢复 **auto-fill +
+  minmax(280px,340px)** 轨道封顶（v1.7.8 的 auto-fit 等分撑满作废）；
+  `.device-item` 移除 680px 封顶兜底
+- **手机端全对齐（v1.7.8）保留不变**：≤640px 全部 .card 统一 360px 居中；
+  闪屏修复（v1.7.5）保留不变
+
 ## [1.7.8] - 2026-09-07
 
 ### Fixed
