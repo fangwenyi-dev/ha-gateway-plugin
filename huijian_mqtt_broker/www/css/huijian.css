@@ -81,11 +81,15 @@ body {
     overflow: hidden;
     pointer-events: none;
     /* 三档氛围底 + 纯色（用户定案保留紫）：左上蓝角云 α.18 收 .06、
-       右上角弱青、底部极淡靛——全部大柔边 radial，禁内核白雾 */
+       右上角弱青叠靛紫、底部靛云——全部大柔边 radial，禁内核白雾。
+       v1.6.30 用户令"背景加一点紫色"：底靛 .12→.16 且中心回收可见区，
+       右上新增 #8b5cf6 靛紫云 .09（小程序标准：紫仅限氛围底色层，
+       宁淡勿浓；星点/星云/按钮一律不加紫） */
     background:
         radial-gradient(60% 48% at 12% 4%, rgba(14, 165, 233, .18), rgba(14, 165, 233, .06) 42%, transparent 72%),
         radial-gradient(50% 42% at 88% 12%, rgba(6, 182, 212, .10), transparent 66%),
-        radial-gradient(70% 55% at 50% 108%, rgba(99, 102, 241, .12), transparent 70%),
+        radial-gradient(52% 40% at 84% 22%, rgba(139, 92, 246, .09), transparent 68%),
+        radial-gradient(76% 58% at 50% 104%, rgba(99, 102, 241, .16), transparent 72%),
         var(--bg-main);
 }
 /* 星云团：逐字移植官网母本 v0.0.1（www/index.html L104-117）的
@@ -386,6 +390,21 @@ body {
 .control-section { display: flex; flex-direction: column; gap: 8px; }
 .control-row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .control-row .btn-sm { flex: 1; min-width: 58px; text-align: center; justify-content: center; }
+/* v1.6.30 用户令：开/关/停/内倒四键换透明——实心渐变色块改 ghost 描线
+   （色彩语义由边框+文字色承载，玻璃层级只留瓷砖本体；hover 轻提亮可点感）。
+   作用域限 .control-row，网关区配对/状态等按键不受影响 */
+.control-row .btn-success, .control-row .btn-danger,
+.control-row .btn-warn, .control-row .btn-tilt {
+    background: transparent; border: 1px solid currentColor; box-shadow: none;
+}
+.control-row .btn-success { color: #34d399; }
+.control-row .btn-danger  { color: #f87171; }
+.control-row .btn-warn    { color: #fbbf24; }
+.control-row .btn-tilt    { color: #22d3ee; }
+.control-row .btn-success:hover, .control-row .btn-danger:hover,
+.control-row .btn-warn:hover, .control-row .btn-tilt:hover {
+    background: rgba(255, 255, 255, .06); filter: none;
+}
 .section-label { font-size: 10px; color: var(--text-secondary); font-weight: 600; text-transform: uppercase; letter-spacing: .05em; margin-bottom: 2px; }
 
 /* ===== Sliders ===== */
@@ -397,8 +416,8 @@ body {
 .slider-label { font-size: 10.5px; color: var(--text-secondary); font-weight: 600; }
 .slider-value {
     font-size: 10.5px; min-width: 30px; text-align: right; color: var(--text-primary);
-    font-weight: 700; background: rgba(255, 255, 255, .05); border: 1px solid var(--card-border);
-    padding: 2px 6px; border-radius: 6px; font-variant-numeric: tabular-nums;
+    font-weight: 700; background: transparent; border: none;
+    padding: 2px 0; border-radius: 6px; font-variant-numeric: tabular-nums;
 }
 input[type="range"] {
     -webkit-appearance: none; appearance: none;
@@ -555,6 +574,23 @@ input[type="range"]:focus-visible { outline: 2px solid var(--primary-light); }
     .meteor {
         animation-name: meteor-fall-slow !important;
         animation-duration: var(--mdur, 12s) !important;
+        animation-iteration-count: infinite !important;
+    }
+    /* 星点/行星群例外＝官网 canvas 粒子同款行为：官网星星由 rAF 驱动
+       （L802 requestAnimationFrame），reduce 媒体查询拦不住 canvas，故官网
+       星星在减弱动画下照样漂移闪烁。小程序标准（0d2200c5）双层独立时钟
+       同口径还原：明灭 var(--twk)/var(--dur)、漂移 var(--drift) 按各自
+       JS 随机周期复流——仅星空装饰层豁免，内容层转场仍静止合规 */
+    .stars-far i, .stars-near i {
+        animation-duration: var(--dur, 4s) !important;
+        animation-iteration-count: infinite !important;
+    }
+    .orbit-wrap {
+        animation-duration: var(--drift, 60s) !important;
+        animation-iteration-count: infinite !important;
+    }
+    .planet {
+        animation-duration: var(--twk, 5s) !important;
         animation-iteration-count: infinite !important;
     }
 }

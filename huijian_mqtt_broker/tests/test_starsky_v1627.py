@@ -233,6 +233,41 @@ class TestEmptySlotsTransparent:
         assert "translateY(850px)" in kf and "opacity: .9" in kf and "opacity: .5" in kf, \
             "slow 关键帧温和参数（峰 .9 尾 .5 程 850px）"
 
+    def test_reduced_motion_stars_and_planets_keep_twinkling(self):
+        """v1.6.30 用户令"星云中的星星应该可以动并闪烁"：官网星星是 canvas
+        rAF 驱动（reduce 拦不住），小程序标准双层独立时钟常动。CSS 对应物
+        = 星点 var(--dur)/漂移 var(--drift)/明灭 var(--twk) 三层在 reduce 下
+        全部恢复各自周期 + infinite；内容层转场不受豁免（合规）。"""
+        seg = CSS[CSS.index("@media (prefers-reduced-motion: reduce)"):]
+        for sel, var in ((".stars-far i, .stars-near i", "var(--dur, 4s)"),
+                         (".orbit-wrap", "var(--drift, 60s)"),
+                         (".planet", "var(--twk, 5s)")):
+            rule = re.search(re.escape(sel) + r" \{([^}]*)\}", seg)
+            assert rule, f"reduce 例外缺 {sel}"
+            body = rule.group(1)
+            assert f"animation-duration: {var} !important" in body, sel
+            assert "animation-iteration-count: infinite !important" in body, sel
+        assert "nebula3" not in seg, "星云三团漂移不在豁免内（官网 CSS 层同停）"
+
+    def test_sky_ambient_purple(self):
+        """v1.6.30 用户令背景按小程序标准加紫氛围：紫 (#8b5cf6/#6366f1)
+        只允许出现在 .star-bg 氛围底色层（星点/星云/按钮禁紫），底靛 .16、
+        右上靛紫 .09"""
+        seg = re.search(r"\.star-bg \{.*?background:([^;]+);", CSS, re.S).group(1)
+        assert "rgba(139, 92, 246, .09)" in seg and "rgba(99, 102, 241, .16)" in seg
+        planet = re.search(r"\.planet \{[^}]*\}", CSS).group(0)
+        assert "#8b5cf6" not in planet and "6366f1" not in planet, "紫仅限氛围层"
+        assert "#8b5cf6" not in re.search(r"\.stars-far i[^}]*\}", CSS, re.S).group(0)
+
+    def test_control_buttons_and_value_box_transparent(self):
+        """v1.6.30 用户令：开/关/停/内倒四键 + 底部数值框透明化——
+        ghost 描线承载色彩，.slider-value 无底无框"""
+        seg = CSS[CSS.index(".control-row .btn-success, .control-row .btn-danger"):]
+        head = seg[:seg.index("}") + 1]
+        assert "background: transparent" in head and "border: 1px solid currentColor" in head
+        sv = re.search(r"^\.slider-value \{([^}]*)\}", CSS, re.M | re.S).group(1)
+        assert "background: transparent" in sv and "border: none" in sv
+
     def test_brand_logo_image(self):
         """页头＝慧尖真 logo（v1.6.29 用户指定，替换 📡 emoji），素材入 www/img
         随 Dockerfile COPY www/ 整目录进镜像"""
