@@ -41,19 +41,27 @@
         return n;
     }
 
-    function makeStars(containerId, count, sizeMin, sizeMax, durMin, durMax, peakMin, peakMax) {
+    // v1.7.3 用户令对照官网母本（index.html L139-144 + fillStars L821）：
+    // 星点 2/2.5/3px 三档（非旧 0.6~2.2px 微尘）、明暗 0.1↔0.9 正弦永不
+    // 触零（非单峰长黑）、白60%/蓝#38bdf8 20%/琥珀#fbbf24 20%、大星带
+    // 4px 白晕。行星群不动（小程序"单峰触零"口径仍适用其辉光）。
+    function makeStars(containerId, count, sizeMin, sizeMax, durMin, durMax, peakMin, peakMax, glowFrom) {
         var host = document.getElementById(containerId);
         if (!host) return;
         var frag = document.createDocumentFragment();
         for (var i = 0; i < count; i++) {
             var s = document.createElement('i');
             var size = between(sizeMin, sizeMax).toFixed(2);
+            var r = rnd();
+            if (r >= 0.6) s.className = r < 0.8 ? 's-blue' : 's-amber';
+            if (glowFrom && size >= glowFrom) s.className += ' s-glow';
             s.style.cssText =
                 'left:' + (rnd() * 100).toFixed(2) + '%;' +
                 'top:' + (rnd() * 100).toFixed(2) + '%;' +
                 'width:' + size + 'px;height:' + size + 'px;' +
                 '--dur:' + between(durMin, durMax).toFixed(2) + 's;' +
                 '--delay:-' + between(0, durMax).toFixed(2) + 's;' +
+                '--floor:' + (peakMin * 0.13).toFixed(2) + ';' +
                 '--peak:' + between(peakMin, peakMax).toFixed(2) + ';';
             frag.appendChild(s);
         }
@@ -104,7 +112,7 @@
         host.appendChild(frag);
     }
 
-    makeStars('starsFar', 70, 0.6, 1.4, 4, 9, 0.35, 0.6);
-    makeStars('starsNear', 36, 1.2, 2.2, 3.5, 7, 0.5, 0.8);
+    makeStars('starsFar', 70, 1.8, 2.5, 3, 7, 0.55, 0.75, 2.4);
+    makeStars('starsNear', 36, 2.5, 3.2, 3, 7, 0.8, 0.95, 2.9);
     makePlanets();
 })();

@@ -150,6 +150,25 @@ class TestStarskyJs:
         assert "planet-drift" in orb and "planet-pulse" not in orb
         assert "planet-pulse" in pl and "planet-drift" not in pl
 
+    def test_star_field_matches_official(self):
+        """v1.7.3 用户令「星星尺寸过小」——按官网母本 fillStars/index.html
+        L139-144 校准：far 1.8~2.5px、near 2.5~3.2px（旧 0.6~2.2 微尘作废）、
+        周期 3~7s、峰亮度 far .55~.75/near .8~.95、白/蓝/琥珀三色 + 大星白晕"""
+        far = re.search(r"makeStars\('starsFar', 70, ([^)]+)\)", SKY).group(1)
+        near = re.search(r"makeStars\('starsNear', 36, ([^)]+)\)", SKY).group(1)
+        assert "1.8, 2.5" in far and "3, 7" in far, f"far 尺寸档须对位官网: {far}"
+        assert "2.5, 3.2" in near and "3, 7" in near, f"near 尺寸档须对位官网: {near}"
+        assert "0.6, 1.4" not in SKY and "1.2, 2.2" not in SKY, "旧微尘尺寸作废"
+        # 正弦明暗：0/100% 下限、50% 峰（官网 star-twinkle），禁旧单峰触零
+        kf = CSS[CSS.index("@keyframes star-twinkle"):][:230]
+        assert "0%, 100%" in kf and "50%" in kf, "正弦双端"
+        assert "var(--floor" in kf and "var(--peak" in kf
+        assert "--floor:" in SKY and "s-blue" in SKY and "s-amber" in SKY and "s-glow" in SKY
+        # 三色 + 白晕类样式在位
+        assert "#38bdf8" in CSS[CSS.index(".s-blue"):], "官网蓝 #38bdf8"
+        assert "#fbbf24" in CSS[CSS.index(".s-amber"):], "官网琥珀 #fbbf24"
+        assert "box-shadow: 0 0 4px" in CSS[CSS.index(".s-glow"):], "大星 4px 白晕"
+
     def test_decorative_layer_isolation(self):
         assert "fetch" not in SKY and "XMLHttpRequest" not in SKY, \
             "装饰层零网络"

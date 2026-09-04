@@ -125,12 +125,16 @@ body {
     animation: star-twinkle var(--dur, 4s) ease-in-out var(--delay, 0s) infinite;
     will-change: opacity;
 }
-/* 明灭：单峰触零（渐亮→峰→熄到 0→暗段），对齐官网 pulse 快段 */
+/* 明灭：官网母本口径——正弦 .1↔.9 永不触零（0/100% 下限、50% 峰），
+   v1.7.3 用户令对照官网（旧"单峰触零"是行星群口径，星点不适用） */
 @keyframes star-twinkle {
-    0%, 100% { opacity: 0; }
-    12%      { opacity: var(--peak, .7); }
-    24%      { opacity: 0; }
+    0%, 100% { opacity: var(--floor, .1); }
+    50%      { opacity: var(--peak, .7); }
 }
+/* 官网色变体：60% 白 + 20% 蓝 + 20% 琥珀；大星带 4px 白晕（s-lg） */
+.stars-far i.s-blue, .stars-near i.s-blue { background: #38bdf8; }
+.stars-far i.s-amber, .stars-near i.s-amber { background: #fbbf24; }
+.stars-near i.s-glow { box-shadow: 0 0 4px rgba(255, 255, 255, .6); }
 /* 行星群：双层独立时钟——外层 .orbit-wrap 漂移（55~75s，≈1.5px/s），
    内层 .planet 明灭（3.5~7s），二者解耦（标准里耦合同一动画被否）。
    辉光宁淡：rgba .35 晕，半径随尺寸 4~7px。 */
