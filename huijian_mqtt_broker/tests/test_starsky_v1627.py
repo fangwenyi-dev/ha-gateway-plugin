@@ -185,6 +185,8 @@ class TestEmptySlotsTransparent:
 
     def test_gateway_card_flush(self):
         assert 'class="card card-flush"' in INDEX, "网关区须用留空卡"
+        assert 'class="card card-flush card-dense"' in INDEX, \
+            "服务状态板 v1.6.30 起同走留空（用户令：页头下方长玻璃取消）"
         r = self._rule(".card-flush")
         assert "background: transparent" in r and "backdrop-filter: none" in r
 
