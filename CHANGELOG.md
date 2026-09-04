@@ -3,6 +3,14 @@
 所有版本变更记录在此文件中。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.7.7] - 2026-09-07
+
+### Changed
+- **手机端网关卡（含子设备瓦片）320px→360px 居中**（用户改令与底部蓝色
+  玻璃统一宽度）：≤640px 下 `.gateway-item` max-width 360px 居中，
+  card-flush 无内边距 max-width 直接生效；`.conn-item`/`.info-box` 维持
+  v1.7.6 的 360px 不变；手机端闪屏修复（v1.7.5 静默更新）保持不变
+
 ## [1.7.6] - 2026-09-07
 
 ### Changed

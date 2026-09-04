@@ -43,7 +43,7 @@ class TestMobileNarrowCards:
         gw = re.search(r"\.gateway-item \{([^}]*)\}", block).group(1)
         ci = re.search(r"\.conn-item \{([^}]*)\}", block).group(1)
         ib = re.search(r"\.info-box \{([^}]*)\}", block).group(1)
-        assert "max-width: 320px" in gw and "auto" in gw, "网关卡（含子设备）320 居中"
+        assert "max-width: 360px" in gw and "auto" in gw, "网关卡（含子设备）360 居中（v1.7.7 用户改令，与底部蓝色玻璃统一）"
         # v1.7.6 用户令「底部蓝色玻璃全部统一宽度，说明框 360px 居中」
         assert "max-width: 360px" in ci and "auto" in ci, "连接瓦片 360 居中"
         assert "max-width: 360px" in ib and "auto" in ib, "底部蓝色玻璃说明框 360 居中"

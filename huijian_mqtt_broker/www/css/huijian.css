@@ -594,10 +594,10 @@ input[type="range"]:focus-visible { outline: 2px solid var(--primary-light); }
     .status-item .value { font-size: 12px; }
     .conn-grid { grid-template-columns: 1fr; }
     .device-list { grid-template-columns: 1fr; }
-    /* v1.7.5 用户令「手机端子设备和网关太宽不好看，底部蓝色玻璃也窄一些」
-       ——网关卡（含内部子设备瓦片）与蓝色玻璃说明框统一 320px 居中收窄，
-       两侧留空让星空透出来，同"容器不铺满"留空原则 */
-    .gateway-item { max-width: 320px; margin-left: auto; margin-right: auto; }
+    /* v1.7.5 用户令收窄 → v1.7.7 用户改令「网关卡（含子设备瓦片）与底部
+       蓝色玻璃统一 360px」——网关卡 320→360 居中（card-flush 无内边距，
+       max-width 直接生效，无需 conn-item 那套 calc 抵消） */
+    .gateway-item { max-width: 360px; margin-left: auto; margin-right: auto; }
     /* v1.7.6 用户令「底部蓝色玻璃全部统一宽度，说明框 360px 居中」
        ——conn-item 连接瓦片与 info-box 说明框统一 360px 居中。
        width:100% 必带：grid 子项加 margin:auto 会收缩成内容宽（CDP 实测
