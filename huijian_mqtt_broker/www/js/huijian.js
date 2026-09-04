@@ -603,7 +603,10 @@
                 const resp = await haApi('/services/window_controller_gateway/check_gateway_status', 'POST', { gateway_sn: gatewaySn });
                 if (!resp.ok) throw new Error('HA API ' + resp.status);
                 showToast('状态检查已发送', 'ok');
-                setTimeout(() => loadGatewayDevices(entryId, gatewaySn), 2000);
+                // v1.7.5：状态检查后走静默更新（不 innerHTML 重建）——重建会
+                // 重放 .device-item fadeUp 入场动画 + backdrop-filter 重排，
+                // 手机端慢渲染＝控制后"闪一下"根因；桌面端快所以无感
+                setTimeout(() => updateGatewayDevices(entryId, gatewaySn), 2000);
             } catch (e) {
                 showToast('状态检查失败: ' + e.message, 'err');
                 // v1.6.4：失败（含服务端"未找到网关"非 2xx）不保留旧徽标结论，
@@ -705,7 +708,9 @@
                 } else {
                     showToast('未知命令: ' + command, 'warn');
                 }
-                setTimeout(() => loadGatewayDevices(entryId, GATEWAY_SN_BY_ENTRY[entryId] || ''), 2000);
+                // v1.7.5：控制后走静默更新，理由同状态检查（手机端闪一下修复）；
+                // 设备集合若有增删，updateGatewayDevices 内部自动升级完整重建
+                setTimeout(() => updateGatewayDevices(entryId, GATEWAY_SN_BY_ENTRY[entryId] || ''), 2000);
             } catch (e) {
                 showToast('控制失败: ' + e.message, 'err');
             }

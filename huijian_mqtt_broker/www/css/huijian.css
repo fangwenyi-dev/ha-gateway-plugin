@@ -594,6 +594,11 @@ input[type="range"]:focus-visible { outline: 2px solid var(--primary-light); }
     .status-item .value { font-size: 12px; }
     .conn-grid { grid-template-columns: 1fr; }
     .device-list { grid-template-columns: 1fr; }
+    /* v1.7.5 用户令「手机端子设备和网关太宽不好看，底部蓝色玻璃也窄一些」
+       ——网关卡（含内部子设备瓦片）与蓝色玻璃说明框统一 320px 居中收窄，
+       两侧留空让星空透出来，同"容器不铺满"留空原则 */
+    .gateway-item { max-width: 320px; margin-left: auto; margin-right: auto; }
+    .info-box { max-width: 320px; margin-left: auto; margin-right: auto; }
     .device-item { padding: 11px 12px; }
     .control-row { gap: 4px; }
     .control-row .btn-sm { flex: 1; min-width: 54px; padding: 7px 8px; font-size: 12px; min-height: 32px; }
