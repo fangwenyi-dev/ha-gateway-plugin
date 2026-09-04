@@ -568,6 +568,19 @@ class TestVersionFields:
         assert vj["addon_version"] == want == vj["integration_version"]
         assert f"CURRENT_VERSION = '{want}'" in INDEX
 
+    def test_asset_cache_bust_query(self):
+        """v1.7.1 实锤教训：现场容器已是 1.7.0（update 实体实证），但用户
+        浏览器仍呈现 ≤1.6.29 旧资源——nginx no-store 挡不住一切客户端缓存
+        形态（Service Worker/国产壳）。静态引用必须挂 ?v=版本，每次发布
+        URL 变化强制穿透任何缓存。此测试钉死：三资源带 query 且与
+        config.yaml 权威版本一致（bump 忘改 query 当场红）。"""
+        cfg = (ROOT / "config.yaml").read_text(encoding="utf-8")
+        want = re.search(r'^version: "([\d.]+)"', cfg, re.M).group(1)
+        for res in ("css/huijian.css", "js/starsky.js", "js/huijian.js"):
+            assert f'{res}?v={want}"' in INDEX, f"{res} 缺 ?v={want} cache-bust"
+        bare = re.findall(r'(?:href|src)="((?:css|js)/[\w.]+)"', INDEX)
+        assert not bare, f"裸引用（无版本 query）会被客户端缓存钉死: {bare}"
+
     def test_changelog_contains_current_version_section(self):
         """动态锚：CHANGELOG 必须已含 config.yaml 同版本段（发布铁律的
         机器化——忘写 CHANGELOG 就升版当场红）。"""

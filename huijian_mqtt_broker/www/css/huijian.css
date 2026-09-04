@@ -226,7 +226,8 @@ body {
 .brand { display: flex; align-items: center; gap: 13px; position: relative; z-index: 1; }
 /* logo＝最大一颗星：玻璃盘提亮（深空必须，标准里过暗被否）+ 呼吸 + 悬浮双动画 */
 .brand-logo {
-    width: 46px; height: 46px; flex-shrink: 0; border-radius: 14px;
+    /* v1.7.1 用户令：外框正圆（小程序母本同款圆盘，原 14px 圆角方形作废） */
+    width: 46px; height: 46px; flex-shrink: 0; border-radius: 50%;
     display: flex; align-items: center; justify-content: center; font-size: 23px;
     background: rgba(255, 255, 255, .32);
     border: 1px solid rgba(255, 255, 255, .38);
@@ -238,10 +239,15 @@ body {
     backdrop-filter: blur(4px);
     animation: hero-float 8s ease-in-out infinite, hero-breathe 8s ease-in-out infinite;
 }
-/* 慧尖真 logo（v1.6.29 用户指定替换 📡 emoji）：铺满玻璃盘，圆角内嵌；
-   v1.6.30 本体沿形发光（drop-shadow 走 alpha 轮廓，不照方盒） */
-.brand-logo img { width: 100%; height: 100%; object-fit: cover; border-radius: 13px;
+/* 慧尖真 logo（v1.6.29 用户指定替换 📡 emoji）：圆盘满铺圆形裁切；
+   v1.6.30 本体沿形发光，v1.7.1 内层径向发光提亮盘面中心（最大一颗星） */
+.brand-logo { position: relative; }
+.brand-logo img { position: relative; z-index: 1; width: 100%; height: 100%; object-fit: cover; border-radius: 50%;
     filter: drop-shadow(0 0 6px rgba(125, 211, 252, .6)); }
+.brand-logo::before {
+    content: ''; position: absolute; inset: 3px; border-radius: 50%; z-index: 0;
+    background: radial-gradient(circle at 50% 42%, rgba(125, 211, 252, .5), rgba(125, 211, 252, .12) 55%, transparent 75%);
+}
 @keyframes hero-float   { 0%, 100% { translate: 0 0; } 50% { translate: 0 -4px; } }
 @keyframes hero-breathe { 0%, 100% { opacity: .7; } 50% { opacity: 1; } }
 .brand-text { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
@@ -598,4 +604,10 @@ input[type="range"]:focus-visible { outline: 2px solid var(--primary-light); }
         animation-duration: var(--twk, 5s) !important;
         animation-iteration-count: infinite !important;
     }
+    /* v1.7.1 用户令「没有星云」：三团 α.07~.10 静止态在深底上几乎不可辨，
+       运动才可见——漂移一并豁免（45/50/60s 超慢速大团，比星点更温和，
+       符合"宁慢勿快"；此为母本官网行为的用户授权增强） */
+    .nebula::before { animation-duration: 45s !important; animation-iteration-count: infinite !important; }
+    .nebula::after  { animation-duration: 50s !important; animation-iteration-count: infinite !important; }
+    .nebula3        { animation-duration: 60s !important; animation-iteration-count: infinite !important; }
 }

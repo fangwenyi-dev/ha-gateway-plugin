@@ -3,6 +3,27 @@
 所有版本变更记录在此文件中。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.7.1] - 2026-09-07
+
+### Changed
+- **页头 logo 外框正圆 + 发光强化（用户令）**：`border-radius: 14px→50%`
+  圆盘（img 同步圆形裁切），新增内层径向发光盘面 `::before`
+  （rgba(125,211,252,.5)→transparent），双环光晕+本体 drop-shadow 保留，
+  「最大一颗星」观感整体成形
+- **减弱动画下星云漂移纳入豁免（用户令「没有星云」）**：三团 α.07~.10
+  静止态在深底上不可辨、运动才可见——`.nebula::before/::after/.nebula3`
+  恢复 45/50/60s 超慢漂移（比星点更温和，符合"宁慢勿快"；用户授权对
+  官网母本的增强偏差）
+
+### Changed
+- **静态资源 cache-bust（根因修复）**：`huijian.css / starsky.js / huijian.js`
+  引用统一挂 `?v=版本号`。现场实证：Supervisor update 实体
+  `installed_version=1.7.0`（容器确为新版），但用户浏览器呈现的仍是
+  ≤1.6.29 旧界面（星星停闪/星云不见/服务状态长玻璃/logo 无光晕）——
+  nginx `no-store` 无法穿透 Service Worker/国产浏览器壳等一切客户端缓存
+  形态，URL 恒定则旧缓存永生。此后每次发布 query 随版本变化强制穿透；
+  钉桩禁止任何裸 css/js 引用
+
 ## [1.7.0] - 2026-09-07
 
 ### Fixed

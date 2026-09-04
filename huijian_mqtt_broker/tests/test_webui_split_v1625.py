@@ -46,8 +46,10 @@ def test_index_html_no_bulk_inline_left():
 
 def test_asset_refs_are_relative_paths():
     html = _read("index.html")
-    assert 'href="css/huijian.css"' in html, "缺相对路径样式引用"
-    assert 'src="js/huijian.js"' in html, "缺相对路径脚本引用"
+    # v1.7.1 cache-bust：引用可带 ?v=query，但仍必须相对路径。
+    # 具体 ?v 与版本一致性由 test_audit_round8.TestVersionFields 钉死。
+    assert re.search(r'href="css/huijian\.css(\?v=[\d.]+)?"', html), "缺相对路径样式引用"
+    assert re.search(r'src="js/huijian\.js(\?v=[\d.]+)?"', html), "缺相对路径脚本引用"
     assert 'href="/' not in html and 'src="/' not in html, \
         "禁止根绝对路径资源引用——ingress 前缀会把 /css、/js 打挂"
 
@@ -89,9 +91,9 @@ def test_external_script_keeps_inline_position_and_no_defer():
     html = _read("index.html")
     assert "defer" not in html and "async" not in html, \
         "原内联脚本是 body 末尾同步执行，defer/async 会改变执行时机语义"
-    assert html.rindex('<script src="js/huijian.js"') < html.rindex("</body>"), \
+    assert html.rindex('<script src="js/huijian.js') < html.rindex("</body>"), \
         "外置脚本必须在 body 末尾（与原内联位置一致，DOM 先于脚本就绪）"
-    assert html.rindex('<script src="js/huijian.js"') > html.rindex('<div class="footer"'), \
+    assert html.rindex('<script src="js/huijian.js') > html.rindex('<div class="footer"'), \
         "外置脚本必须落在正文之后"
 
 

@@ -121,6 +121,10 @@ class TestSkyElements:
         assert "0 0 56px 14px rgba(125, 211, 252, .22)" in seg, "远环氛围光晕"
         assert "drop-shadow(0 0 6px rgba(125, 211, 252, .6))" in CSS[CSS.index(".brand-logo img"):], \
             "logo 本体沿形发光（alpha 轮廓）"
+        assert "border-radius: 50%" in seg, "v1.7.1 用户令：外框正圆"
+        assert "border-radius: 50%" in CSS[CSS.index(".brand-logo img"):], "img 圆形裁切"
+        assert "radial-gradient(circle at 50% 42%" in CSS[CSS.index(".brand-logo::before"):][:250], \
+            "内层径向发光盘面"
 
 
 class TestStarskyJs:
@@ -251,7 +255,8 @@ class TestEmptySlotsTransparent:
             body = rule.group(1)
             assert f"animation-duration: {var} !important" in body, sel
             assert "animation-iteration-count: infinite !important" in body, sel
-        assert "nebula3" not in seg, "星云三团漂移不在豁免内（官网 CSS 层同停）"
+        assert "nebula3" in seg and "animation-duration: 45s !important" in seg, \
+            "v1.7.1 用户令星云漂移也纳入豁免（静止态不可辨）"
 
     def test_sky_ambient_purple(self):
         """v1.6.30 用户令背景按小程序标准加紫氛围：紫 (#8b5cf6/#6366f1)
