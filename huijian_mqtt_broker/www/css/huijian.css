@@ -230,7 +230,7 @@ body {
 .page {
     position: relative;
     z-index: 1;
-    max-width: 1140px;
+    max-width: 1400px; /* v1.7.8 用户令「web 端两边太空」1140→1400 */
     margin: 0 auto;
     padding: 14px;
 }
@@ -405,7 +405,9 @@ body {
 /* 轨道封顶 340px（单设备行右侧留空透星空）。高度口径 v1.6.29 用户改令：
    由"各自 hug"改为**全按 5005 统一高度**——行内 stretch 拉齐 +
    min-height:262px（5005 满控件实测高）保证无 5005 的行同样齐高 */
-.device-list { margin-top: 12px; display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 340px)); gap: 10px; }
+/* v1.7.8 用户令「web 端两边太空」：auto-fill+340 封顶作废（瓦片挤左半、
+   右半空星空）→ auto-fit 等分撑满整行；单设备由 .device-item max-width 兜底 */
+.device-list { margin-top: 12px; display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 10px; }
 @keyframes fadeUp { from { opacity: 0; transform: translateY(8px) scale(.99); } to { opacity: 1; transform: none; } }
 .device-item {
     display: flex; flex-direction: column;
@@ -414,6 +416,7 @@ body {
     border: 1px solid var(--card-border); animation: fadeUp .35s ease both;
     backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur);
     min-height: 262px; /* 5005 满控件实测高——所有子设备统一（用户改令 v1.6.29） */
+    max-width: 680px; width: 100%; margin-left: auto; margin-right: auto; /* v1.7.8：宽屏瓦片等分撑满，单设备封顶 680 居中不拉成一条；width:100% 必带——grid 子项 margin:auto 会收缩成内容宽（CDP 实测 95px） */
 }
 .device-item:hover { border-color: rgba(56, 189, 248, .5); box-shadow: var(--shadow-md); transform: translateY(-1px); }
 .device-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
@@ -594,16 +597,11 @@ input[type="range"]:focus-visible { outline: 2px solid var(--primary-light); }
     .status-item .value { font-size: 12px; }
     .conn-grid { grid-template-columns: 1fr; }
     .device-list { grid-template-columns: 1fr; }
-    /* v1.7.5 用户令收窄 → v1.7.7 用户改令「网关卡（含子设备瓦片）与底部
-       蓝色玻璃统一 360px」——网关卡 320→360 居中（card-flush 无内边距，
-       max-width 直接生效，无需 conn-item 那套 calc 抵消） */
-    .gateway-item { max-width: 360px; margin-left: auto; margin-right: auto; }
-    /* v1.7.6 用户令「底部蓝色玻璃全部统一宽度，说明框 360px 居中」
-       ——conn-item 连接瓦片与 info-box 说明框统一 360px 居中。
-       width:100% 必带：grid 子项加 margin:auto 会收缩成内容宽（CDP 实测
-       145/227px 不统一），须撑满轨道再由 max-width 封顶 360 居中 */
-    .conn-item { max-width: 360px; width: calc(100% + 36px); margin-left: auto; margin-right: auto; }
-    .info-box { max-width: 360px; margin-left: auto; margin-right: auto; }
+    /* v1.7.8 用户令「手机端这里没有对齐」：设备卡（360 居中）与连接信息
+       卡（全宽）左缘错位 → 改为全部 .card 统一 360px 居中；卡内元素
+       （网关卡/连接瓦片/说明框）回归自然撑满内容区，v1.7.5~1.7.7 的
+       gateway-item/conn-item/info-box 单独封顶与 calc 抵消全部作废 */
+    .card { max-width: 360px; margin-left: auto; margin-right: auto; padding: 16px 2px; }
     .device-item { padding: 11px 12px; }
     .control-row { gap: 4px; }
     .control-row .btn-sm { flex: 1; min-width: 54px; padding: 7px 8px; font-size: 12px; min-height: 32px; }

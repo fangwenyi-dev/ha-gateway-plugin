@@ -38,12 +38,13 @@ class TestMobileNarrowCards:
         i = CSS.index("@media (max-width: 640px)")
         return CSS[i:]
 
-    def test_gateway_and_info_box_capped(self):
+    def test_all_cards_unified_360(self):
+        """v1.7.8 用户令「手机端这里没有对齐」——设备卡(360 居中)与连接
+        信息卡(全宽)左缘错位 → 全部 .card 统一 360px 居中；卡内元素回归
+        自然撑满，v1.7.5~1.7.7 单独封顶/calc 抵消全部作废"""
         block = self._mobile_block()
-        gw = re.search(r"\.gateway-item \{([^}]*)\}", block).group(1)
-        ci = re.search(r"\.conn-item \{([^}]*)\}", block).group(1)
-        ib = re.search(r"\.info-box \{([^}]*)\}", block).group(1)
-        assert "max-width: 360px" in gw and "auto" in gw, "网关卡（含子设备）360 居中（v1.7.7 用户改令，与底部蓝色玻璃统一）"
-        # v1.7.6 用户令「底部蓝色玻璃全部统一宽度，说明框 360px 居中」
-        assert "max-width: 360px" in ci and "auto" in ci, "连接瓦片 360 居中"
-        assert "max-width: 360px" in ib and "auto" in ib, "底部蓝色玻璃说明框 360 居中"
+        card = re.search(r"\.card \{([^}]*)\}", block).group(1)
+        assert "max-width: 360px" in card and "auto" in card, "全部卡片 360 居中"
+        assert "padding: 16px 2px" in card, "横向内边距 2px 对齐 card-flush，内容区同宽"
+        for gone in (".gateway-item", ".conn-item", ".info-box"):
+            assert gone not in block, f"{gone} 单独封顶已作废（回归自然撑满）"

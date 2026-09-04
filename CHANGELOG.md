@@ -3,6 +3,22 @@
 所有版本变更记录在此文件中。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.7.8] - 2026-09-07
+
+### Fixed
+- **手机端卡片左缘不对齐**（用户附实拍图指认）：设备卡 360px 居中而连接
+  信息卡全宽，两卡左缘错位——改为 ≤640px 下**全部 .card 统一 360px 居中**
+  （横向内边距收 2px 对齐 card-flush，卡内网关卡/设备瓦片/连接瓦片/蓝色
+  说明框回归自然撑满内容区）；v1.7.5~1.7.7 的 gateway-item/conn-item/
+  info-box 单独封顶与 calc 抵消方案全部作废
+
+### Changed
+- **Web 端两边太空**（用户附桌面截图）：`.page` max-width 1140→**1400px**；
+  设备瓦片轨道 auto-fill+340px 封顶 → **auto-fit minmax(300px,1fr)** 等分
+  撑满整行（v1.6.29「轨道封顶保留」口径按用户新令作废），单设备由
+  `.device-item` max-width:680px 居中兜底防拉成一条
+- 闪屏修复（v1.7.5 静默更新）保持不变
+
 ## [1.7.7] - 2026-09-07
 
 ### Changed
