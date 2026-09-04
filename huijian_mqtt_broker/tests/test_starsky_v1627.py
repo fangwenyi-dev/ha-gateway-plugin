@@ -202,6 +202,19 @@ class TestEmptySlotsTransparent:
         r = self._rule(".gateway-item")
         assert "background" not in r, "网关容器铺底=空位也被磨成雾（违留空原则）"
 
+    def test_page_header_glass_removed(self):
+        """v1.7.2 用户令：取消顶部页头玻璃（截图那条带渐变底/模糊/边框/
+        阴影的 bar）。留空原则扩到头栏——只留布局（logo/标题/按钮自身
+        与间距），容器底与 ::after 装饰高光全清。注意与 .gateway-header
+        （网关区头部，test_glass_lives_on_real_blocks 钉其必须自持玻璃）
+        是不同元素，此处只约束 .header。"""
+        r = self._rule(".header")
+        assert "background: transparent" in r, "页头须透星空"
+        assert "backdrop-filter: none" in r and "-webkit-backdrop-filter: none" in r
+        assert "border: none" in r and "box-shadow: none" in r
+        seg = CSS[CSS.index(".header::after"):][:200]
+        assert "content: none" in seg, "::after 装饰高光须一并移除"
+
     def test_glass_lives_on_real_blocks(self):
         hdr = self._rule(".gateway-header")
         assert "--bg-card" in hdr and "backdrop-filter" in hdr, "网关头部须自持玻璃"

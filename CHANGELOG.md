@@ -3,6 +3,15 @@
 所有版本变更记录在此文件中。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.7.2] - 2026-09-07
+
+### Changed
+- **取消顶部页头玻璃（用户令，留空原则扩到头栏）**：`.header` 容器
+  background/border/backdrop-filter/box-shadow 全清、右上装饰高光
+  `::after` 移除——只留布局与 logo/标题/按钮自身（玻璃仍自持在
+  网关头 `.gateway-header` 与设备瓷砖 `.device-item` 上，不受影响）
+- 静态资源 cache-bust query 升至 `?v=1.7.2`
+
 ## [1.7.1] - 2026-09-07
 
 ### Changed

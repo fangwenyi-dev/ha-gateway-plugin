@@ -209,19 +209,20 @@ body {
 
 /* ===== Header ===== */
 .header {
-    background: linear-gradient(135deg, rgba(14, 165, 233, .16), rgba(6, 182, 212, .08) 60%, transparent);
-    border: 1px solid var(--card-border);
-    backdrop-filter: var(--glass-blur);
-    -webkit-backdrop-filter: var(--glass-blur);
+    /* v1.7.2 用户令：取消页头玻璃——留空原则扩到头栏。只留布局
+       （logo/标题/按钮自身与间距），容器底纯透明透星空 */
+    background: transparent;
+    border: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
     color: var(--text-primary);
-    padding: 18px 22px; border-radius: var(--radius); margin-bottom: 12px;
+    padding: 18px 4px; border-radius: 0; margin-bottom: 10px;
     display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;
-    box-shadow: var(--shadow);
-    position: relative; overflow: hidden;
+    box-shadow: none;
+    position: relative; overflow: visible;
 }
 .header::after {
-    content: ''; position: absolute; inset: 0; pointer-events: none;
-    background: radial-gradient(420px 160px at 88% -20%, rgba(125, 211, 252, .16), transparent 70%);
+    content: none; /* v1.7.2 取消页头玻璃：右上装饰高光随容器底一并移除 */
 }
 .brand { display: flex; align-items: center; gap: 13px; position: relative; z-index: 1; }
 /* logo＝最大一颗星：玻璃盘提亮（深空必须，标准里过暗被否）+ 呼吸 + 悬浮双动画 */
