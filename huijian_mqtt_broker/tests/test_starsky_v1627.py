@@ -117,6 +117,10 @@ class TestSkyElements:
         br = CSS[CSS.index("@keyframes hero-breathe"):][:200]
         assert re.search(r"opacity: \.?0?\.7", br), \
             "呼吸下限 .7（0.4 过暗被否，品牌不触零）"
+        # v1.6.30 用户令：logo 要像小程序那样发光——双环光晕 + 本体 drop-shadow
+        assert "0 0 56px 14px rgba(125, 211, 252, .22)" in seg, "远环氛围光晕"
+        assert "drop-shadow(0 0 6px rgba(125, 211, 252, .6))" in CSS[CSS.index(".brand-logo img"):], \
+            "logo 本体沿形发光（alpha 轮廓）"
 
 
 class TestStarskyJs:
