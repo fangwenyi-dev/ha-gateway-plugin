@@ -1,0 +1,52 @@
+# Huijian add-on — Supervisor configuration form translations (EN).
+# Mechanism: supervisor/store/data.py::_read_addon_translations reads
+# translations/<lang>.yaml next to config.yaml; schema per key:
+# name (required) / description.
+configuration:
+  username:
+    name: MQTT username (leave unchanged)
+    description: >-
+      Built into the LoRa gateway firmware (huijian). Any change is
+      auto-restored at startup — modifying it only locks your own
+      gateways out of the broker.
+  password:
+    name: MQTT password (leave unchanged)
+    description: >-
+      Built into the firmware (huijian2022). Auto-restored at startup.
+  auto_setup_ha_mqtt:
+    name: Auto-configure HA MQTT integration
+    description: >-
+      Points the HA "MQTT" integration at the built-in broker
+      (127.0.0.1:2022). Keep enabled; disabling it leaves gateways
+      unreachable.
+  install_integration:
+    name: Auto-install/update Huijian integration
+    description: >-
+      Installs the custom integration into HA (refreshed on add-on
+      upgrade + restart). Keep enabled.
+  coexist_bridge_enabled:
+    name: zigbee2mqtt coexistence bridge (off by default)
+    description: >-
+      When enabled, probes local port 1883 and auto-bridges z2m topics
+      with the official "Mosquitto broker" add-on if present. Official
+      7.x+ requires authentication: fill BOTH credential fields below
+      with an account from the official add-on, otherwise the bridge
+      simply fails to connect (peer-side log noise only; Huijian keeps
+      working). Pure-Huijian users: leave off.
+  coexist_official_user:
+    name: Bridge · official broker username
+    description: >-
+      An account created in the OFFICIAL Mosquitto add-on's own config.
+      Do not use huijian — the official user store has no such user.
+      Must be paired with the password below.
+  coexist_official_password:
+    name: Bridge · official broker password
+    description: >-
+      Password of the official account above. Half-filled pairs
+      degrade to an anonymous bridge with a warning.
+  fast_auto_discovery:
+    name: Fast gateway auto-discovery
+    description: >-
+      A first-boot LoRa gateway completes setup automatically (fully
+      automatic for the first unit, confirmation card from the second).
+      Keep enabled; disabling requires manual setup in "Integrations".

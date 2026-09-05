@@ -3,6 +3,27 @@
 所有版本变更记录在此文件中。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.7.15] - 2026-09-08
+
+### Added
+- **Supervisor 配置表单官方本地化（用户要求"配置界面不要全部英文"）**：
+  新增 `translations/zh-Hans.yaml` + `zh-CN.yaml`（同文兜底）+
+  `en.yaml`——采用 Supervisor 官方翻译机制（一手源码实证：
+  `store/data.py::_read_addon_translations` 读加载项目录
+  `translations/<语言代码>.yaml`，`configuration.<键>` 提供
+  name/description）。此前"表单无字段说明机制"的答复只对了一半：
+  英文键名标签确实不可改 schema 键，但**官方 translations 层可以把
+  每行渲染成中文标题+中文说明**。8 个配置项全部配中文（凭据勿改/
+  共存桥默认关定案/官方凭据成对填写等口径与 Web 说明卡一致）。
+  翻译文件随商店仓库分发（Supervisor 直接读仓库目录，非容器内文件），
+  用户刷新商店更新加载项元数据即见中文配置页。
+- 防漂移钉桩 `tests/test_v1715_addon_translations.py`（4 例）：三份
+  翻译与 schema 键双向对齐、每条目必填 name 齐备（缺一条 Supervisor
+  拒收整份文件、全字段一起失语）、zh 双文件逐字同文。
+
+### Notes
+- v1.7.14 的 Web UI 说明卡保留（双通道：配置页原生中文 + 页面速查表）。
+
 ## [1.7.14] - 2026-09-08
 
 ### Added

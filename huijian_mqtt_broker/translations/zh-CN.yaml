@@ -1,0 +1,45 @@
+# 慧尖加载项 Supervisor 配置表单本地化（官方机制：supervisor
+# store/data.py::_read_addon_translations 读本目录，schema：
+# configuration.<键>: name(必填)/description ——2025.12 源码实证）。
+# 前端按浏览器语言取 <语言代码>.yaml；zh-CN.yaml 为本文件同文兜底。
+configuration:
+  username:
+    name: MQTT 用户名（建议勿改）
+    description: >-
+      LoRa 网关固件内置值 huijian。改动会在启动时被自动恢复默认——
+      改了只会把自家网关挡在 broker 门外，用户无需配置。
+  password:
+    name: MQTT 密码（建议勿改）
+    description: >-
+      固件内置值 huijian2022。改动会被自动恢复，用户无需配置。
+  auto_setup_ha_mqtt:
+    name: 自动配置 HA 的 MQTT 集成
+    description: >-
+      自动把 HA「MQTT 集成」指向内置 broker（127.0.0.1:2022）。
+      建议保持开启；关闭后慧尖网关将失联。
+  install_integration:
+    name: 自动安装/更新慧尖集成
+    description: >-
+      自动把集成代码落盘到 HA（升级加载项后重启即更新到新版）。
+      建议保持开启。
+  coexist_bridge_enabled:
+    name: zigbee2mqtt 共存桥（默认关闭）
+    description: >-
+      开启后探测本机 1883 端口，发现官方「Mosquitto broker」加载项即
+      自动搭 z2m 消息桥让两者共存。官方 7.x 起强制认证，须同时成对填写
+      下方两项官方账号凭据，否则桥连不上（仅官方侧日志每 30 秒出现一条
+      拒绝记录，慧尖自身功能不受影响）。只用慧尖网关请保持关闭。
+  coexist_official_user:
+    name: 共存桥 · 官方 broker 用户名
+    description: >-
+      填官方 Mosquitto 加载项自己「配置」页添加的账号。
+      不要填 huijian——官方用户库里没有它。须与密码成对填写。
+  coexist_official_password:
+    name: 共存桥 · 官方 broker 密码
+    description: >-
+      上述官方账号的密码。只填一半会按匿名桥降级并打警告。
+  fast_auto_discovery:
+    name: 网关快速自动发现
+    description: >-
+      首次上电的 LoRa 网关自动完成配置（零条目时首台全自动，第二台起
+      弹卡片由您确认）。建议保持开启；关闭后需在「集成」页手动添加。
