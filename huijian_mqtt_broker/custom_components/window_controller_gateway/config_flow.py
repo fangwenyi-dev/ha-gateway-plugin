@@ -160,6 +160,11 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                                 self._pending_gateway_name = gateway_name
                                 return await self.async_step_confirm_add()
                     except Exception:
+                        # v1.7.12（第 6 轮审计 E-11）：意外异常（AttributeError/
+                        # 编码错等）也统一显示"无法连接"会误导排障方向——
+                        # 文案保持（strings 依赖此键）但打完整堆栈留痕定位
+                        _LOGGER.exception(
+                            "网关连接测试流程出现未预期异常（界面按连接失败呈现）")
                         errors["base"] = "cannot_connect"
 
                     if not errors:
@@ -172,6 +177,13 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         )
             else:
                 # ---- 无 SN：直接完成安装，网关待后续添加 ----
+                # v1.7.12（第 6 轮审计 CF-F1）：清除流实例上可能已设置的
+                # unique_id——用户输入 SN→测试失败→confirm_add"返回修改"→
+                # 清空 SN 提交时，:135 设置的 _unique_id 一直存活，create
+                # 出的 data={} 条目会继承该 SN 的 unique_id 成幽灵占坑：
+                # 该 SN 后续发现/手动添加永久 already_configured，界面上
+                # 却只是"待配置"。本分支的语义是无 SN 引导条目，uid 必须为空。
+                await self.async_set_unique_id(None, raise_on_progress=False)
                 # v1.6.19（第六轮审计 B-LOW8）：查重——本分支不设 unique_id
                 # 也没有扫描，原实现可连点 N 次"下一步"造出 N 个"待配置"
                 # 条目（各带心跳监听）。引导性空条目全局只允许一个，
@@ -576,10 +588,14 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         replace_mode = self.context.get("replace_mode", False)
 
         # 获取所有已配置的网关
+        # v1.7.12（第 6 轮审计 E-5/CF-F5）：无 SN 引导条目（data={}）会让
+        # 旧的 entry.data[CONF_GATEWAY_SN] 直取 KeyError 打穿本步骤——先取
+        # 后滤（本步骤现无生产入口，属拆雷，防未来接回替换流程即炸）
         existing_entries = self.hass.config_entries.async_entries(DOMAIN)
         gateway_options = {
-            entry.data[CONF_GATEWAY_SN]: entry.data.get(CONF_GATEWAY_NAME, f"慧尖网关 {entry.data[CONF_GATEWAY_SN][-4:]}")
+            sn: entry.data.get(CONF_GATEWAY_NAME, f"慧尖网关 {sn[-4:]}")
             for entry in existing_entries
+            if (sn := entry.data.get(CONF_GATEWAY_SN))
         }
 
         # 如果只有1个网关，自动选中

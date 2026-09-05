@@ -47,8 +47,15 @@ class _ProtocolMixin:
                 return raw
         return raw
 
-    async def _subscribe_topics(self):
-        """订阅MQTT主题 - 根据协议要求简化为只订阅网关响应主题"""
+    async def _subscribe_topics(self) -> bool:
+        """订阅MQTT主题 - 根据协议要求简化为只订阅网关响应主题
+
+        v1.7.12（第 6 轮审计 B-3）：返回订阅结果——旧版吞掉全部异常仍返回
+        None，setup/重连循环把失败当成功置 connected=True，"指数退避重连"
+        成死代码。False 时唯一安全分支（通用异常）照旧补跳重连。
+        B-1 配套：记录订阅所绑定的 MQTT client 实例身份（id），供巡检在
+        MQTT 条目 reload（client 重建）后识别订阅失效并重建。
+        """
         # 取消旧订阅（防止重连时累积重复订阅）
         if self._unsub_rsp:
             try:
@@ -202,8 +209,14 @@ class _ProtocolMixin:
                     }
                     
                     if ctype in ctype_handlers:
-                        msg_id = payload.get("id", 0)
-                        if msg_id in (0, None):
+                        # v1.7.12（审计 B-10）：旁路判定改走 _norm_cmd_id——
+                        # 固件若以字符串 "0" 回显周期上报 id，旧判定
+                        # msg_id in (0, None) 漏检（"0" != 0），反而把它塞进
+                        # 去重层：5s 窗口内的后续周期上报被当重复丢弃（设备
+                        # 位置/电量最长 5s 丢失）。归一后 0/None/""/False 形态
+                        # 统一走直dispatch旁路（处理函数幂等，重复无害）。
+                        msg_id = self._norm_cmd_id(payload.get("id", 0))
+                        if not msg_id:
                             # 网关周期上报（002/005）的 id 可能恒为 0：
                             # 若按 ctype+id+sn 去重，5 秒窗口内的后续上报会被误杀，
                             # 导致设备状态/位置更新丢失。id 无效时直接调度
@@ -242,7 +255,19 @@ class _ProtocolMixin:
                 if response_type == "device_discovery":
                     devices = payload.get("devices", [])
                     for device_info in devices:
-                        device_sn = device_info.get(ATTR_DEVICE_SN)
+                        # v1.7.12（审计 B-12）：legacy 路径逐条守卫——旧版对
+                        # 非 str/int 的 device_sn 直接 device_sn[-6:] 求值，
+                        # TypeError 打断整批（含后续合法设备）。与 P0 顶层守卫
+                        # 同型收敛。
+                        raw_sn = device_info.get(ATTR_DEVICE_SN)
+                        if isinstance(raw_sn, bool) or not isinstance(
+                            raw_sn, (str, int, float)
+                        ):
+                            _LOGGER.warning("legacy 发现设备 SN 类型非法，跳过: %r", raw_sn)
+                            continue
+                        device_sn = str(raw_sn)
+                        if not device_sn:
+                            continue
                         device_name = device_info.get(ATTR_DEVICE_NAME, f"设备 {device_sn[-6:]}")
                         device_type = device_info.get("device_type", DEVICE_TYPE_WINDOW_OPENER)
                         
@@ -268,7 +293,9 @@ class _ProtocolMixin:
                     )
                     
             except json.JSONDecodeError:
-                _LOGGER.error("MQTT消息解析失败: %s", msg.payload)
+                # v1.7.12（审计 B-12）：投毒/损坏报文此前全量入日志（64KB 闸
+                # 内单条即可刷满日志盘）——截 256 字节
+                _LOGGER.error("MQTT消息解析失败: %s", msg.payload[:256])
             except KeyError as e:
                 _LOGGER.error("MQTT消息缺少必要字段: %s", e)
             except ValueError as e:
@@ -279,15 +306,52 @@ class _ProtocolMixin:
         try:
             # 订阅网关响应主题
             self._unsub_rsp = await mqtt.async_subscribe(self.hass, self.TOPIC_GATEWAY_RSP, handle_gateway_response, 1)
+            # v1.7.12（审计 B-1）：记下订阅所绑定的 client 实例身份
+            self._mqtt_client_id = id(self.hass.data.get("mqtt"))
             _LOGGER.debug("订阅网关消息主题: %s", self.TOPIC_GATEWAY_RSP)
+            return True
         except ConnectionError as e:
+            # v1.7.12（审计 B-3）：三个失败分支统一补重连调度并返回 False——
+            # 旧版 ConnectionError/TimeoutError 分支连 _schedule_reconnect 都
+            # 不发，订阅永久缺失
             _LOGGER.error("MQTT连接失败: %s", e)
+            self._schedule_reconnect()
+            return False
         except TimeoutError as e:
             _LOGGER.error("MQTT订阅超时: %s", e)
+            self._schedule_reconnect()
+            return False
         except Exception as e:
             _LOGGER.error("订阅MQTT主题失败: %s", e)
             # 触发重连逻辑
             self._schedule_reconnect()
+            return False
+
+    async def _ensure_mqtt_subscription(self) -> bool:
+        """v1.7.12（第 6 轮审计 B-1）：MQTT client 换代后重建订阅。
+
+        HA 的 MQTT 集成在配置条目 reload/重建时销毁旧 client 并新建，其他
+        集成经 async_subscribe 注册的回调随旧 client 作废且不会自动迁移——
+        本集成的发布走当前 client（看起来一切正常），入站 gateway/rpt_rsp
+        却永不再达：网关 1800s 后被误判离线、Web/实体全部冻结，须手动重载
+        慧尖条目才活。而 mqtt_bootstrap 在配置不匹配分支自己就会 reload MQTT
+        条目（多网关追加/改密场景必踩）。由 30s 网关巡检周期调用：client
+        身份与订阅所绑定时不一致 → 重跑 _subscribe_topics（内部自带旧订阅
+        取消）。返回是否执行了重建。
+        """
+        current = id(self.hass.data.get("mqtt"))
+        if self._mqtt_client_id is None or current == self._mqtt_client_id:
+            return False
+        _LOGGER.warning(
+            "检测到 MQTT client 实例已更换（条目 reload/重建），重建 "
+            "gateway/rpt_rsp 订阅以避免入站失联"
+        )
+        ok = await self._subscribe_topics()
+        if not ok:
+            # 新 client 可能尚未就绪，下个巡检周期再试；补一次重连调度兜底
+            self._mqtt_client_id = None
+        return True
+
 
     async def _batch_process_tasks(self, tasks, task_type="处理"):
         """批处理异步任务
@@ -327,7 +391,17 @@ class _ProtocolMixin:
                 handler_coro.close()
                 return
             self._processed_messages[msg_key] = current_time
-        await handler_coro
+        # v1.7.12（第 6 轮审计 B-9）：处理失败时回滚去重记账——旧版"先记账后
+        # 执行"且失败不回滚，一次瞬时异常（MQTT not ready/注册表写失败）会让
+        # 网关 2s 重发的同一报文被 5s 去重窗吞掉：ack 已承诺的语义没做完、
+        # 重发又被丢弃，最长 5s 的更新黑洞。成功才保留记账。
+        try:
+            await handler_coro
+        except Exception:
+            async with self._msg_lock:
+                if self._processed_messages.get(msg_key) == current_time:
+                    self._processed_messages.pop(msg_key, None)
+            raise
 
     async def _send_ack(self, ctype: str, payload: dict):
         """发送确认响应到网关（用于网关主动发起的消息）

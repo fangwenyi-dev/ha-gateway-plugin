@@ -235,6 +235,23 @@ def find_gateway_by_device_id(hass: Any, device_id: str) -> Tuple[Optional[Dict[
         for entry_id, data in hass.data[DOMAIN].items():
             if isinstance(data, dict) and data.get("gateway_sn", "").lower() == gateway_sn.lower():
                 return data, gateway_sn
+        # v1.7.12（第 6 轮审计 E-10）：用户从**子设备**详情页复制"设备 ID"
+        # 调服务时，_resolve 解出的是子设备 SN——旧版按"等于某网关 SN"匹配
+        # 永不命中，误报"未找到对应网关"。经设备→网关映射反查补最后一跳。
+        from .const import DEVICE_TO_GATEWAY_MAPPING
+        mapping = hass.data[DOMAIN].get(DEVICE_TO_GATEWAY_MAPPING) or {}
+        mapped = mapping.get(gateway_sn)
+        if mapped is None:
+            for k, v in mapping.items():
+                if str(k).lower() == str(gateway_sn).lower():
+                    mapped = v
+                    break
+        if mapped:
+            for entry_id, data in hass.data[DOMAIN].items():
+                if (isinstance(data, dict)
+                        and str(data.get("gateway_sn", "")).lower()
+                        == str(mapped).lower()):
+                    return data, data.get("gateway_sn")
 
     return None, None
 

@@ -10,6 +10,7 @@ from .const import (
     DOMAIN,
     DEVICE_TO_GATEWAY_MAPPING,
     GLOBAL_MANUALLY_REMOVED_DEVICES,
+    GLOBAL_IGNORED_GATEWAYS,
     DEVICE_SETPOINTS,
 )
 
@@ -112,6 +113,21 @@ async def load_persistent_data(hass: HomeAssistant) -> None:
                 type(removed).__name__,
             )
 
+    # v1.7.12（审计 E-1/CF-F2）：被忽略网关跨重启持久——discovery 的
+    # ignored_gateways 内存集合与此 key 共享同一 set 对象（见 discovery.py）
+    if 'ignored_gateways' in data:
+        ignored = data['ignored_gateways']
+        if isinstance(ignored, (list, tuple, set)):
+            ignored_set = {x for x in ignored if isinstance(x, str)}
+            hass.data[DOMAIN][GLOBAL_IGNORED_GATEWAYS] = ignored_set
+            if ignored_set:
+                _LOGGER.info("已加载被忽略网关列表，共 %d 台", len(ignored_set))
+        else:
+            _LOGGER.error(
+                "ignored_gateways 字段类型非法（%s），已丢弃",
+                type(ignored).__name__,
+            )
+
     # 设备参数设定值（速度/力度等），旧版文件无此字段时保持空表
     hass.data[DOMAIN].setdefault(DEVICE_SETPOINTS, {})
     if 'device_setpoints' in data and isinstance(data['device_setpoints'], dict):
@@ -166,12 +182,14 @@ async def _do_save(hass: HomeAssistant) -> None:
         # 期间内层 dict 被并发增删键仍会触发 RuntimeError，导致持久化静默丢失。
         mapping_snapshot = dict(hass.data[DOMAIN].get(DEVICE_TO_GATEWAY_MAPPING, {}))
         removed_snapshot = list(hass.data[DOMAIN].get(GLOBAL_MANUALLY_REMOVED_DEVICES, set()))
+        ignored_snapshot = sorted(hass.data[DOMAIN].get(GLOBAL_IGNORED_GATEWAYS, set()))
         setpoints_snapshot = copy.deepcopy(hass.data[DOMAIN].get(DEVICE_SETPOINTS, {}))
 
         data = {
             'schema_version': SCHEMA_VERSION,
             'device_to_gateway_mapping': mapping_snapshot,
             'manually_removed_devices': removed_snapshot,
+            'ignored_gateways': ignored_snapshot,
             'device_setpoints': setpoints_snapshot
         }
 
@@ -184,12 +202,18 @@ async def _do_save(hass: HomeAssistant) -> None:
                     try:
                         import shutil
                         shutil.copy2(data_file, bak_file)
-                    except OSError:
-                        pass  # 备份失败不阻塞写入
+                    except OSError as be:
+                        # v1.7.12（第 6 轮审计 E-8）：备份失败必须留痕——
+                        # .bak 停留在旧代次意味着"主文件损坏"救援可能回滚
+                        # 掉最近变更，静默会让排障者对备份时效产生错误信任
+                        _LOGGER.warning(".bak 备份轮转失败（救援将使用旧备份）: %s", be)
                 with open(tmp_file, 'w', encoding='utf-8') as f:
                     json.dump(data, f, indent=2, ensure_ascii=False)
                 os.replace(tmp_file, data_file)
-            except OSError:
+            except OSError as we:
+                # v1.7.12（审计 E-8）：降级为非原子直写要大声——断电可致主文件
+                # 截断，此时只能靠（可能过期一代的）.bak 救援
+                _LOGGER.warning("原子写失败（%s），降级直写主文件——断电有截断风险", we)
                 with open(data_file, 'w', encoding='utf-8') as f:
                     json.dump(data, f, indent=2, ensure_ascii=False)
 

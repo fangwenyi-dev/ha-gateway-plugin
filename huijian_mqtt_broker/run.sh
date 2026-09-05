@@ -12,6 +12,21 @@ set -e
 
 USERNAME=$(bashio::config 'username')
 PASSWORD=$(bashio::config 'password')
+
+# v1.7.12 凭据自动恢复默认（用户定案）：LoRa 网关固件内置 huijian/huijian2022
+# （端口本就在 :31 写死 2022），用户改配置页凭据只会把网关挡在门外
+# （not authorised 风暴且无从自救）——凡偏离固件内置值一律自动恢复默认并提示，
+# 配置保持默认时本段零输出、全程无感。config.yaml schema 同步提供默认值。
+FIRMWARE_MQTT_USER="huijian"
+FIRMWARE_MQTT_PASS="huijian2022"
+if [ "${USERNAME}" != "${FIRMWARE_MQTT_USER}" ]; then
+    echo "[凭据自动恢复] 配置用户名 '${USERNAME}' ≠ 网关固件内置 '${FIRMWARE_MQTT_USER}'，已恢复默认（固件内置凭据，请勿修改）"
+    USERNAME="${FIRMWARE_MQTT_USER}"
+fi
+if [ "${PASSWORD}" != "${FIRMWARE_MQTT_PASS}" ]; then
+    echo "[凭据自动恢复] 配置密码 ≠ 网关固件内置值，已恢复默认（密码不回显；固件内置凭据，请勿修改）"
+    PASSWORD="${FIRMWARE_MQTT_PASS}"
+fi
 AUTO_SETUP=$(bashio::config 'auto_setup_ha_mqtt')
 INSTALL_INTEGRATION=$(bashio::config 'install_integration')
 # v1.7.11 快速自动发现代理开关（零条目 HA 首台网关全自动配置、第二台起弹
@@ -430,8 +445,12 @@ echo "[mDNS] 使用 Python zeroconf 广播 mDNS 服务..."
 if [ -f /usr/bin/mdns_publisher.py ] && command -v python3 >/dev/null 2>&1; then
     (
         while true; do
-            python3 /usr/bin/mdns_publisher.py "${MQTT_PORT}"
-            RC=$?
+            # v1.7.12（第 6 轮审计 F1，v1.6.3 C3 同族补漏）：子 shell 若继承
+            # set -e，裸 `python3; RC=$?` 在进程非零退出的瞬间即被 errexit
+            # 杀掉，RC=$? 与重启分支永不执行（看门狗形同虚设）。`|| RC=$?`
+            # 让失败成为已处理条件，循环才真正活着。
+            RC=0
+            python3 /usr/bin/mdns_publisher.py "${MQTT_PORT}" || RC=$?
             if [ "${RC}" -eq 0 ]; then
                 echo "[mDNS] 广播进程正常退出，不再重启"
                 break
@@ -866,9 +885,13 @@ if [ "${FAST_DISCOVERY}" = "true" ] && [ -f /usr/bin/gateway_discovery_proxy.py 
     if command -v python3 >/dev/null 2>&1; then
         (
             while true; do
+                # v1.7.12（审计 F1）：本 fork 在 set -e(:463) 恢复之后，子 shell
+                # 带 errexit——必须 `|| RC=$?`。否则 broker 每次重启（共存桥对账
+                # kill/崩溃自愈）导致代理非零退出时，看门狗随之猝死，
+                # fast_auto_discovery 静默永久下线直到容器重启。
+                RC=0
                 python3 /usr/bin/gateway_discovery_proxy.py \
-                    "${MQTT_PORT}" "${USERNAME}" "${PASSWORD}"
-                RC=$?
+                    "${MQTT_PORT}" "${USERNAME}" "${PASSWORD}" || RC=$?
                 if [ "${RC}" -eq 0 ]; then
                     echo "[发现代理] 正常退出，不再重启"
                     break

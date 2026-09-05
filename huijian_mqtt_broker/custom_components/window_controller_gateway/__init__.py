@@ -104,7 +104,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # device_manager 缺失时会打 error 日志（"设备管理器未找到"），
         # 且与完整 PLATFORMS 的卸载集合不一致。config entry 的加载状态
         # 由 async_setup_entry 返回值决定，与是否 forward 平台无关，
-        # 因此 forward 空列表即可（卸载时 PLATFORMS 对未加载平台是安全 no-op）。
+        # 因此 forward 空列表即可。
+        # v1.7.12（第 6 轮审计 E-6）注释订正：旧尾句"卸载时 PLATFORMS 对未
+        # 加载平台是安全 no-op"已被 v1.7.11 真栈证伪——HA≥2024 平台组件对
+        # never-loaded 条目 async_unload_entry 抛 ValueError "Config entry
+        # was never loaded!"（ERROR 风暴），卸载必须按 _platforms_forwarded
+        # 实际转发记录门禁（见 :356 定义与卸载分支），勿回退。
 
         # 轻量级心跳监听器：订阅 gateway/rpt_rsp，发现新网关时自动触发发现流程
         # 这让"先装集成、后上电网关"的自动发现流程成为可能
@@ -155,14 +160,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             except Exception as e:  # noqa: BLE001
                 _LOGGER.warning("等待模式 MQTT 引导异常（不阻塞，后台武装兜底）: %s", e)
 
+            _subscribed_now = False
             if is_mqtt_loaded(hass):
                 from homeassistant.components import mqtt as mqtt_comp
-                _unsub_heartbeat = await mqtt_comp.async_subscribe(
-                    hass, TOPIC_GATEWAY_RSP, _heartbeat_listener, 1
-                )
-                hass.data[DOMAIN][entry.entry_id]["_unsub_heartbeat"] = _unsub_heartbeat
-                _LOGGER.info("已启动网关心跳监听器，等待网关上电...")
-            else:
+                # v1.7.12（第 6 轮审计 CF-F4）：即时订阅单独兜异常——旧版
+                # subscribe 抛错直接落最外层 except，else 分支的后台武装被
+                # 整体跳过，本条目生命周期内自动发现静默死亡。失败转入武装
+                # 重试路径（同下方 A-2 设计）。
+                try:
+                    _unsub_heartbeat = await mqtt_comp.async_subscribe(
+                        hass, TOPIC_GATEWAY_RSP, _heartbeat_listener, 1
+                    )
+                    hass.data[DOMAIN][entry.entry_id]["_unsub_heartbeat"] = _unsub_heartbeat
+                    _LOGGER.info("已启动网关心跳监听器，等待网关上电...")
+                    _subscribed_now = True
+                except Exception as sub_e:  # noqa: BLE001
+                    _LOGGER.warning(
+                        "心跳即时订阅失败（%s），转入后台武装重试", sub_e)
+
+            if not _subscribed_now:
                 # v1.6.26（第八轮审计 A-2）：旧实现只武装一次——加载项首启的
                 # 典型时序里 MQTT 条目由本集成的 bootstrap 稍后异步创建，
                 # is_mqtt_loaded 此刻为假即永久放弃，自动发现整链静默失效。
@@ -180,9 +196,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     data_now = hass.data.get(DOMAIN, {}).get(entry.entry_id)
                     if data_now is None:
                         return  # 条目已卸载/重载，放弃武装
-                    unsub = await mqtt_comp.async_subscribe(
-                        hass, TOPIC_GATEWAY_RSP, _heartbeat_listener, 1
-                    )
+                    # v1.7.12（审计 CF-F4）：武装协程内订阅同样兜异常——旧版
+                    # subscribe 抛错=task 未检索异常静默放弃，本条目再无人监听
+                    try:
+                        unsub = await mqtt_comp.async_subscribe(
+                            hass, TOPIC_GATEWAY_RSP, _heartbeat_listener, 1
+                        )
+                    except Exception as sub_e:  # noqa: BLE001
+                        _LOGGER.warning(
+                            "心跳武装订阅失败（网关需手动添加 SN，或重载本条目）: %s",
+                            sub_e)
+                        return
                     data_now = hass.data.get(DOMAIN, {}).get(entry.entry_id)
                     if data_now is None:
                         if unsub:
@@ -232,7 +256,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.data[DOMAIN].setdefault(entry.entry_id, {})
         hass.data[DOMAIN][entry.entry_id]["gateway_sn"] = gateway_sn
         hass.data[DOMAIN][entry.entry_id]["gateway_name"] = gateway_name
-        hass.data[DOMAIN][entry.entry_id]["_setup_in_progress"] = True
+        # v1.7.12（第 6 轮审计改进项）：删除死键 "_setup_in_progress"——
+        # 全仓无任何读取方（含历史版本），纯占位误导维护者以为有防重入语义
 
         # 一体化插件：确保 MQTT 集成已建立连接（需要时按引导标记自动创建条目）。
         # 必须在创建 MQTT 处理器之前完成，否则订阅会因 MQTT 未就绪而失败。
@@ -609,6 +634,18 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
                 del device_to_gateway_mapping[device_sn]
         
         _LOGGER.info("已清理 %d 个设备的网关映射关系（网关 %s 已删除）", len(devices_to_remove), gateway_sn)
+        
+        # v1.7.12（第 6 轮审计 E-9）：这些子设备的速度/力度设定值同步清除——
+        # 旧版残留 hass.data 与持久 JSON，同 SN 设备重配到其他网关时
+        # number 实体回显陈旧设定值、误导用户以为已生效
+        try:
+            sp = hass.data[DOMAIN].get(DEVICE_SETPOINTS) or {}
+            for dsn in devices_to_remove:
+                sp.pop(dsn, None)
+                for k in [k for k in sp if str(k).lower() == str(dsn).lower() and k != dsn]:
+                    sp.pop(k, None)
+        except Exception as spe:  # noqa: BLE001
+            _LOGGER.warning("清理设备设定值失败（不影响删除流程）: %s", spe)
         
         # 保存更新后的持久化数据
         await save_persistent_data(hass)

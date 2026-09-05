@@ -185,6 +185,16 @@ async def ensure_mqtt_connection(hass: HomeAssistant) -> Optional[bool]:
     username = data.get("username") or None
     password = data.get("password") or None
 
+    # v1.7.12（第 6 轮审计 B-14）：空 broker 标记属损坏标记——原先只有 create
+    # 路径有守卫，update/匹配分支可把 broker="" 写进用户已有 MQTT 条目毁掉其
+    # 连接。在统一入口处熔断：不删标记（保留现场）、不动条目、大声告警。
+    if not broker:
+        _LOGGER.error(
+            "bootstrap 标记缺少 broker 字段（%s），已跳过 MQTT 自愈——"
+            "请重启慧尖加载项重写标记", marker_path,
+        )
+        return
+
     existing_entries = hass.config_entries.async_entries("mqtt")
 
     if existing_entries:
@@ -198,10 +208,18 @@ async def ensure_mqtt_connection(hass: HomeAssistant) -> Optional[bool]:
         # 新版分离出 ha_mqtt 用户（ACL 全权限）。升级后旧条目 username 与标记
         # 不一致，必须走更新分支把用户名/密码刷成 ha_mqtt，否则 HA 集成继续用
         # 被收紧 ACL 的 huijian 连接，MQTT discovery 收不到消息。
+        # v1.7.12（第 6 轮审计 B-2）：补 password 比对——旧版只比前三项，加载项
+        # 密码变更后匹配分支照样删标记，HA MQTT 条目永持旧密码 → 30s not
+        # authorised 风暴且无自愈路径（HA2 现场"条目旧凭据"事故的机器成因）。
+        # 条目侧为 !secret/!env_var 模板值时豁免比较：比对明文必然失配，且覆写
+        # 会破坏用户模板/强制 reload 成环——视为用户自管，不抢方向盘。
+        entry_password = str(first.data.get("password") or "")
+        password_user_managed = entry_password.startswith("!")
         if (
             cur_broker == broker
             and str(cur_port) == str(port)
             and cur_username == username
+            and (password_user_managed or entry_password == (password or ""))
         ):
             _LOGGER.debug(
                 "MQTT 配置条目已指向内置 Broker %s:%s 且用户一致，无需更新",

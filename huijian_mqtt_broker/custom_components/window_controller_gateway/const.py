@@ -44,6 +44,10 @@ DEVICE_TYPE_GATEWAY: Final = "gateway"
 MAX_DEVICES_PER_GATEWAY: Final = 32
 DEVICE_TO_GATEWAY_MAPPING: Final = "device_to_gateway_mapping"
 GLOBAL_MANUALLY_REMOVED_DEVICES: Final = "global_manually_removed_devices"
+# v1.7.12（第 6 轮审计 E-1/CF-F2）："忽略网关"跨 HA 重启持久层——discovery
+# 的 ignored_gateways 集合与它共享同一 set 对象，随 persist.py 统一落盘/加载
+# （旧版纯内存，重启后已忽略的网关卡片复活）
+GLOBAL_IGNORED_GATEWAYS: Final = "global_ignored_gateways"
 DEVICE_SETPOINTS: Final = "device_setpoints"  # 设备参数设定值（速度/力度等），持久化，重启不丢失
 
 # ==================== MQTT 相关 ====================

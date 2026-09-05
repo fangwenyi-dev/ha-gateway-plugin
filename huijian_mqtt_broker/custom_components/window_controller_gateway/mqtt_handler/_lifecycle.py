@@ -50,6 +50,9 @@ class _LifecycleMixin:
         # cleanup 首行置 True，重连路径创建任何后台任务前必须检查。
         self._closing = False
         self._unsub_rsp = None  # MQTT 订阅取消函数
+        # v1.7.12（审计 B-1）：订阅所绑定的 MQTT client 实例身份（id），
+        # 巡检发现变化即重建订阅（见 _ensure_mqtt_subscription）
+        self._mqtt_client_id = None
         self._msg_lock = asyncio.Lock()  # 异步消息去重锁
         self.instance_uuid = str(uuid.uuid5(uuid.NAMESPACE_DNS, hass.config.config_dir))
         # P1 修复：将配对超时句柄统一存储在 mqtt_handler 上，
@@ -176,6 +179,11 @@ class _LifecycleMixin:
             while True:
                 await asyncio.sleep(GATEWAY_CHECK_INTERVAL)  # 每30秒检查一次
                 try:
+                    # v1.7.12（审计 B-1）：先做订阅代际检查——MQTT 条目 reload
+                    # 后 client 已换、旧订阅随之作废，发布正常而入站永久失联，
+                    # 必须在本心跳里重建（cleanup 已取消旧订阅句柄防误触）
+                    await self._ensure_mqtt_subscription()
+
                     should_go_offline = False
                     reason = ""
 
@@ -238,8 +246,13 @@ class _LifecycleMixin:
                 _LOGGER.debug("尝试重新连接MQTT... (重试 %d/%d)", retry_count + 1, max_retries)
                 
                 # 重新订阅主题
-                await self._subscribe_topics()
-                
+                # v1.7.12（审计 B-3）：_subscribe_topics 现返回 bool 且不再让
+                # 异常外抛——旧版重连循环拿不到失败信号，第一圈必然"成功"
+                # 返回，指数退避整段成死代码。False 时显式 raise 走下方退避。
+                sub_ok = await self._subscribe_topics()
+                if not sub_ok:
+                    raise RuntimeError("MQTT 重新订阅失败")
+
                 # 重新启动网关超时检查任务
                 if self._closing:
                     # v1.6.19（第六轮审计 A-MED1）：上面 await self._check_task
@@ -261,6 +274,12 @@ class _LifecycleMixin:
                             pass
                         except Exception:
                             pass
+                # v1.7.12（审计 B-4，v1.6.19 A-MED1 同族补漏）：上面 cancel/await
+                # 旧任务又是一次让出点，:244 的检查结果可能已过期——create 前
+                # 就地复检，否则 cleanup 恢复后会把新任务覆没成孤儿
+                if self._closing:
+                    _LOGGER.debug("条目清理中，放弃重建超时检查任务（create 前复检）")
+                    return
                 self._check_task = asyncio.create_task(
                     self._check_gateway_timeout(),
                     name=f"{DOMAIN}_check_timeout_{self.gateway_sn}"
@@ -341,6 +360,17 @@ class _LifecycleMixin:
             except Exception as e:
                 _LOGGER.debug("MQTT重连任务异常: %s", e)
             self._reconnect_task = None
+
+        # v1.7.12（审计 B-4 尾检兜底）：重连任务可能吞掉本次取消并完成
+        # create（A-MED1 残余窗口）——复检一次，凡新出现的超时检查任务都
+        # 在 unload 收口前取消，不留泄漏
+        if self._check_task and not self._check_task.done():
+            self._check_task.cancel()
+            try:
+                await self._check_task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                _LOGGER.debug("cleanup 尾检取消残留超时检查任务")
+            self._check_task = None
         
         # 取消 MQTT 订阅
         if self._unsub_rsp:

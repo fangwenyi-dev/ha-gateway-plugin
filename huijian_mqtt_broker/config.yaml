@@ -1,5 +1,5 @@
 name: 慧尖 LoRa 网关
-version: "1.7.11"
+version: "1.7.12"
 slug: huijian_mqtt_broker
 description: 慧尖开窗器 LoRa 网关一体化插件，内置 Mosquitto Broker + 网关集成，安装即用
 url: 'https://github.com/fangwenyi-dev/ha-gateway-plugin'
@@ -88,10 +88,13 @@ options:
   # 卡片仍需本人点击配对，代理绝不自动建条目。
   fast_auto_discovery: true
 schema:
-  username: str
+  # v1.7.12 凭据定案：LoRa 网关固件内置 huijian/huijian2022/端口2022，用户无需
+  # 也不应修改——改了只会把自家网关挡在 broker 门外。schema 给默认值保证新装
+  # 零配置；run.sh 启动时把任何偏离内置值的配置自动恢复默认（见"凭据自动恢复"）
+  username: str=huijian
   # password 类型：Supervisor 配置页输入框脱敏显示（str 会明文回显在设置页）。
   # 注意 Supervisor 会对已保存值做脱敏存储，UI 显示 * 属正常
-  password: password
+  password: password=huijian2022
   auto_setup_ha_mqtt: bool
   install_integration: bool
   coexist_bridge_enabled: bool

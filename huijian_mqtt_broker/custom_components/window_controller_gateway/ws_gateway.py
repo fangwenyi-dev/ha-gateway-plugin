@@ -272,12 +272,15 @@ class WsGatewayServer:
         self._stopping = True
         self._detach_listeners()
         clients = list(self._clients)
-        for ws in clients:
-            try:
-                await ws.close()
-            except Exception:  # noqa: BLE001 - 关闭尽力而为
-                pass
         self._clients.clear()
+        if clients:
+            # v1.7.12（第 6 轮审计 F3）：逐个 await ws.close()（对端不应答
+            # 时默认 10s 超时各拖各的）改并发 gather——4 客户端串行最坏 40s
+            # 卡死条目 unload/HA STOP 路径；return_exceptions 容忍单条异常
+            # （与旧逐条 except pass 同语义）
+            await asyncio.gather(
+                *(ws.close() for ws in clients), return_exceptions=True
+            )
         # v1.6.19 A-LOW6：客户端已踢、监听已摘，残余广播任务无意义，取消收尾
         for _t in list(self._bg_tasks):
             _t.cancel()
@@ -424,6 +427,11 @@ class WsGatewayServer:
         # 设备端两者都不是合法命令值）——同口径拒绝，不透传脏值
         if value == "" or isinstance(value, bool):
             return {"type": "control_ack", "ok": False, "msg": "missing fields"}
+        # v1.7.12（第 6 轮审计 F6）：仅 str/int/float 可转固件线值——dict/list
+        # 等经 str() 会产出 Python repr（单引号/True 字面量）固件不可解析，
+        # 而小程序已收到 ok=true 的假成功回执，属脏值透传面。白名单拒绝。
+        if not isinstance(value, (str, int, float)):
+            return {"type": "control_ack", "ok": False, "msg": "invalid value"}
         value_s = str(value)
         data = self._device_gateway(dev_sn)
         if data is not None:
@@ -760,7 +768,12 @@ async def async_ensure_ws_gateway(hass: HomeAssistant) -> None:
         return
 
     port, token = wanted
-    if current is not None and current.port == port and current._runner is not None:
+    if (current is not None and current.port == port
+            and current._runner is not None
+            # v1.7.12（审计 F2 配套）：热同步不得命中正在停止的实例——
+            # cleanup 完成前 _runner 仍非 None，同步令牌/监听器落进将死对象
+            # 成为静默无效写（用户改令牌后旧令牌仍被使用）
+            and not current._stopping):
         # 端口未变：仅热同步令牌（options 被 UI 改过）与监听器
         current._token = token
         current._attach_listeners([data["device_manager"] for _gw, data in current._entries_data()])
@@ -779,11 +792,31 @@ async def async_ensure_ws_gateway(hass: HomeAssistant) -> None:
         await server.async_start()
     except OSError as e:
         _LOGGER.error("小程序 WS 网关启动失败（端口 %d 被占用或无权限？不影响其余功能）: %s", port, e)
-        domain_data.pop(WS_GATEWAY_DATA_KEY, None)
+        # v1.7.12（第 6 轮审计 F2）：本失败实例从未登记——无条件 pop 会误删
+        # 并发另一路 ensure 成功方的注册（多条目并行 setup 实测窗口）：
+        # 注册表真空后 unload/"关闭 WS"都停不掉那台仍在监听 9001 的孤儿
+        # 服务器。仅当注册确实指向本实例时才清理。
+        if domain_data.get(WS_GATEWAY_DATA_KEY) is server:
+            domain_data.pop(WS_GATEWAY_DATA_KEY, None)
         return
     except Exception as e:  # noqa: BLE001
         _LOGGER.error("小程序 WS 网关启动异常（不影响其余功能）: %s", e, exc_info=True)
         return
+
+    # v1.7.12（审计 F2）：迟到撞车复检——async_start 是让出点，若另一并发
+    # ensure 在我们期间完成启动并登记（SO_REUSEPORT/半开等双成功形态），
+    # 本实例为冗余监听者：自我让位停掉，保持单例注册不被覆写
+    existing = domain_data.get(WS_GATEWAY_DATA_KEY)
+    if existing is not None and existing is not server and not existing._stopping:
+        _LOGGER.debug("并发对端已先注册 WS 网关，本冗余实例让位停止")
+        try:
+            await server.async_stop()
+        except Exception:  # noqa: BLE001
+            pass
+        existing._token = token
+        existing._attach_listeners([data["device_manager"] for _gw, data in existing._entries_data()])
+        return
+
     domain_data[WS_GATEWAY_DATA_KEY] = server
     server._attach_listeners([data["device_manager"] for _gw, data in server._entries_data()])
 

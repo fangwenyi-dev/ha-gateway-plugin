@@ -11,6 +11,11 @@
         const INGRESS_BASE = window.location.pathname.replace(/\/[^/]*$/, '/');
         // 各配置条目的网关 SN（控制操作后刷新设备用，避免空 SN 误匹配首个实体）
         const GATEWAY_SN_BY_ENTRY = {};
+        // v1.7.12（第 6 轮审计 L-3）：entryId → 配对窗口截止时间戳。
+        // startPairing 点亮"配对中"黄徽后，30s 静默刷新/2s 设备重建会把
+        // 徽标覆写回 online/offline——60s 内用户看到"离线"会误判配对失败。
+        // 窗口内 updateGatewayStatus 跳过非配对状态覆写。
+        const PAIRING_UNTIL = {};
 
         // ========== 初始化 ==========
         async function init() {
@@ -37,9 +42,20 @@
         }
 
         // ========== 刷新所有 ==========
+        // v1.7.12（审计 L-4）：手动刷新/初始化共用入口补防重入——旧版无
+        // 守卫，连点「刷新」或慢网络下 init 未完又触发，多轮 checkServiceStatus
+        // + loadGateways 交错写同一容器 DOM（与 v1.6.10 N6 在 silentRefresh
+        // 修过的同族），忙时直接忽略本次
+        let _refreshAllBusy = false;
         async function refreshAll() {
-            await checkServiceStatus();
-            await loadGateways();
+            if (_refreshAllBusy) return;
+            _refreshAllBusy = true;
+            try {
+                await checkServiceStatus();
+                await loadGateways();
+            } finally {
+                _refreshAllBusy = false;
+            }
         }
 
         // ========== 无感刷新（只更新状态值，不重建 DOM）==========
@@ -123,15 +139,24 @@
             } catch (e) {
                 setStatusDot('integrationStatus', 'err', '无法读取');
             }
-            // 3. HA MQTT 连接检测 — broker 实际连接数（broker_status.json 由后台循环刷新）
+            // 3. MQTT 客户端连接数 — broker 实际连接数（broker_status.json 由后台循环刷新）
+            // v1.7.12（第 6 轮审计 M-2）：更名「MQTT 客户端」并加悬停释义——
+            // 该计数是 :2022 上全部 ESTABLISHED（LoRa 网关/桥/z2m/HA 集成
+            // 混算），旧文案"HA MQTT 已连接"在 HA 条目凭据坏而网关仍连着的
+            // 场景显示假绿灯（mqtt_not_available 类排障第一入口被误导）。
             try {
                 const resp = await fetchT(INGRESS_BASE + 'api/broker', { cache: 'no-store' }, 8000);
                 if (!resp.ok) {
                     setStatusDot('haMqttStatus', 'err', 'HTTP ' + resp.status);
                 } else {
                     const info = await resp.json();
-                    setStatusDot('haMqttStatus', info.clients > 0 ? 'ok' : 'warn',
-                        info.clients > 0 ? '已连接 (' + info.clients + ')' : '未连接');
+                    const n = Number(info.clients) || 0;
+                    setStatusDot('haMqttStatus', n > 0 ? 'ok' : 'warn',
+                        n > 0 ? '客户端在线 (' + n + ')' : '无客户端');
+                    const tip = document.getElementById('haMqttStatus');
+                    if (tip) tip.title = '内置 Broker :2022 上的全部 MQTT 连接数（LoRa 网关 / HA 集成 / 共存桥 / z2m 等混计）。'
+                        + '此数只证明有客户端连着，不代表 HA 侧 MQTT 集成条目就绪——'
+                        + '慧尖设备状态不更新且此数正常时，请到 HA「设置→设备与服务→MQTT」检查条目状态与凭据。';
                 }
             } catch (e) {
                 setStatusDot('haMqttStatus', 'err', '无法读取');
@@ -196,6 +221,10 @@
                     html += renderGateway(gwName, gwSn, entry.entry_id);
                 }
                 container.innerHTML = html;
+                // v1.7.12（第 6 轮审计 L-10）：全量重建前清空 SN 映射——
+                // 条目被删除后旧 key 永不清理，同 entryId 复用（HA reload
+                // 偶发复用不回来，但残留脏映射会让静默刷新拿旧 SN 发控制）
+                for (const k of Object.keys(GATEWAY_SN_BY_ENTRY)) delete GATEWAY_SN_BY_ENTRY[k];
                 for (const entry of entries) {
                     GATEWAY_SN_BY_ENTRY[entry.entry_id] = (entry.data && entry.data.gateway_sn) || '';
                     await loadGatewayDevices(entry.entry_id, GATEWAY_SN_BY_ENTRY[entry.entry_id]);
@@ -240,7 +269,11 @@
                 const devices = await resp.json();
                 if (!devices || devices.length === 0) {
                     deviceListEl.innerHTML = '<p class="empty-hint">暂无子设备，点击「配对」按钮添加</p>';
-                    updateGatewayStatus(statusEl, 'offline');
+                    // v1.7.12（第 6 轮审计 M-1）：'offline' 红标改 'unknown'——
+                    // 本分支连网关设备都没有，gateway_online 无从读取，
+                    // "无数据"≠"离线"。v1.7.11 awaiting 条目/在线但未配
+                    // 子设备的网关此前必现假红「离线」。
+                    updateGatewayStatus(statusEl, 'unknown');
                     return;
                 }
                 let subDevices = [];
@@ -384,6 +417,13 @@
         function updateGatewayStatus(el, status) {
             // v1.6.3：卡片可能被重渲染移除（await 后 DOM 已换），空引用防护
             if (!el) return;
+            // v1.7.12（审计 L-3）：配对窗口内不覆写黄徽（见 PAIRING_UNTIL 定义处）。
+            // 需要立即改写（失败回退 unknown 等）的调用方先删窗口。
+            if (status !== 'pairing') {
+                const _eid = (el.id || '').replace('gw-status-', '');
+                if (Date.now() < (PAIRING_UNTIL[_eid] || 0)
+                        && el.classList.contains('badge-warn')) return;
+            }
             if (status === 'online') { el.className = 'badge badge-ok'; el.textContent = '在线'; }
             else if (status === 'pairing') { el.className = 'badge badge-warn'; el.textContent = '配对中'; }
             else if (status === 'offline') { el.className = 'badge badge-err'; el.textContent = '离线'; }
@@ -542,9 +582,13 @@
                     else if (state === 'unavailable') statusText = '状态: 离线';
                     else if (devStatus === 'connected' || state === 'unknown' || devStatus === 'unknown') statusText = '状态: 待上报';
                     else statusText = '状态: ' + state;
-                    if (pos !== undefined) statusText += ' | 位置: ' + pos + '%';
+                    // v1.7.12（审计 L-2）：position=null 实体（unavailable 时属性
+                    // 可为 null）旧判只挡 undefined，会渲染成"位置: null%"并把
+                    // slider.value 置成 "null"（数字输入被浏览器钳成 0）——同族
+                    // 判空补齐 null/''（与上方 :565 推导分支同口径）
+                    if (pos !== undefined && pos !== null && pos !== '') statusText += ' | 位置: ' + pos + '%';
                     const slider = document.querySelector('#dev-' + dev.id + ' .position-slider');
-                    if (slider && pos !== undefined) {
+                    if (slider && pos !== undefined && pos !== null && pos !== '') {
                         slider.value = pos;
                         slider.nextElementSibling.textContent = pos + '%';
                     }
@@ -575,15 +619,22 @@
                 if (!resp.ok) throw new Error('HA API ' + resp.status);
                 const devices = await resp.json();
                 const gwDevice = devices.find(d => !d.via_device_id);
-                if (!gwDevice) { showToast('未找到网关设备', 'err'); updateGatewayStatus(statusEl, 'unknown'); return; }
+                if (!gwDevice) { delete PAIRING_UNTIL[entryId]; showToast('未找到网关设备', 'err'); updateGatewayStatus(statusEl, 'unknown'); return; }
                 const pairResp = await haApi('/services/window_controller_gateway/start_pairing', 'POST', {
                     device_id: gwDevice.id, duration: 60
                 });
                 if (!pairResp.ok) throw new Error('HA API ' + pairResp.status);
+                // v1.7.12（L-3）：配对服务确认受理后才开窗（60s 配对 + 5s 收尾），
+                // 窗口结束时主动刷新一次恢复正常徽标判定
+                PAIRING_UNTIL[entryId] = Date.now() + 65000;
                 showToast('配对模式已启动（60秒），请操作子设备', 'ok');
                 setTimeout(() => loadGatewayDevices(entryId, gatewaySn), 10000);
-                setTimeout(() => loadGatewayDevices(entryId, gatewaySn), 60000);
+                setTimeout(() => {
+                    delete PAIRING_UNTIL[entryId];
+                    loadGatewayDevices(entryId, gatewaySn);
+                }, 60000);
             } catch (e) {
+                delete PAIRING_UNTIL[entryId];
                 showToast('配对启动失败: ' + e.message, 'err');
                 // v1.6.3：失败不硬标 online（设备可能确实离线），回到未知由下次刷新判定
                 updateGatewayStatus(statusEl, 'unknown');
@@ -618,13 +669,20 @@
         async function renameDevice(deviceId, entryId, currentName) {
             const newName = prompt('请输入新设备名称:', currentName);
             if (!newName || newName === currentName) return;
+            // v1.7.12（第 6 轮审计 L-6）：客户端先行校验——旧版把纯空白/超长/
+            // 含控制符的名字直发 HA 服务（服务端 name 只校 str 非空），
+            // 设备最终显示空白名。trim 后判空 + 限 64 字 + 剔除控制字符。
+            const cleaned = newName.replace(/[\u0000-\u001f\u007f]/g, '').trim();
+            if (!cleaned) { showToast('名称不能为空', 'err'); return; }
+            if (cleaned.length > 64) { showToast('名称过长（最多 64 字）', 'err'); return; }
+            if (cleaned === currentName) return;
             showToast('正在重命名...', 'warn');
             try {
                 const resp = await haApi('/services/window_controller_gateway/rename_device', 'POST', {
-                    device_id: deviceId, name: newName
+                    device_id: deviceId, name: cleaned
                 });
                 if (!resp.ok) throw new Error('HA API ' + resp.status);
-                showToast('重命名成功: ' + newName, 'ok');
+                showToast('重命名成功: ' + cleaned, 'ok');
                 setTimeout(() => loadGatewayDevices(entryId, GATEWAY_SN_BY_ENTRY[entryId] || ''), 2000);
             } catch (e) {
                 showToast('重命名失败: ' + e.message, 'err');
@@ -806,7 +864,7 @@
             }
         }
 
-        // 静默自动检查（init 时一次 + 每 10 分钟一次）：只更新徽章，
+        // 静默自动检查（init 时一次 + 每 30 分钟一次）：只更新徽章，
         // 不弹卡片不打扰；任何失败仅 console，不污染页面
         async function silentUpdateCheck() {
             // v1.6.9：三重限流（此前 10min×每标签页×双源都打 GitHub，多标签
@@ -991,7 +1049,17 @@
 
         // HTML 解析器会在 JS 编译前解码 &#39;，实体转义保护不了单引号包裹的 onclick/onchange 参数，需额外转义
         function jsQuote(v) {
-            return String(v == null ? '' : v).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+            // v1.7.12（第 6 轮审计 L-9）：补行终止符转义——设备名可含 \n/\r，
+            // HTML 属性会把换行折叠成空格导致 onclick 实参与原值静默不一致；
+            // \u2028/\u2029 是 JS 行终止符，出现在单引号串内直接 SyntaxError
+            // 整条 onclick 失效。转义在反斜杠之后（顺序不可颠倒）。
+            return String(v == null ? '' : v)
+                .replace(/\\/g, '\\\\')
+                .replace(/'/g, "\\'")
+                .replace(/\r/g, '\\r')
+                .replace(/\n/g, '\\n')
+                .replace(/\u2028/g, '\\u2028')
+                .replace(/\u2029/g, '\\u2029');
         }
 
         // onclick/onchange 等事件属性的正确转义顺序（v1.6.3 修复）：
@@ -1005,6 +1073,16 @@
         }
 
         function showToast(message, type) {
+            // v1.7.12（第 6 轮审计 M-3）：toast 是 fixed 定位互叠——3s 窗口内
+            // 连续两个 toast（配对失败紧跟 rename 失败等）文字完全重叠不可读。
+            // 先摘旧再上新（只可能少见 3s 前的旧提示，语义无损失），
+            // 同文案 2s 内去重防连点刷屏。
+            const now = Date.now();
+            const last = showToast._last;
+            if (last && last.msg === message && last.type === (type || 'ok')
+                    && now - last.at < 2000) return;
+            showToast._last = { msg: message, type: type || 'ok', at: now };
+            document.querySelectorAll('.toast').forEach(el => el.remove());
             const toast = document.createElement('div');
             toast.className = 'toast toast-' + (type || 'ok');
             toast.textContent = message;

@@ -25,8 +25,11 @@ jobs:
       - name: Check shell scripts syntax
         run: |
           # 检查所有 shell 脚本语法是否正确
+          # v1.7.12（第 6 轮审计 I-2）：范围从"仅 run.sh"扩到全部 shell——
+          # e2e 脚本是发布硬门禁的执行体，其语法错误过去只能在 CI 跑 e2e
+          # job 时才暴露（且报错形态是运行期怪象而非语法行号），提前拦截
           apt-get update -qq && apt-get install -y -qq shellcheck > /dev/null 2>&1 || true
-          for f in huijian_mqtt_broker/run.sh; do
+          for f in huijian_mqtt_broker/run.sh huijian_mqtt_broker/tests/e2e/*.sh; do
             echo "检查 $f ..."
             bash -n "$f" || exit 1
             shellcheck "$f" || echo "⚠ shellcheck 警告（非阻塞）"
@@ -74,6 +77,14 @@ jobs:
       - name: Verify version consistency
         run: |
           VERSION=$(grep '^version:' huijian_mqtt_broker/config.yaml | head -1 | awk -F'"' '{print $2}')
+          # v1.7.12（第 6 轮审计 I-1）：VERSION 提取失败必须即时失败——旧版
+          # 若 config.yaml 行格式漂移（如引号变化），VERSION 为空串，
+          # 与同样提取失败的 HTML_VER 空串相等"版本一致"假绿过关，
+          # 下游 build/release 全拿空版本号
+          if [ -z "$VERSION" ]; then
+            echo "::error title=config.yaml 版本提取失败::'^version:' 行格式漂移？"
+            exit 1
+          fi
           echo "config.yaml 版本: $VERSION"
           # 检查 index.html 版本一致
           HTML_VER=$(grep "CURRENT_VERSION = '" huijian_mqtt_broker/www/index.html | sed "s/.*CURRENT_VERSION = '\([^']*\)'.*/\1/")
@@ -106,11 +117,22 @@ jobs:
       changelog: ${{ steps.changelog.outputs.changelog }}
     steps:
       - uses: actions/checkout@v4
+        # v1.7.12（审计 I-3）：changelog 兜底路径要 `git log --oneline -10`，
+        # 默认 fetch-depth=1 只能给出 1 条——给 20 条历史
+        with:
+          fetch-depth: 20
 
       - name: Extract version from config.yaml
         id: version
         run: |
           VERSION=$(grep '^version:' huijian_mqtt_broker/config.yaml | head -1 | awk -F'"' '{print $2}')
+          # v1.7.12（第 6 轮审计 I-1）：空版本 fail-fast——prepare 是 build/
+          # manifest/release 三个下游的版本真源，空串会让镜像 tag 成
+          # `:latest`+`:`、Release 名成 "v"，污染仓库不可逆
+          if [ -z "$VERSION" ]; then
+            echo "::error title=config.yaml 版本提取失败::'^version:' 行缺失或格式漂移"
+            exit 1
+          fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "提取到版本号: $VERSION"
 
@@ -386,6 +408,9 @@ jobs:
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
           VERSION: ${{ needs.prepare.outputs.version }}
           COMMIT: ${{ github.sha }}
+          # v1.7.12（第 6 轮审计 I-4）：prepare 已生成过 CHANGELOG 段/兜底
+          # 正文——直传复用，不再两处独立解析（漂移源 + 缺段崩 job）
+          PREPARED: ${{ needs.prepare.outputs.changelog }}
         run: |
           set -eu
           if [ -z "${GITEE_TOKEN:-}" ]; then
@@ -412,11 +437,21 @@ jobs:
           existing = call(f"{api}/releases?access_token={tok}&per_page=100")
           if any(r.get("tag_name") == f"v{ver}" for r in existing):
               print(f"v{ver} Gitee Release 已存在，跳过（幂等）"); sys.exit(0)
-          log = io.open("CHANGELOG.md", encoding="utf-8").read()
-          i = log.index(f"## [{ver}]")
-          rest = log[i + 1:]
-          j = rest.index("## [", 3)  # 下一版本段起点
-          body = log[i:i + 1 + j].strip() + "\n\n---\n完整记录见 GitHub 仓库 CHANGELOG.md 与 Release v%s。" % ver
+          body = ""
+          if os.path.exists("CHANGELOG.md"):
+              log = io.open("CHANGELOG.md", encoding="utf-8").read()
+              if f"## [{ver}]" in log:
+                  i = log.index(f"## [{ver}]")
+                  rest = log[i + 1:]
+                  j = rest.index("## [", 3) if "## [" in rest[3:] else len(rest)
+                  body = log[i:i + 1 + j].strip()
+          if not body:
+              # v1.7.12（审计 I-4）：缺段不再 ValueError 崩 job——优先复用
+              # prepare 产物（含其 git-log 兜底），仍无则给最小说明
+              body = (os.environ.get("PREPARED") or "").strip()
+              if not body:
+                  body = f"## v{ver}\n\n完整变更记录见 GitHub Release v{ver}。"
+          body = body + "\n\n---\n完整记录见 GitHub 仓库 CHANGELOG.md 与 Release v%s。" % ver
           title_line = body.splitlines()[0]
           r = call(f"{api}/releases?access_token={tok}", {
               "tag_name": f"v{ver}", "name": f"v{ver}", "body": body,

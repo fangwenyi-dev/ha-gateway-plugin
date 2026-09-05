@@ -48,8 +48,14 @@ class TestRunshHeredocBackticks:
         旧写法（反引号 password）必报 command not found，新写法 stderr 干净
         ——证明钉桩针对的机制真实存在。"""
         old_src = 'cat <<EOF\n# `password ` 空值行\nEOF\n'
-        r_old = subprocess.run(["bash", "-c", old_src], capture_output=True, text=True)
+        # v1.7.12（第 6 轮审计测试项）：显式 encoding="utf-8"——Windows 默认
+        # cp936 解码 bash 的 UTF-8 输出会让 reader 线程抛 UnicodeDecodeError
+        # （本文件两条 pytest warning 的来源）；断言恰好只碰 ASCII stderr
+        # 才"侥幸通过"，属潜伏脆弱。errors="replace" 双保险。
+        r_old = subprocess.run(["bash", "-c", old_src], capture_output=True,
+                               text=True, encoding="utf-8", errors="replace")
         assert "password: command not found" in r_old.stderr, "复现前提失效（bash 行为变了？）"
         new_src = 'cat <<EOF\n# "password" 空值行\nEOF\n'
-        r_new = subprocess.run(["bash", "-c", new_src], capture_output=True, text=True)
+        r_new = subprocess.run(["bash", "-c", new_src], capture_output=True,
+                               text=True, encoding="utf-8", errors="replace")
         assert r_new.stderr == "" and r_new.returncode == 0

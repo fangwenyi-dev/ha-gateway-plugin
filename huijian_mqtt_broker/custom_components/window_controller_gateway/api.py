@@ -117,7 +117,13 @@ class WindowGatewayDevicesView(http.HomeAssistantView):
             })
 
         if not config_entry_id:
-            return self.json(all_devices)
+            # v1.7.12（第 6 轮审计 L-11）：缺参此前返回全设备注册表——本视图
+            # 语义是"本集成的设备"，把他集成的设备/实体明细整体泄给 Web 调用
+            # 面毫无必要。收紧为仅带本集成 identifiers 的设备（网关+其子设备），
+            # 返回结构不变，对现有消费者零破坏。
+            own = [d for d in all_devices
+                   if any(i[0] == DOMAIN for i in d["identifiers"])]
+            return self.json(own)
 
         parent_ids = {
             d["id"] for d in all_devices if config_entry_id in d["config_entries"]

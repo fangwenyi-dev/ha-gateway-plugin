@@ -157,8 +157,17 @@ class DiscoveryProxy:
             # 与 create_entry 响应之间存在毫秒级竞态——立即一次 + 3s 兜底一次
             # （监听器幂等：同 SN 已配置时 _protocol/心跳再收也只是 no-op）。
             if sn not in self._replayed:
+                # v1.7.12（第 6 轮审计 F7）：发布结果不再丢弃——旧版
+                # check=False + stderr 吞掉 + 返回值弃用，mosquitto_pub 缺失
+                # /broker 拒连时照样打"已重放上报×2"假日志；且 _replayed 在
+                # 发布**前**消费掉该 SN，失败后网关心跳再报也永不重试，
+                # 卡片永远不出。显式 False 才算失败（None=旧测试桩视为成功）。
+                ok1 = self._pub(raw.strip())
+                if ok1 is False:
+                    self._log("[发现代理] 重放发布失败（mosquitto_pub 被拒/不可用），"
+                              "本 SN 不记账，随下一条上报重试")
+                    return
                 self._replayed.add(sn)
-                self._pub(raw.strip())
                 try:
                     self._sleep(3.0)
                     self._pub(raw.strip())
@@ -171,10 +180,15 @@ class DiscoveryProxy:
 
 
 def _pub_factory(broker_argv):
-    def pub(raw_line: str) -> None:
-        subprocess.run(broker_argv + ["-m", raw_line],
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                       timeout=10, check=False)
+    def pub(raw_line: str) -> bool:
+        # v1.7.12（F7）：返回发布成败（returncode 判）供调用方记账/重试
+        try:
+            r = subprocess.run(broker_argv + ["-m", raw_line],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                               timeout=10, check=False)
+            return r.returncode == 0
+        except Exception:
+            return False
     return pub
 
 

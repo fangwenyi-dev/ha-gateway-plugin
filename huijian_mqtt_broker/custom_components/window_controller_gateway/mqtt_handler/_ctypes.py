@@ -64,7 +64,9 @@ class _CtypeHandlersMixin:
                 _LOGGER.info("网关绑定成功: %s", self.gateway_sn)
                 await self.device_manager.update_gateway_status("online")
             else:
-                _LOGGER.error("网关绑定失败，错误码: %d", errcode)
+                # v1.7.12（审计 B-11）：%d 格式化遇字符串 errcode 会抛 TypeError
+                # 打断处理（006/007 同族）——统一 %s
+                _LOGGER.error("网关绑定失败，错误码: %s", errcode)
 
     async def _handle_ctype_002(self, payload, ctype, data):
         """处理协议类型002：网关状态上报
@@ -105,6 +107,16 @@ class _CtypeHandlersMixin:
                         device_sn = device_info.get("sn")
                         if not device_sn:
                             continue
+                        # v1.7.12（审计 B-5）：嵌套 SN 与顶层 P0 守卫对齐——
+                        # 固件可能以 JSON 数字上报，:115 的 startswith 遇 int
+                        # 即 AttributeError（被逐条 except 吞成 error 日志，
+                        # 该设备整条丢弃）。统一归一为 str 再入后续全部判定。
+                        if isinstance(device_sn, bool) or not isinstance(
+                            device_sn, (str, int, float)
+                        ):
+                            _LOGGER.warning("002 设备 SN 类型非法，跳过: %r", device_sn)
+                            continue
+                        device_sn = str(device_sn)
                         
                         # 跳过已处理的设备
                         if device_sn in processed_sns:
@@ -378,7 +390,27 @@ class _CtypeHandlersMixin:
     async def _handle_ctype_005_inner(self, payload, ctype, data):
         """005 处理体（异常由 _handle_ctype_005 兜底，ack 由其 finally 保证）"""
         device_sn = data.get("sn")
+        # v1.7.12（审计 B-5）：嵌套 SN 类型归一，与 002/顶层 P0 守卫同型
+        if isinstance(device_sn, bool) or (
+            device_sn is not None and not isinstance(device_sn, (str, int, float))
+        ):
+            _LOGGER.warning("005 设备 SN 类型非法，忽略本条: %r", device_sn)
+            return
+        if device_sn is not None:
+            device_sn = str(device_sn)
         if device_sn:
+            # v1.7.12（第 6 轮审计 B-6）：auto_discovery 门禁补齐——002 路径
+            # 有门（:135），但未知设备的首条 005 经 update_device_status 的
+            # "不存在则自动添加"分支无条件入库，勾选关闭后照样冒设备。
+            # 仅拦"未知设备自动添加"，已登记设备的正常上报不受影响；
+            # ack 由外层 finally 保证照发（协议契约：005 必 ack）。
+            if (self.device_manager.get_device(device_sn) is None
+                    and not self._auto_discovery_enabled()):
+                _LOGGER.info(
+                    "auto_discovery 已关闭，忽略未知设备上报（ack 照发）: %s",
+                    device_sn,
+                )
+                return
             # 解析设备上报的状态
             # 不使用 "unknown" 作为默认值，避免仅上报电池电压时覆盖设备已有的开/关状态。
             # 当 status 为 None 时，update_device_status 不会覆盖设备的状态字段，
@@ -411,7 +443,16 @@ class _CtypeHandlersMixin:
             # 处理attrs数组
             if "attrs" in data:
                 attrs = data["attrs"]
+                # v1.7.12（审计 B-7）：attrs 非列表/元素非对象逐条守卫——
+                # 单个毒元素（null/字符串混入）旧版经 attr.get 抛 AttributeError
+                # 连坐整批 attrs 丢弃（外层兜底只保 ack），现逐条跳过留痕。
+                if not isinstance(attrs, list):
+                    _LOGGER.warning("005 attrs 非数组，忽略: %r", attrs)
+                    attrs = []
                 for attr in attrs:
+                    if not isinstance(attr, dict):
+                        _LOGGER.warning("005 attrs 含非对象元素，跳过: %r", attr)
+                        continue
                     attribute = attr.get("attribute")
                     value = attr.get("value")
                     
@@ -476,7 +517,7 @@ class _CtypeHandlersMixin:
         if errcode == 0:
             _LOGGER.debug("006 命令执行成功: %s", data)
         else:
-            _LOGGER.warning("006 命令执行失败，错误码: %d, data: %s", errcode, data)
+            _LOGGER.warning("006 命令执行失败，错误码: %s, data: %s", errcode, data)
 
     async def _handle_ctype_007(self, payload, ctype, data):
         """处理协议类型007：HA 主动发起命令的网关回复
@@ -490,4 +531,4 @@ class _CtypeHandlersMixin:
         if errcode == 0:
             _LOGGER.debug("007 命令执行成功: %s", data)
         else:
-            _LOGGER.warning("007 命令执行失败，错误码: %d, data: %s", errcode, data)
+            _LOGGER.warning("007 命令执行失败，错误码: %s, data: %s", errcode, data)

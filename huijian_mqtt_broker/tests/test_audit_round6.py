@@ -549,6 +549,10 @@ class TestNoSnInstall:
     async def test_second_no_sn_entry_aborts(self):
         flow = object.__new__(cf_mod.ConfigFlow)
         flow.context = {}
+        # v1.7.12（CF-F1）：空 SN 分支现在创建/abort 前先清 unique_id——补桩
+        async def _set_uid(uid, raise_on_progress=True):
+            return None
+        flow.async_set_unique_id = _set_uid
         existing = SimpleNamespace(entry_id="e0", data={}, options={})
         flow.hass = SimpleNamespace(
             config_entries=SimpleNamespace(async_entries=lambda d: [existing]))
@@ -564,12 +568,21 @@ class TestNoSnInstall:
         monkeypatch.setattr(cf_mod, "ensure_mqtt_connection", boom)
         flow = object.__new__(cf_mod.ConfigFlow)
         flow.context = {}
+        # v1.7.12（第 6 轮审计 CF-F1 钉桩）：空 SN 引导条目创建前必须清除流
+        # 实例上的 unique_id——否则"输 SN→测试失败→返回修改→清空提交"会造出
+        # data={} 但继承该 SN unique_id 的幽灵占坑条目，SN 后续发现/手动添加
+        # 永久 already_configured 且界面无从看出
+        cleared = []
+        async def _set_uid(uid, raise_on_progress=True):
+            cleared.append(uid)
+        flow.async_set_unique_id = _set_uid
         flow.hass = SimpleNamespace(
             config_entries=SimpleNamespace(async_entries=lambda d: []))
         flow.async_create_entry = lambda title, data: {"type": "create", "data": data}
         res = await flow.async_step_user({c.CONF_GATEWAY_SN: "",
                                           c.CONF_GATEWAY_NAME: ""})
         assert res["type"] == "create", "引导异常不得打穿『不阻塞安装』承诺"
+        assert cleared == [None], "空 SN 分支必须 async_set_unique_id(None)（CF-F1）"
 
 
 # ============ B-LOW10：端口保留位 + strings ============

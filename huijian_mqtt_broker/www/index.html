@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#030712">
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='0.9em' font-size='90'%3E%F0%9F%93%A1%3C/text%3E%3C/svg%3E">
     <title>慧尖 LoRa 网关</title>
-    <link rel="stylesheet" href="css/huijian.css?v=1.7.11">
+    <link rel="stylesheet" href="css/huijian.css?v=1.7.12">
 </head>
 <body>
     <!-- v1.6.27「星辰大海」背景层（对齐小程序 UI 标准 0d2200c5）：
@@ -52,7 +52,11 @@
             </div>
             <div class="status-item">
                 <span class="dot dot-warn"></span>
-                <span class="label">HA MQTT</span>
+                <!-- v1.7.12（第 6 轮审计 M-2）：文案订正——该值统计 :2022 上
+                     全部 MQTT 客户端（LoRa 网关/HA 集成/桥/z2m 混计），旧标签
+                     "HA MQTT" 名不副实：HA 条目断了而网关还连着时显示绿灯，
+                     误导 mqtt_not_available 类排障。id 保持不变（JS 契约）。 -->
+                <span class="label">MQTT 客户端</span>
                 <span class="value" id="haMqttStatus">检测中</span>
             </div>
         </div>
@@ -102,8 +106,8 @@
     <!-- v1.6.25 Web UI 三文件化：css/js 外置（相对路径，兼容 HA ingress 前缀）。
          CURRENT_VERSION 按测试锚留在本文件；huijian.js 复用此全局 let 绑定。
          v1.6.27 新增 starsky.js：纯装饰星野生成器（固定种子，零依赖零网络）。 -->
-    <script>let CURRENT_VERSION = '1.7.11';</script>
-    <script src="js/starsky.js?v=1.7.11"></script>
-    <script src="js/huijian.js?v=1.7.11"></script>
+    <script>let CURRENT_VERSION = '1.7.12';</script>
+    <script src="js/starsky.js?v=1.7.12"></script>
+    <script src="js/huijian.js?v=1.7.12"></script>
 </body>
 </html>

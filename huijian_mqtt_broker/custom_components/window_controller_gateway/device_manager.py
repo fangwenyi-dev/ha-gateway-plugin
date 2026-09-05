@@ -163,7 +163,17 @@ class WindowControllerDeviceManager:
         for callback in self._device_added_callbacks:
             tasks.append(callback(device_sn, device_name, device_type))
         if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+            # v1.7.12（第 6 轮审计 DM-F4，两路审计员独立撞见）：
+            # return_exceptions=True 的结果此前整体丢弃——任一平台建实体协程
+            # 抛错=该设备某平台实体永久缺失且零日志，与 v1.6.12 #2 在
+            # _batch_process_tasks 已修的形态同族漏改。逐条记录。
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for r in results:
+                if isinstance(r, BaseException):
+                    _LOGGER.error(
+                        "设备添加回调异常（该平台实体可能缺失，设备=%s）: %r",
+                        device_sn, r,
+                    )
 
     def _spawn_background_task(self, coro, name=None):
         """创建受追踪的后台任务，任务完成时自动从列表移除，避免无限增长"""
@@ -590,6 +600,19 @@ class WindowControllerDeviceManager:
             except Exception as e:
                 _LOGGER.error("更新设备注册信息失败: %s", e)
             
+            # v1.7.12（第 6 轮审计 DM-F2 自愈）：缓存已存在的设备若映射曾随
+            # 注册表瞬时异常缺失（本文件旧版失败分支不写映射的遗留形态），
+            # 在此补写归属（不覆盖他网关既有映射），杜绝重启后设备蒸发
+            try:
+                _mapping = self.hass.data[DOMAIN].setdefault(
+                    DEVICE_TO_GATEWAY_MAPPING, {})
+                if device_sn not in _mapping:
+                    _mapping[device_sn] = self.gateway_sn
+                    self._save_device_to_gateway_mapping()
+                    _LOGGER.info("设备 %s 映射缺失，已在存在分支自愈补写", device_sn)
+            except Exception as me:  # noqa: BLE001
+                _LOGGER.warning("设备 %s 映射自愈失败: %s", device_sn, me)
+
             # 即使设备已存在，也要调用回调，确保实体被重新创建
             await self._notify_device_added_callbacks(device_sn, device_name_with_sn, device_type)
             _LOGGER.info("设备已存在，重新触发回调: %s", device_sn)
@@ -600,10 +623,26 @@ class WindowControllerDeviceManager:
             "name": device_name_with_sn,
             "type": device_type,
             "status": "connected",
-            "attributes": {}
+            "attributes": {},
+            # v1.7.12（审计 DM-F1 同族收口）：创建即新鲜——003 绑定等设备
+            # 入库后可能迟迟没有首条 005/002 更新，缺 last_update 会被
+            # sensor/cover 的"None=新鲜"判据永久豁免时效契约
+            "last_update": time.time()
         }
         
         self.devices[device_sn] = device_info
+
+        # v1.7.12（第 6 轮审计 DM-F2）：映射随缓存立即写入——映射是"该设备
+        # 归属本网关"的权威事实，注册表创建失败（下方 except/早退分支）不应
+        # 连带丢失归属；旧版只在注册表成功后写映射，一次瞬时异常即造成
+        # 缓存/实体有、映射无，重启按映射加载时设备静默蒸发成孤儿实体。
+        try:
+            _mapping = self.hass.data[DOMAIN].setdefault(
+                DEVICE_TO_GATEWAY_MAPPING, {})
+            _mapping[device_sn] = self.gateway_sn
+            self._save_device_to_gateway_mapping()
+        except Exception as me:  # noqa: BLE001
+            _LOGGER.warning("设备 %s 映射即时写入失败: %s", device_sn, me)
         
         # 创建设备注册
         device = None
@@ -642,9 +681,31 @@ class WindowControllerDeviceManager:
             return device_sn
         
         if device:
+            # v1.7.12（第 6 轮审计 DM-F3）：入口名单检查与这里的收尾之间隔着
+            # 注册表 await 让出点——若用户删除恰好发生在窗口内（remove_device
+            # 已完成：缓存删/名单加/注册表删），旧版会把映射重写、注册表复活、
+            # 并从手动删除名单 discard，用户删除被整体无声回滚成幽灵设备。
+            # 出口复检：非手动配对/非 force 的添加在名单重新命中时判定为竞态
+            # 受害者，回滚本次添加（缓存/映射/注册表），删除语义保持。
+            if (device_sn in self._manually_removed_devices
+                    and not is_manual_pairing and not force):
+                _LOGGER.warning("设备 %s 在添加过程中被用户删除（竞态），回滚本次添加", device_sn)
+                self.devices.pop(device_sn, None)
+                try:
+                    _mapping = self.hass.data[DOMAIN].get(DEVICE_TO_GATEWAY_MAPPING) or {}
+                    if _mapping.get(device_sn) == self.gateway_sn:
+                        _mapping.pop(device_sn, None)
+                        self._save_device_to_gateway_mapping()
+                    from .utils import call_registry_method as _call_reg
+                    await _call_reg(device_registry.async_remove_device, device.id)
+                except Exception as re_err:  # noqa: BLE001
+                    _LOGGER.warning("竞态回滚注册表条目失败（可能已被级联删除）: %s", re_err)
+                return None
+
             _LOGGER.info("开窗器设备添加成功: %s (%s)", device_name_with_sn, device_sn)
             
             # 将设备SN和网关SN的映射关系存储到hass.data中
+            # （v1.7.12 DM-F2 后此写入已在缓存落地时先行完成，此处幂等确认）
             if DEVICE_TO_GATEWAY_MAPPING not in self.hass.data[DOMAIN]:
                 self.hass.data[DOMAIN][DEVICE_TO_GATEWAY_MAPPING] = {}
             self.hass.data[DOMAIN][DEVICE_TO_GATEWAY_MAPPING][device_sn] = self.gateway_sn
@@ -652,6 +713,7 @@ class WindowControllerDeviceManager:
             self._save_device_to_gateway_mapping()
             
             # 如果设备在手动删除列表中，添加成功后从列表中移除
+            # （走到这里且未被上方竞态回滚的，必是手动配对/force 的有意重添加）
             if device_sn in self._manually_removed_devices:
                 self._manually_removed_devices.discard(device_sn)
                 self._save_manually_removed_devices()
@@ -831,6 +893,12 @@ class WindowControllerDeviceManager:
                 if device_sn in self.devices:
                     if status is not None:
                         self.devices[device_sn]["status"] = status
+                    # v1.7.12（第 6 轮审计 DM-F1）：与首分支（:807）对齐补写
+                    # 时效戳——旧版此处漏写，而 sensor/cover 判据是
+                    # "last_update is None → 新鲜"，经此路径入库、此后不再
+                    # 上报的设备（配对即断电）状态/电量永久冻结永不超时，
+                    # v1.6.12 #7 的 15 分钟时效契约对该形态恒不生效。
+                    self.devices[device_sn]["last_update"] = time.time()
                     if attributes:
                         if "attributes" not in self.devices[device_sn]:
                             self.devices[device_sn]["attributes"] = {}

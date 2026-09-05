@@ -81,7 +81,8 @@
       "required": "网关序列号不能为空",
       "invalid_sn_format": "序列号格式无效，必须至少10位字母数字",
       "already_configured": "该网关已被其他配置条目使用",
-      "invalid_ws_token": "令牌无效：需 8-62 位字母/数字/下划线/连字符（留空表示不认证）"
+      "invalid_ws_token": "令牌无效：需 8-62 位字母/数字/下划线/连字符（留空表示不认证）",
+      "ws_port_reserved": "This port is used by the add-on itself (2022=MQTT broker / 8099=Web UI / 1883=common external broker); pick another"
     }
   },
   "services": {
