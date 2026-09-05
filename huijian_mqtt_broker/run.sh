@@ -649,11 +649,12 @@ fi
 # MAX_MOSQUITTO_RESTARTS 防护）；1883 消失且桥在→删段重启。冷却 120s 防抖。
 BRIDGE_MARKER="AUTO-COEXIST-BRIDGE"
 MOSQ_CONF="/etc/mosquitto/mosquitto.conf"
-# v1.6.26（第八轮审计 D-3）：共存桥总开关（默认开=保持 v1.6.24"零配置
-# 共存"语义）。判据只认本机 :1883 LISTEN，宿主上任何第三方进程占该口都会
-# 被当官方 broker 搭桥（out 腿送 z2m 控制命令、in 腿注入 discovery——桥
-# 消息不受本地 ACL 约束）。给谨慎用户一个显式熔断：置 false 后不建新桥，
-# 已存在的桥由对账循环自动拆除。
+# v1.6.26（第八轮审计 D-3）：共存桥总开关（v1.7.13 起默认关，用户定案：
+# 纯慧尖用户被匿名桥 30s 被拒噪音困扰，零配置共存语义在官方 7.x 强制认证
+# 下名不副实；需要 z2m 共存时用户在配置页重开+填官方凭据）。判据只认本机
+# :1883 LISTEN，宿主上任何第三方进程占该口都会被当官方 broker 搭桥（out
+# 腿送 z2m 控制命令、in 腿注入 discovery——桥消息不受本地 ACL 约束），故
+# 开闸须谨慎。BRIDGE_ENABLED=false 时不建新桥，已存在的桥由对账循环自动拆除。
 BRIDGE_ENABLED=$(bashio::config 'coexist_bridge_enabled')
 # 官方 broker 侧桥凭据（可选，见桥块注释）。净化防换行注入——加载项配置
 # 值直通 heredoc 会允许在 mosquitto.conf 里伪造任意配置行

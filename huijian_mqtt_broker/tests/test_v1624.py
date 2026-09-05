@@ -229,10 +229,13 @@ def test_bridge_creds_pairwise_no_empty_password_line():
 def test_bridge_enabled_master_switch():
     """D-3：误桥熔断开关——判据仅"本机 :1883 LISTEN"，宿主第三方进程占口
     也会被搭桥（out 送控制命令/in 注 discovery，不受本地 ACL 约束）。
-    钉桩：config.yaml 默认 true + schema bool + run.sh 两处决策点全部
-    门控（对账循环 + 初启路径），false 时走 else 分支自动拆已存桥。"""
+    钉桩：v1.7.13 用户定案默认 **false**（纯慧尖用户不再被匿名桥 30s 被拒
+    噪音波及；官方 7.x 强制认证下"零配置共存"名不副实）+ schema bool +
+    run.sh 两处决策点全部门控（对账循环 + 初启路径），false 时走 else
+    分支自动拆已存桥。要共存：配置页重开开关+填官方凭据。"""
     cfg = (RUN.parent / "config.yaml").read_text(encoding="utf-8")
-    assert "coexist_bridge_enabled: true" in cfg, "开关默认 true（保持零配置共存语义）"
+    assert "coexist_bridge_enabled: false" in cfg, \
+        "开关默认 false（v1.7.13 定案：桥搭能力保留但默认停用）"
     assert re.search(r"coexist_bridge_enabled:\s*bool", cfg), "schema 须声明 bool"
     gated = re.findall(
         r'\[\s*"\$\{BRIDGE_ENABLED\}"\s*=\s*"true"\s*\]\s*&&\s*_bridge_peer_up', TEXT)

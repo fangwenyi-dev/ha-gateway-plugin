@@ -3,6 +3,26 @@
 所有版本变更记录在此文件中。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.7.13] - 2026-09-08
+
+### Changed
+- **共存桥默认停用（用户定案："先把搭桥注释掉，以后用再说"）**：
+  `coexist_bridge_enabled` 默认值 true → **false**。官方 Mosquitto 7.x
+  强制认证下，未配桥凭据的自动搭桥退化为对端每 30 秒一条
+  `not authorised` 日志风暴（慧尖自身无恙、纯噪音）；且判据"本机 :1883
+  在听即搭桥"会把宿主上任何第三方 1883 服务误当官方 broker。默认关后：
+  不建新桥，**已写入的桥段由对账循环自动拆除**（升级重启慧尖即清净）。
+- 能力零损失：将来需要 zigbee2mqtt 与慧尖共存时，在加载项配置页重新
+  勾选打开本开关，并成对填写 `coexist_official_user` /
+  `coexist_official_password`（官方 broker 自己的用户）即可恢复桥；
+  z2m 亦可直接连慧尖内置 :2022（预置账号 huijian_z2m，默认关桥后
+  该直连路径不受影响）。
+- 注释同步订正：run.sh 桥段头部"默认开=零配置共存"叙述改为反映新
+  默认语义；tests/test_v1624.py 默认值钉桩随定案更新。
+
+### Tests
+- 全量回归通过（pytest / bash -n run.sh / compileall）
+
 ## [1.7.12] - 2026-09-08
 
 ### Added
