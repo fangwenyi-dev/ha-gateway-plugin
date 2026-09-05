@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#030712">
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='0.9em' font-size='90'%3E%F0%9F%93%A1%3C/text%3E%3C/svg%3E">
     <title>慧尖 LoRa 网关</title>
-    <link rel="stylesheet" href="css/huijian.css?v=1.7.13">
+    <link rel="stylesheet" href="css/huijian.css?v=1.7.14">
 </head>
 <body>
     <!-- v1.6.27「星辰大海」背景层（对齐小程序 UI 标准 0d2200c5）：
@@ -91,6 +91,24 @@
         </div>
     </div>
 
+    <details class="card" id="configGuideCard" open>
+        <summary class="card-title" style="cursor:pointer;">插件配置项中文说明（点击标题可收起）</summary>
+        <div class="info-box" style="margin-top:8px;">
+            <p>「设置 → 加载项 → 慧尖 → <b>配置</b>」页里各项含义如下（Supervisor 表单只显示英文键名、无字段说明机制，以此表为准）：</p>
+            <table class="cfg-table" style="width:100%;border-collapse:collapse;font-size:14px;">
+                <tr style="border-bottom:1px solid rgba(255,255,255,.15);"><td style="padding:6px;"><code>username</code></td><td style="padding:6px;">MQTT 用户名。<b>无需修改</b>——LoRa 网关固件内置 huijian，改动会被启动时自动恢复默认（改了只会把自家网关挡在门外）。</td></tr>
+                <tr style="border-bottom:1px solid rgba(255,255,255,.15);"><td style="padding:6px;"><code>password</code></td><td style="padding:6px;">MQTT 密码。<b>无需修改</b>——同上，固件内置 huijian2022，改动自动恢复。</td></tr>
+                <tr style="border-bottom:1px solid rgba(255,255,255,.15);"><td style="padding:6px;"><code>auto_setup_ha_mqtt</code></td><td style="padding:6px;">自动配置 HA 的「MQTT 集成」指向慧尖内置 broker（:2022）。<b>建议保持开启</b>；关闭后需自行在 HA 里配置 MQTT 集成，慧尖网关将失联。</td></tr>
+                <tr style="border-bottom:1px solid rgba(255,255,255,.15);"><td style="padding:6px;"><code>install_integration</code></td><td style="padding:6px;">自动安装/更新慧尖集成代码。<b>建议保持开启</b>（升级加载项后集成随重启自动落新版）。</td></tr>
+                <tr style="border-bottom:1px solid rgba(255,255,255,.15);"><td style="padding:6px;"><code>coexist_bridge_enabled</code></td><td style="padding:6px;"><b>zigbee2mqtt 共存桥（v1.7.13 起默认关）</b>。开启后慧尖探测本机 :1883，发现官方「Mosquitto broker」加载项即自动搭桥（只桥接 z2m 相关主题），让 z2m 与慧尖共存；官方 broker 卸载后桥自动拆除。官方 7.x 起强制认证，开启时须<b>成对</b>填写下面两项凭据，否则桥连不上（仅对端日志出现 30 秒节拍的 not authorised，慧尖自身功能无恙）。只用慧尖网关的用户保持关闭即可。</td></tr>
+                <tr style="border-bottom:1px solid rgba(255,255,255,.15);"><td style="padding:6px;"><code>coexist_official_user</code></td><td style="padding:6px;">共存桥登录<b>官方</b> Mosquitto 的用户名——是官方加载项自己「配置」页添加的账号，<b>不要</b>填 huijian/huijian2022（官方用户库里没有它）。</td></tr>
+                <tr style="border-bottom:1px solid rgba(255,255,255,.15);"><td style="padding:6px;"><code>coexist_official_password</code></td><td style="padding:6px;">上面官方账号的密码。两项必须一起填，只填一项会按匿名桥降级并打警告。</td></tr>
+                <tr><td style="padding:6px;"><code>fast_auto_discovery</code></td><td style="padding:6px;">快速自动发现（v1.7.11 引入）。开启后首次启动的慧尖网关上报会<b>自动完成配置</b>（零条目时首台全自动、第二台起弹卡片确认）。建议保持开启；关闭后需手动在「集成」页添加网关。</td></tr>
+            </table>
+            <p style="opacity:.75;margin-top:8px;">改完任何一项后：点「保存」→「重启」加载项生效。zigbee2mqtt 用户也可不经官方 broker，直连慧尖内置 :2022（账号 huijian_z2m，详见 README）。</p>
+        </div>
+    </details>
+
     <div class="card" id="updateCard" style="display:none;">
         <div class="card-title">版本更新</div>
         <div id="updateContent"></div>
@@ -106,8 +124,8 @@
     <!-- v1.6.25 Web UI 三文件化：css/js 外置（相对路径，兼容 HA ingress 前缀）。
          CURRENT_VERSION 按测试锚留在本文件；huijian.js 复用此全局 let 绑定。
          v1.6.27 新增 starsky.js：纯装饰星野生成器（固定种子，零依赖零网络）。 -->
-    <script>let CURRENT_VERSION = '1.7.13';</script>
-    <script src="js/starsky.js?v=1.7.13"></script>
-    <script src="js/huijian.js?v=1.7.13"></script>
+    <script>let CURRENT_VERSION = '1.7.14';</script>
+    <script src="js/starsky.js?v=1.7.14"></script>
+    <script src="js/huijian.js?v=1.7.14"></script>
 </body>
 </html>

@@ -647,3 +647,49 @@ input[type="range"]:focus-visible { outline: 2px solid var(--primary-light); }
     .nebula::after  { animation-duration: 50s !important; animation-iteration-count: infinite !important; }
     .nebula3        { animation-duration: 60s !important; animation-iteration-count: infinite !important; }
 }
+
+/* v1.7.14：插件配置项中文说明卡（index.html #configGuideCard）
+   ——卡片体系是 v1.6.7 美化时新建的，早于本卡，故 code/表格样式都缺。
+   此前 <code> 仅靠浏览器默认等宽字体撑过 M-2 之前的页面，实际无对比度
+   处理；本卡首次密集使用 code，补齐可读性（继承正文色，避免 UA 默认
+   浅色底在深色主题上刺眼）。 */
+.card code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    color: var(--accent);
+    word-break: break-all;
+}
+.cfg-table {
+    line-height: 1.7;
+}
+.cfg-table tr {
+    border-bottom: 1px solid var(--border);
+}
+.cfg-table tr:last-child {
+    border-bottom: none;
+}
+.cfg-table td {
+    padding: 7px 6px;
+    vertical-align: top;
+}
+.cfg-table td:first-child {
+    white-space: nowrap;
+    width: 1%;
+}
+summary.card-title {
+    cursor: pointer;
+    list-style: none;
+    user-select: none;
+}
+summary.card-title::-webkit-details-marker {
+    display: none;
+}
+summary.card-title::before {
+    content: '▸';
+    display: inline-block;
+    margin-right: 6px;
+    transition: transform .15s ease;
+    color: var(--accent);
+}
+details[open] > summary.card-title::before {
+    transform: rotate(90deg);
+}

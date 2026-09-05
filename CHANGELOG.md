@@ -3,6 +3,25 @@
 所有版本变更记录在此文件中。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.7.14] - 2026-09-08
+
+### Added
+- **Web UI 新增「插件配置项中文说明」卡**：Supervisor 配置表单只显示英文
+  键名（平台无字段说明机制，schema 仅支持类型声明），现于慧尖 Web UI
+  连接信息卡下方逐项中文讲清 8 个配置项：username/password（固件内置、
+  改会自动恢复，勿动）、auto_setup_ha_mqtt、install_integration、
+  coexist_bridge_enabled（v1.7.13 默认关的由来与开启方法）、
+  coexist_official_user/password（须填官方自己的账号、成对填写）、
+  fast_auto_discovery。可折叠（details/summary 原生零 JS），改完配置
+  同屏即查，不用翻 README。
+- 防漂移钉桩 `tests/test_v1714_config_guide.py`：schema 新增配置项漏进
+  说明卡、说明卡引用不存在键、共存桥"默认关"定案叙述回潮——任一情形
+  CI 直接红。
+
+### Changed
+- huijian.css 补 `code` 等宽可读样式与 `.cfg-table` 行分隔、折叠卡
+  caret（v1.6.7 卡片体系建成时无 code 场景，本卡首次密集使用）。
+
 ## [1.7.13] - 2026-09-08
 
 ### Changed
