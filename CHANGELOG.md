@@ -3,6 +3,46 @@
 所有版本变更记录在此文件中。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.7.11] - 2026-09-07
+
+### Added
+- **快速自动发现（`fast_auto_discovery`，默认开）**：修复结构性缺口——全新
+  HA（从未添加过慧尖集成、零 config entry）没有任何 `gateway/rpt_rsp` 订阅者
+  （心跳监听器挂「无 SN 等待条目」、其它网关发现挂「已配置条目」，两者都要求
+  条目先存在），网关上报再多也没有耳朵听，发现卡片永不出现，只能手动填 SN。
+  现由加载项容器内新增 `gateway_discovery_proxy.py` 补位：长驻订阅上报，捕获
+  001/002/005 后若集成尚无任何条目，经 Supervisor API 创建一个 gateway_sn 留空
+  的「等待模式」条目（集成既有设计，零功能耳朵），并重放原报文一次——此后
+  **首台网关全自动配置完成**（心跳监听器 → 发现链 3.5「自动填充空条目」，
+  网关+子设备直接注册，无需任何点击）；**第二台起弹标准发现卡片**由用户确认
+  （无空条目可填时走 config flow，unique_id 幂等）。代理仅做装耳朵+重放各一
+  次/SN，网关配对确认权、多网关去重、忽略语义全部复用集成既有代码。真栈
+  A–E E2E 全绿（`tests/e2e/fast_discovery_e2e.sh`，12 项断言：A 无代理 10 连发
+  0 条目 → B 1 条上报全自动配齐（网关+子设备入注册表）→ C 风暴 30 连发恒 1
+  条目 2 设备 → D 第二 SN 出卡片且不自动建条目 → E 最脏环境：慧尖+MQTT 条目
+  全删后 1 条上报，MQTT 条目被自动重建、整链仍自动配齐）。
+- 集成新增 `_platforms_forwarded` 运行时标记（配套修复见 Fixed）。
+
+### Fixed
+- **等待模式条目 reload 平台卸载 ERROR 风暴**（真栈实锤，代理使其变主路径后
+  暴露）：`async_unload_entry`/`_cleanup_partial_setup` 硬编码对 5 个平台调
+  `async_unload_platforms`，而 awaiting 条目从未 forward 过任何平台——HA≥2024
+  平台组件对 never-loaded 条目抛 `ValueError: Config entry was never loaded!`，
+  每次 reload 刷 5 条 ERROR traceback（历史版本等待模式条目现场几乎不存在、
+  自动填充链从未走完过，故未暴露）。现以 `_platforms_forwarded` 为门禁。
+- **发现链 3.5 自动填充双 reload 竞态**：`async_update_entry` 本就经 update
+  listener 触发 reload，显式 `async_reload` 再叠一次——交错竞态。移除显式
+  reload，与 v1.6.19 `_migrate_devices_async` 定案口径统一。
+- **等待模式条目缺 MQTT bootstrap**（相位 E 真栈实锤修复）：干净客户机
+  （从未装过官方 Mosquitto、HA 无 MQTT 条目）上，此前只有 config_flow
+  （手动添加/卡片确认）会驱动内置 broker 引导——代理建的零交互等待条目
+  setup 后心跳武装等 120s 超时，自动发现链静默断掉。现 awaiting 分支
+  setup 尽力调用 `ensure_mqtt_connection`（无标记文件时本就 no-op，不劫持
+  非一体化安装），E2E 实证「慧尖+MQTT 条目全删」起点也能自动重建 MQTT
+  条目并整链配齐。
+- 新增回归：`tests/test_unload_awaiting_v1711.py`（5 项，含逐字复刻 HA
+  never-loaded 行为的假平台组件）+ `tests/test_discovery_proxy.py`（21 项）。
+
 ## [1.7.10] - 2026-09-07
 
 ### Fixed

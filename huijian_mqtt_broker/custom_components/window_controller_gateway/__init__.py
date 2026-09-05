@@ -142,6 +142,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 except Exception as e:
                     _LOGGER.debug("心跳监听器处理消息出错: %s", e)
 
+            # v1.7.11：awaiting 条目自身也要驱动 MQTT bootstrap——客户可能
+            # 从未走过 config_flow（快速发现代理建的正是这种零交互等待条目），
+            # 干净主机上 mqtt 条目不存在时心跳监听器会等 120s 超时失效，
+            # 整条自动发现链静默断掉。语义与 config_flow 空 SN 分支同款：
+            # 尽力而为，失败不阻塞（稍后就绪即可，武装任务会等到）。
+            try:
+                from .mqtt_bootstrap import ensure_mqtt_connection
+                await ensure_mqtt_connection(hass)
+            except ConfigEntryNotReady:
+                pass  # broker 稍后就绪（加载项启动竞态窗口），武装任务兜底
+            except Exception as e:  # noqa: BLE001
+                _LOGGER.warning("等待模式 MQTT 引导异常（不阻塞，后台武装兜底）: %s", e)
+
             if is_mqtt_loaded(hass):
                 from homeassistant.components import mqtt as mqtt_comp
                 _unsub_heartbeat = await mqtt_comp.async_subscribe(
@@ -335,6 +348,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # 设置平台（快速返回，不等待实体创建完成）
         _LOGGER.debug("正在设置前端平台组件...")
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+        # v1.7.11：记录「本条目真的 forward 过平台」——async_unload_entry /
+        # _cleanup_partial_setup 以此决定要不要按 PLATFORMS 卸载。awaiting
+        # 条目从不 forward，硬编码卸载会让 HA≥2024 的平台组件对 never-loaded
+        # 条目抛 ValueError "Config entry was never loaded!"，每个平台打一条
+        # ERROR traceback（真栈实锤：代理自动填充触发的首个 reload 刷屏）。
+        hass.data[DOMAIN][entry.entry_id]["_platforms_forwarded"] = True
 
         # 监听HA停止事件
         hass.data[DOMAIN][entry.entry_id]["_stop_unsub"] = hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _make_shutdown_handler(hass, entry))
@@ -417,13 +436,16 @@ async def _cleanup_partial_setup(mqtt_handler, device_manager, unsub_listeners,
             _LOGGER.debug("取消监听器异常: %s", e)
     # v1.6.26（第八轮审计 A-1B）：forward 之后（:286 起）才抛异常的失败路径，
     # 5 个平台已加载——不清则僵尸实体持已 cleanup 的 manager/handler 引用，
-    # "存在但永不更新"。对 forward 之前的失败本调用是安全 no-op（见本文件
-    # "PLATFORMS 对未加载平台卸载是安全 no-op" 定案注释）。
+    # "存在但永不更新"。v1.7.11 起以 _platforms_forwarded 为门禁：forward
+    # 之前的失败（含 awaiting 分支复用清理）平台从未加载，HA 平台组件对
+    # never-loaded 条目抛 ValueError 刷 ERROR traceback，必须跳过。
     if hass is not None and entry is not None:
-        try:
-            await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
-        except Exception as e:
-            _LOGGER.debug("失败清理时卸载平台异常: %s", e)
+        _rt = hass.data.get(DOMAIN, {}).get(entry.entry_id) or {}
+        if _rt.get("_platforms_forwarded"):
+            try:
+                await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+            except Exception as e:
+                _LOGGER.debug("失败清理时卸载平台异常: %s", e)
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """卸载配置条目"""
@@ -495,13 +517,18 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 _LOGGER.warning("停止MQTT后台检查任务时出错: %s", e)
                 unload_successful = False
 
-    # 3. 卸载平台实体
-    try:
-        await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
-        _LOGGER.info("平台实体卸载完成")
-    except Exception as e:
-        _LOGGER.error("卸载平台时出错: %s", e)
-        unload_successful = False
+    # 3. 卸载平台实体（v1.7.11：仅对真 forward 过平台的条目执行——
+    # awaiting 条目从未加载任何平台，强卸 PLATFORMS 会被 HA 平台组件对
+    # never-loaded 条目抛 ValueError，每平台一条 ERROR traceback）
+    if data.get("_platforms_forwarded"):
+        try:
+            await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+            _LOGGER.info("平台实体卸载完成")
+        except Exception as e:
+            _LOGGER.error("卸载平台时出错: %s", e)
+            unload_successful = False
+    else:
+        _LOGGER.debug("本条目未 forward 平台（awaiting），跳过平台卸载")
 
     # 4. 清理MQTT处理器
     try:

@@ -81,8 +81,13 @@ async def async_discover_gateway(hass: HomeAssistant, gateway_sn: str, gateway_n
                 CONF_GATEWAY_SN: gateway_sn,
                 CONF_GATEWAY_NAME: entry.data.get(CONF_GATEWAY_NAME, gateway_name),
             }
+            # v1.7.11：async_update_entry 会经 add_update_listener 触发
+            # async_reload（异步任务），不可再显式 async_reload——双 reload
+            # 并发竞态（真栈实锤：交错两次 reload 使 awaiting 条目 setup 阶段
+            # 就加载的 sensor/cover 等平台被重复卸载，打出 "Config entry was
+            # never loaded!" ValueError 刷屏）。与 _migrate_devices_async
+            # （:684 注释）同口径：只 update，让 listener 单驱动 reload。
             hass.config_entries.async_update_entry(entry, data=new_data)
-            await hass.config_entries.async_reload(entry.entry_id)
             return
     
     # 4. 检查网关是否已在设备注册表中

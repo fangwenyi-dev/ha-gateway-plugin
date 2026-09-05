@@ -14,6 +14,9 @@ USERNAME=$(bashio::config 'username')
 PASSWORD=$(bashio::config 'password')
 AUTO_SETUP=$(bashio::config 'auto_setup_ha_mqtt')
 INSTALL_INTEGRATION=$(bashio::config 'install_integration')
+# v1.7.11 快速自动发现代理开关（零条目 HA 首台网关全自动配置、第二台起弹
+# 发现卡片，详见 gateway_discovery_proxy.py 头注释；关闭后仅剩传统等待路径）
+FAST_DISCOVERY=$(bashio::config 'fast_auto_discovery')
 
 # v1.6.3：用户名白名单校验（H4 根治）——用户名会拼进密码文件/ACL/heredoc，
 # 含 % \ 换行等字符可破坏 printf 输出与 acl 解析；非法则拒绝启动，明确报错
@@ -848,6 +851,38 @@ if command -v mosquitto_pub >/dev/null 2>&1; then
         sed -E 's/^([[:space:]]*)(password|remote_password|username|remote_username)([[:space:]]+).*/\1\2 ***REDACTED***/' \
             /etc/mosquitto/mosquitto.conf 2>/dev/null | sed 's/^/  /'
     fi
+fi
+
+# =============================================================================
+# v1.7.11 快速自动发现代理（fast_auto_discovery，默认开）
+# =============================================================================
+# 补零条目缺口：全新 HA（未添加过慧尖集成）没有任何 gateway/rpt_rsp 订阅者，
+# 网关上报无人接收、发现卡片永不出现。本代理在容器内订阅上报并经 Supervisor
+# core API 代发起 discovery flow（用户确认权仍在 HA 卡片上，代理不建条目）。
+# 凭据：sub 用配置页账号（与上方 mosquitto_pub 自检同通道同 argv 威胁模型）；
+# HA API 用 with-contenv 注入的 SUPERVISOR_TOKEN（环境变量传递，不进 argv）。
+# 看门狗模式与 mdns_publisher 同构：异常退出 5 秒重启，正常退出结束。
+if [ "${FAST_DISCOVERY}" = "true" ] && [ -f /usr/bin/gateway_discovery_proxy.py ]; then
+    if command -v python3 >/dev/null 2>&1; then
+        (
+            while true; do
+                python3 /usr/bin/gateway_discovery_proxy.py \
+                    "${MQTT_PORT}" "${USERNAME}" "${PASSWORD}"
+                RC=$?
+                if [ "${RC}" -eq 0 ]; then
+                    echo "[发现代理] 正常退出，不再重启"
+                    break
+                fi
+                echo "[发现代理] 异常退出 (code ${RC})，5 秒后重启..."
+                sleep 5
+            done
+        ) &
+        echo "[发现代理] 已启动 (PID: $!)——网关上报即弹 HA 发现卡片"
+    else
+        echo "[发现代理] python3 不可用，跳过（传统等待条目发现路径不受影响）"
+    fi
+else
+    echo "[发现代理] fast_auto_discovery 关闭或脚本缺失——仅传统发现（需先有待配置条目）"
 fi
 
 # 等待 Mosquitto 退出并自愈：

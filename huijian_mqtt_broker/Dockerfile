@@ -36,6 +36,10 @@ RUN pip3 install --no-cache-dir --timeout 30 --retries 2 -r /tmp/requirements.tx
 COPY mdns_publisher.py /usr/bin/mdns_publisher.py
 RUN chmod +x /usr/bin/mdns_publisher.py
 
+# v1.7.11 快速自动发现代理（run.sh 尾部看门狗拉起，补 HA 零条目时的发现缺口）
+COPY gateway_discovery_proxy.py /usr/bin/gateway_discovery_proxy.py
+RUN chmod +x /usr/bin/gateway_discovery_proxy.py
+
 # 复制配置文件
 COPY mosquitto.conf /etc/mosquitto/mosquitto.conf
 COPY run.sh /run.sh
