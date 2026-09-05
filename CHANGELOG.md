@@ -3,6 +3,17 @@
 所有版本变更记录在此文件中。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.7.10] - 2026-09-07
+
+### Fixed
+- **run.sh 桥接 heredoc 反引号 bug**（HA2 现场实锤：`/run.sh: line 664:
+  password: command not found`）：v1.6.26 在共存桥 heredoc 体注释里写的
+  「反引号 password 反引号」被未引号 `<<EOF` 当作命令替换执行——函数无害
+  （rc 被忽略、mosquitto.conf 正常写入、broker 正常启动），但每次启动污染
+  日志且严重误导排障。改为普通引号，并新增回归钉桩
+  `tests/test_runsh_heredoc_v1710.py`（静态扫描全部未引号 heredoc 体禁
+  反引号 + bash -c 新旧写法对照）；桥 harness 同步再生成
+
 ## [1.7.9] - 2026-09-07
 
 ### Changed

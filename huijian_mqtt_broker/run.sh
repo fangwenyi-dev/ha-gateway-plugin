@@ -678,7 +678,11 @@ notifications false
 # 自身服务无恙）。在插件配置填官方 broker 有效凭据即带认证建桥（实测
 # 端到端穿透）；留空=匿名，兼容老版官方/customize 关认证场景。
 # v1.6.26（D-2）：改由 BRIDGE_CREDS 预构造（双非空才成对输出，杜绝
-# `password ` 空值行拒载整份 conf，见 §7b 头部注释）。
+# "password" 空值行拒载整份 conf，见 §7b 头部注释）。
+# ⚠ 本 heredoc 体内注释禁用反引号——未引号 heredoc 会把反引号对当作
+# 命令替换执行（v1.7.9 现场实锤：旧注释里的反引号 password 打出
+# "line 664: password: command not found"，无害但污染日志；v1.7.10
+# 改普通引号并加回归钉桩 tests/test_runsh_heredoc_v1710.py）。
 ${BRIDGE_CREDS}
 topic zigbee2mqtt/# out 1
 topic zigbee2mqtt/# in 1
