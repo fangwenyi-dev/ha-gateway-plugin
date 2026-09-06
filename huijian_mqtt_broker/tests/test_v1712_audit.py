@@ -134,12 +134,21 @@ class TestRunShCredentialRestoreAndWatchdog:
         assert not re.search(r'echo[^"\n]*\$\{?PASSWORD', sh), \
             "密码回显面：echo 行引用了 ${PASSWORD}"
 
-    def test_config_yaml_schema_defaults(self):
+    def test_config_yaml_credential_defaults(self):
+        """v1.7.16 订正：本测试 v1.7.12 原版钉的是 `str=huijian` 假语法——
+        Supervisor schema 从无 `=` 默认值（RE_SCHEMA_ELEMENT 仅认
+        type/type(min,max)/?，2024.01→2026.09 实证），config.yaml 整份被
+        商店拒收、加载项从商店静默消失。默认值的正规供给面是 options:
+        块；schema 只声明类型。语法门禁见 test_v1716_store_schema.py。"""
         cfg = _read(ROOT / "config.yaml")
-        assert re.search(r"^\s+username:\s+str=huijian\s*$", cfg, re.M), \
-            "schema 默认值未对齐固件内置用户名"
-        assert re.search(r"^\s+password:\s+password=huijian2022\s*$", cfg, re.M), \
-            "schema 默认值未对齐固件内置密码"
+        assert re.search(r"^\s+username:\s+str\s*$", cfg, re.M), \
+            "schema username 类型声明漂移（或 `=` 假语法回潮）"
+        assert re.search(r"^\s+password:\s+password\s*$", cfg, re.M), \
+            "schema password 类型声明漂移（或 `=` 假语法回潮）"
+        assert re.search(r"^\s+username:\s+huijian\s*$", cfg, re.M), \
+            "options 新装默认用户名未对齐固件内置"
+        assert re.search(r"^\s+password:\s+huijian2022\s*$", cfg, re.M), \
+            "options 新装默认密码未对齐固件内置"
 
     def test_watchdog_rc_form(self):
         """bash -e 子壳继承下 `cmd; RC=$?` 恒死（v1.6.3 C3 同族）：

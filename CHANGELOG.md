@@ -3,6 +3,45 @@
 所有版本变更记录在此文件中。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.7.16] - 2026-09-06
+
+### Fixed
+- **加载项从商店静默消失（v1.7.12 引入的回归，P0 阻断）**：v1.7.12 把
+  config.yaml schema 写成 `username: str=huijian` / `password:
+  password=huijian2022`——**`=默认值` 是臆造语法**，Supervisor 的 schema
+  元素校验正则 `RE_SCHEMA_ELEMENT`（`supervisor/apps/options.py`，
+  2026.05.1 前在 `supervisor/addons/options.py`）只接受 `类型`、
+  `类型(min,max)`、尾缀 `?` 三种形态，上游全历史（0.62→2026.09 各 tag）
+  实证从无 `=`。商店每次刷新时整份 config.yaml 校验失败，
+  `store/data.py` 记一行 WARNING `Can't read .../config.yaml` 后即
+  `continue`——**加载项从商店整体消失**（仓库添加仍显示成功、其它内容
+  不受影响），新装用户按 README 添加链接后找不到"慧尖 LoRa 网关"，
+  与 2026-09-06 客户现网报障完全吻合。
+  修复：schema 回退为 v1.7.10 之前的合法形态 `str` / `password`。
+  **行为零损失**——新装默认值本就由 `options:` 块供给（Supervisor
+  唯一正规途径，huijian/huijian2022 一直在位），运行期另有 run.sh
+  启动自动恢复兜底。
+- 订正 `tests/test_v1712_audit.py` 凭据默认值钉桩：原版把 `=` 假语法
+  钉成了断言（错误语法骗过全部 463 个测试的又一实锤——schema 从未按
+  Supervisor 真实语法校验过，CLAUDE.md"静默失效面须补断言实参的测试"
+  教训第三次重演）。现钉 `str`/`password` 类型声明 + options 默认值
+  双契约。
+
+### Added
+- 防复发钉桩 `tests/test_v1716_store_schema.py`（4 例）：逐字抄录上游
+  `RE_SCHEMA_ELEMENT` 与 `watchdog` 商店校验正则——每个 schema 值必须
+  匹配、`=值` 假语法点名禁止回潮、非 `?` 必填键必须有 options 默认值、
+  watchdog 形态合规。上游语法若演进须同步本钉复核，而非改回 `=`。
+
+### Notes
+- 修复推送后验证路径：Supervisor「设置→加载项→加载项商店→⋮→检查更新」
+  刷新（商店元数据有缓存），「慧尖 LoRa 网关」即重新出现在商店；
+  Supervisor 日志中对应的 `Can't read ...huijian_mqtt_broker/config.yaml`
+  WARNING 应随之消失。已装用户不受本回归影响（安装走的是本地副本），
+  但升级检查依赖商店条目，故本修复同样解除其"查不到更新"的断联。
+- v1.7.15 的 translations/ 本地化文件与本回归无关（上游实证：翻译文件
+  畸形仅 WARNING 跳过该文件，从不影响加载项商店可见性）。
+
 ## [1.7.15] - 2026-09-08
 
 ### Added
