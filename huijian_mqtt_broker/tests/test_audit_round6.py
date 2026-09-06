@@ -711,15 +711,18 @@ class TestStaticPins:
             assert call in src, f"{fname} 移除路径缺 unique_id 优先定位"
             assert "双路径均未命中" in src, f"{fname} 缺双落空留痕告警"
 
-    def test_config_primary_is_ghcr_io_source_1620(self):
+    def test_config_image_domain_in_proven_candidate_set(self):
         src = (HERE.parent / "config.yaml").read_text(encoding="utf-8")
         img = [ln for ln in src.splitlines() if ln.startswith("image:")][0]
-        # v1.6.20 定案：主源=ghcr.io 源站。两镜像站被实测否决——
-        # 1ms 认证端点持续故障；nju 对 aarch64 新 tag 21MB 大层回源
-        # 近冻结（4.3KB/s→311B/s），"假活慢滴"比明确失败更糟；
-        # 源站 216KB/s 稳定，42MB≈3-4 分钟可接受
-        assert "ghcr.io/fangwenyi-dev" in img
-        assert "nju" not in img and "1ms" not in img
+        # 钉"域名 ∈ 实测候选集"而非钉具体主源——主源定案随网络环境演变
+        # （nju→1ms→nju→源站→v1.7.17 起 1ms），具体主源以 config.yaml
+        # 「镜像主源演变史」注释为准；本测试只拦"漂到从未实测过的野域名"
+        # 与路径模板丢失（旧版把 v1.6.20 定案写死，导致每次迁主源都要改测试）。
+        assert any(d in img for d in
+                   ("ghcr.1ms.run/", "ghcr.nju.edu.cn/", "ghcr.io/")), \
+            f"image 域超出实测候选集: {img}"
+        assert "/fangwenyi-dev/{arch}-huijian-mqtt-broker" in img, \
+            "image 路径模板漂移（{arch} 占位必须保留）"
         import re as _re
         assert _re.search(r'^version: "\d+\.\d+\.\d+"$', src, _re.M), \
             "config.yaml 缺规范 version 字段（v1.6.25 起动态断言，bump 不再改本测试）"

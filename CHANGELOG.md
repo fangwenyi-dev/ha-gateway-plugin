@@ -3,6 +3,33 @@
 所有版本变更记录在此文件中。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.7.17] - 2026-09-06
+
+### Fixed
+- **现网安装失败（镜像拉取 connection reset）——镜像主源切换 ghcr.io →
+  ghcr.1ms.run（毫秒国内透传）**：2026-09-06 客户实锤 Supervisor 直连
+  ghcr.io 拉 1.7.16 时 blob 传输中途 `read tcp [2606:50c0:8000::154]:443:
+  connection reset by peer`（IPv6 走 GitHub 海外 CDN 被干扰）——v1.6.20
+  "源站稳定"定案的网络环境已不复存在（对比 v1.7.10：image 链路与镜像
+  内容均无回归，纯网络侧恶化）。1ms 同日实测 manifest+blob 匿名可拉
+  （热缓存 ~1.1MB/s+），且 CI warm-mirrors 发版即预热。已知残余风险
+  （发版后 1 小时新 tag 边缘 404 闪断窗口）写入定案注释与 README 自救
+  指引；nju 降为次选手动备源；主源演变史完整留档 config.yaml。
+- 镜像钉桩升级：`test_config_primary_is_ghcr_io_source_1620`（把某一版
+  定案写死、历次迁主源都被迫改测试）重构为
+  `test_config_image_domain_in_proven_candidate_set`——只钉"域 ∈ 实测
+  候选集 {1ms, nju, ghcr.io} + {arch} 路径模板不漂"，具体主源以
+  config.yaml 定案注释为唯一权威。
+
+### Changed
+- **README 整体重写**：①「与 zigbee2mqtt 共存」从 FAQ 提升为正式章节
+  （路径 A 直连 4 步 / 路径 B 共存桥开关+官方凭据，含误桥警示与主题
+  隔离说明）；②取消「常见问题」章节——仍有效的条目就地化（安装镜像
+  失败自救 → 安装章、升级/数据安全 → 对应小节），已修复的历史缺陷
+  条目（v1.6.17 :80 占用等）删除（CHANGELOG 留档）；③大幅瘦身：
+  45 行 ASCII 架构图删除（链接 ARCHITECTURE.md）、配置项明细不再双处
+  维护（v1.7.15 起配置页原生中文说明），178 行 → ~100 行。
+
 ## [1.7.16] - 2026-09-06
 
 ### Fixed

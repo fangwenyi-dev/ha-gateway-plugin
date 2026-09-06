@@ -1,5 +1,5 @@
 name: 慧尖 LoRa 网关
-version: "1.7.16"
+version: "1.7.17"
 slug: huijian_mqtt_broker
 description: 慧尖开窗器 LoRa 网关一体化插件，内置 Mosquitto Broker + 网关集成，安装即用
 url: 'https://github.com/fangwenyi-dev/ha-gateway-plugin'
@@ -32,30 +32,28 @@ host_network: true
 # 仓库可见性】——public 仓库⇒包自动 public。旧包 private 是 8-25 仓库当天
 # 本地手工 docker push 创建所致（可见性创建时定死，后续推版本不改）。
 # 修复手段即：删包→CI 重建（无需任何人工网页点击）。
-# v1.6.16 初版加速：image 改指南京大学透传 ghcr.nju.edu.cn。
-# v1.6.18 曾主源切毫秒镜像 ghcr.1ms.run（实测 5MB/s 全镜像≈10s）。
-# v1.6.20 定案：主源回退 ghcr.io 源站。两个国内镜像站被实测否决——
-# ghcr.1ms.run 认证端点持续故障（"专属域名获取失败"）；ghcr.nju.edu.cn 对
-# aarch64 新 tag 的 21MB 大层回源近冻结（实测 4.3KB/s→311B/s 递减，"假活
-# 慢滴"比明确失败更折磨用户）。源站实测 216KB/s 稳定，42MB 约 3-4 分钟。
-# 追求首包极致的用户可在本加载项「配置→镜像(Image)」覆盖为任一镜像站
-# （可用性随时间波动，不作默认保证）；CI warm-mirrors 仍尽力预热备源。
-# v1.6.19 主源【回退 nju】——1ms 定案翻车复盘（2026-09-03 发版实测）：
-# 1ms 是多边缘 LB 架构，对【新 tag 冷缓存】各边缘未同步完成前返回 404，
-# 且 200/404 按边缘闪断、分钟~小时级才自愈——"发版后首装"这一最需要用
-# 加速的场景恰是它最不可用的窗口；CI warm-mirrors 预热也无法根治（预热
-# 只打到部分边缘）。nju 是同步 pull-through：慢（0.02~0.1MB/s，42MB 需
-# 数分钟）但回源确定性 200，不存在假 404——首装体验"慢而稳"优于"快而
-# 随机失败"。1ms 降级为【手动快通道】：老版本 tag 已被缓存后，求快可在
-# 加载项配置「镜像(Image)」覆盖为 ghcr.1ms.run/...（路径不变）。
-# 家宽实测参照：ghcr.io 直连 ~84KB/s（≈8min 且常超时）；nju 0.02~0.1MB/s；
-# 1ms 热缓存时 4.6~5.2MB/s。镜像本体始终单份推 ghcr.io，透传站按需回源。
-# CI warm-mirrors 作业保留：发版后低频预热 nju+1ms（尽力而为，不阻塞发布）。
-# 局限定案：Supervisor image 只支持单一 URL、无原生多源超时故障转移——
-# 镜像站故障时手动换源：加载项详情页「配置→高级→镜像(Image)」覆盖域名
-# （路径不变），备选 ghcr.nju.edu.cn → ghcr.1ms.run(热缓存后) → ghcr.io(源站
-# 需自备加速)；另商店元数据有缓存，改源/升级前先在商店 ⋮→检查更新刷新。
-image: ghcr.io/fangwenyi-dev/{arch}-huijian-mqtt-broker
+# 镜像主源演变史（每次改主源须同步 tests/test_audit_round6.py 的域白名单
+# 钉桩——它只钉"域名 ∈ 实测过的候选集"，具体主源以本定案为准）：
+# v1.6.16 nju → v1.6.18 1ms → v1.6.19 回退 nju → v1.6.20 回退源站 ghcr.io
+# → v1.7.17 定案主源 = 毫秒镜像 ghcr.1ms.run（推翻 v1.6.20）。
+#   起因：2026-09-06 现网安装失败实锤——Supervisor 直连 ghcr.io 拉
+#   1.7.16 blob 传输中途 "read tcp [2606:50c0:8000::154]:443: connection
+#   reset by peer"（IPv6 走 GitHub 海外 CDN 被干扰），v1.6.20 时代
+#   "源站 216KB/s 稳定"的实测环境已不复存在；同日 1ms 实测 manifest +
+#   blob 匿名可拉（热缓存 ~1.1MB/s+）。镜像本体仍单份推 ghcr.io 源站
+#   （CI 构建推送与源站匿名拉取门不变），1ms 为 pull-through 透传按需回源。
+#   已知残余风险（v1.6.19 翻车复盘，勿忘）：1ms 多边缘 LB 对【刚发布的
+#   新 tag】冷缓存边缘可能短暂 200/404 闪断、分钟~小时级自愈，CI
+#   warm-mirrors 发版后即预热但只覆盖部分边缘——发版后 1 小时内首装
+#   报"拉取失败"重试一次即恢复；nju 已缓存层最快但新 tag 大层回源可能
+#   "假活慢滴"（实测 311B/s 递减），仅作次选手动备源。
+#   长期最优解（待用户决策）：自建阿里云 ACR 个人版推镜像（国内确定性
+#   全速、无第三方边缘问题），CI 加 login step 即可整体切换。
+# 手动换源自救（Supervisor 无多源故障转移）：加载项详情页
+# 「配置 → 高级 → 镜像(Image)」覆盖域名（路径不变），备选
+# ghcr.nju.edu.cn → ghcr.io(需自备网络加速)；商店元数据有缓存，
+# 换源/升级前先在商店 ⋮→检查更新刷新。
+image: ghcr.1ms.run/fangwenyi-dev/{arch}-huijian-mqtt-broker
 # v1.6.12（第五轮审计）：移除 ssl 挂载——全仓（run.sh/Dockerfile/mosquitto.conf/
 # 集成/Web）对 /ssl 零引用，broker 也未启用 TLS；与 v1.6.3 移除 hassio_api 时
 # 自立的"权限最小化：不需要就不声明"准则对齐（保留的 homeassistant_config:rw
