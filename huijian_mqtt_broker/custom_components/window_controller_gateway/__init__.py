@@ -20,6 +20,7 @@ from .const import (
     SCAN_INTERVAL,
     DEVICE_TO_GATEWAY_MAPPING,
     GLOBAL_MANUALLY_REMOVED_DEVICES,
+    GLOBAL_IGNORED_GATEWAYS,
     DEVICE_SETPOINTS,
     RESTART_DELAY,
 )
@@ -610,11 +611,20 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     # 重置该网关的发现去重/忽略记录，使删除后的网关可被再次自动发现。
     # 否则 announced_gateways 中残留的"已通知"记录会永久屏蔽该网关。
     try:
-        discovery = hass.data[DOMAIN].get("discovery", {})
         gateway_key = gateway_sn.lower()
-        discovery.setdefault("announced_gateways", set()).discard(gateway_key)
-        discovery.setdefault("ignored_gateways", set()).discard(gateway_key)
-        discovery.setdefault("last_discovery_time", {}).pop(gateway_key, None)
+        # v1.7.18（第 7 轮审计 BUG-9）：直接清全局持久忽略集——旧实现在
+        # get("discovery", {}) 上操作，发现平台初始化失败时（异常在上方
+        # 被吞、"discovery" 键不存在）discard 全部落在一次性临时 dict 上，
+        # 持久忽略（GLOBAL_IGNORED_GATEWAYS，与 discovery dict 同一集合
+        # 对象）纹丝不动 → 删条目后网关永不再被自动发现且无从排查。
+        hass.data[DOMAIN].setdefault(GLOBAL_IGNORED_GATEWAYS, set()).discard(
+            gateway_key
+        )
+        discovery = hass.data[DOMAIN].get("discovery") or {}
+        discovery.get("announced_gateways", set()).discard(gateway_key)
+        if "ignored_gateways" in discovery:
+            discovery["ignored_gateways"].discard(gateway_key)
+        discovery.get("last_discovery_time", {}).pop(gateway_key, None)
     except Exception as e:
         _LOGGER.debug("重置网关 %s 的发现记录失败（可忽略）: %s", gateway_sn, e)
     

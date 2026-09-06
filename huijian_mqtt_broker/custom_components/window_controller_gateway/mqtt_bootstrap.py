@@ -3,11 +3,15 @@
 背景：插件的 run.sh 启动时会把内置 Mosquitto 的连接信息写入 HA 配置目录下的
 ``window_controller_gateway_mqtt_bootstrap.json``。本模块在集成侧消费该标记：
 
-1. HA 中已存在 MQTT 配置条目（用户自行配置过其他 Broker）→ 尊重现状，删除标记。
-   若已配置的 Broker 与内置 Broker 不一致，输出明确告警帮助定位"网关上报发到了
-   内置 Broker 而 HA 却连接着别的 Broker"的分裂脑问题。
-2. 不存在 MQTT 条目且标记存在 → 通过程序化 config flow 自动创建指向内置
-   Mosquitto 的配置条目，成功后删除标记。
+1. HA 中已存在（启用态的）MQTT 配置条目：
+   - 数据与内置 Broker 完全一致 → 视为引导完成，删除标记；
+   - 不一致 → **强制接管**（v1.6.x 定案）：改写条目 data 指向内置 Broker 并
+     reload（source=hassio 条目则删除重建，接管前发持久化通知留痕）。一体化
+     产品必须保证网关可被 HA 听到；外接 Broker 共存走"官方 Broker 加载项 +
+     慧尖内置账户直连/桥接"路径。
+   v1.7.18 口径：禁用条目不算有效配置——不代劳启用/删除，告警并保留标记。
+2. 不存在（启用态）MQTT 条目且标记存在 → 通过程序化 config flow 自动创建指向
+   内置 Mosquitto 的配置条目，成功后删除标记。
 
 独立安装（HACS）场景下不存在标记文件，所有函数立即返回，行为与旧版完全一致。
 
@@ -195,7 +199,22 @@ async def ensure_mqtt_connection(hass: HomeAssistant) -> Optional[bool]:
         )
         return
 
-    existing_entries = hass.config_entries.async_entries("mqtt")
+    # v1.7.18（第 7 轮审计 BUG-5）：async_entries 会返回**禁用条目**——
+    # 旧实现取 [0] 命中禁用死条目时：改写+reload 对 disabled 不生效（setup
+    # 被跳过）却照删标记 → 自愈凭据蒸发、真正启用的条目永不纠偏；"仅有
+    # 禁用条目"还会被 create 分支双检误判成已配置 → 永久 broker_not_ready
+    # 且根因不可见。统一口径：仅启用条目算有效 MQTT 配置；全禁用则 loud
+    # 告警并保留标记（禁用是用户决策，插件不代劳启用/删除）。
+    all_entries = hass.config_entries.async_entries("mqtt")
+    existing_entries = [e for e in all_entries if not getattr(e, "disabled_by", None)]
+    if all_entries and not existing_entries:
+        _LOGGER.warning(
+            "MQTT 配置条目全部处于禁用状态（%d 个）——慧尖不代为启用/删除，"
+            "请在 设置→设备与服务→MQTT 重新启用或删除该条目后重启慧尖加载项；"
+            "引导标记已保留待自动重试",
+            len(all_entries),
+        )
+        return False
 
     if existing_entries:
         first = existing_entries[0]
@@ -304,15 +323,20 @@ async def ensure_mqtt_connection(hass: HomeAssistant) -> Optional[bool]:
                 return False
             return True
 
-    if not broker:
-        _LOGGER.warning("MQTT 引导标记缺少 broker 字段，跳过自动配置")
-        await hass.async_add_executor_job(_remove_marker, marker_path)
-        return
-
     async with _get_lock():
         # 双重检查：等待锁期间可能已被并发触发的流程创建。
         # hassio 条目已在上方被删除（async_remove），此处只检查是否还有其他活跃条目。
-        if hass.config_entries.async_entries("mqtt"):
+        # v1.7.18（BUG-5）：等锁期间条目可能被禁用——双检同样只认启用条目；
+        # 出现"全禁用"竞态时保留标记并告警（与入口熔断同口径）。
+        locked_all = hass.config_entries.async_entries("mqtt")
+        locked_enabled = [e for e in locked_all if not getattr(e, "disabled_by", None)]
+        if locked_all and not locked_enabled:
+            _LOGGER.warning(
+                "等待 MQTT 引导锁期间条目被禁用，保留引导标记；"
+                "请在 设置→设备与服务→MQTT 重新启用或删除条目后重启慧尖加载项"
+            )
+            return False
+        if locked_enabled:
             await hass.async_add_executor_job(_remove_marker, marker_path)
             return
 
@@ -399,7 +423,16 @@ async def ensure_mqtt_connection(hass: HomeAssistant) -> Optional[bool]:
         if result_type == FlowResultType.ABORT:
             reason = result.get("reason")
             if reason == "single_instance_allowed":
-                # 已有 MQTT 条目（或 HA 核心层单实例拦截）：按已存在处理
+                # 已有 MQTT 条目（或 HA 核心层单实例拦截）：按已存在处理。
+                # v1.7.18（BUG-5 同口径）：拦截也可能全来自**禁用条目**——
+                # 死条目永不 setup，"已存在"是假象，不得删标记掩盖根因。
+                _cur = hass.config_entries.async_entries("mqtt")
+                if _cur and not [e for e in _cur if not getattr(e, "disabled_by", None)]:
+                    _LOGGER.warning(
+                        "MQTT 单实例拦截来自禁用条目，保留引导标记；"
+                        "请在 设置→设备与服务→MQTT 重新启用或删除该条目"
+                    )
+                    return False
                 _LOGGER.info("MQTT 配置流程中止（%s），视为已有配置", reason)
                 await hass.async_add_executor_job(_remove_marker, marker_path)
                 return

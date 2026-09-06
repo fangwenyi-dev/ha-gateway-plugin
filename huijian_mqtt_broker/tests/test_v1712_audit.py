@@ -229,21 +229,33 @@ class TestSubscriptionRebuild:
             "重建成功后身份须更新，下轮巡检不得重复重建"
 
     @pytest.mark.asyncio
-    async def test_rebuild_failure_reschedules(self, monkeypatch):
+    async def test_rebuild_failure_keeps_stale_identity_for_retry(self, monkeypatch):
+        """v1.7.18（第 7 轮审计 BUG-1）修复形态：重建失败不得把身份置 None。
+
+        旧测试钉的是"失败重置 None"——但 _ensure 入口对 None 的语义是
+        "从未订阅→跳过"，置 None 恰使注释承诺的"下轮再试"永不可达（自锁）。
+        新契约：保留旧身份（≠ 当前 client），下轮巡检自然重试。
+        """
         handler, _ = _mk(monkeypatch)
         handler.hass.data["mqtt"] = object()
         handler._mqtt_client_id = id(handler.hass.data["mqtt"])
 
+        calls = []
+
         async def fake_subscribe():
+            calls.append(1)
             return False
 
         handler._subscribe_topics = fake_subscribe
-        sched = []
-        handler._schedule_reconnect = lambda: sched.append(1)
-        handler.hass.data["mqtt"] = object()
+        handler._schedule_reconnect = lambda: None
+        handler.hass.data["mqtt"] = object()  # 换代触发重建
         assert await handler._ensure_mqtt_subscription() is True
-        assert handler._mqtt_client_id is None, \
-            "订阅失败必须重置身份，让下轮巡检再试"
+        assert calls == [1]
+        assert handler._mqtt_client_id is not None, \
+            "失败不得重置身份——None=入口早退，重试分支永不可达（自锁回潮）"
+        assert await handler._ensure_mqtt_subscription() is True, \
+            "下轮巡检必须再次尝试重建（旧形态从此即永久失聪）"
+        assert calls == [1, 1]
 
 
 class TestDedupRollback:

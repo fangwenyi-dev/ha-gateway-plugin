@@ -254,11 +254,73 @@ class TestMqttReadyGate:
 
     @pytest.mark.asyncio
     async def test_already_waited_skips_grace(self, monkeypatch):
-        """ensure 返回 False（已等满 30s）→ 门禁不得再叠加宽限（审计#3）。"""
-        hass = GateHass(mqtt_entries=[types.SimpleNamespace(entry_id="m1")])
+        """ensure 返回 False（已等满 30s）+ 条目终态失败 → 门禁不得再叠加
+        宽限（审计#3）。v1.7.18（BUG-11）后终态须显式给出：state=setup_error。"""
+        hass = GateHass(mqtt_entries=[
+            types.SimpleNamespace(entry_id="m1", state="setup_error")
+        ])
 
         def _boom(*a, **k):
-            raise AssertionError("already_waited=True 时不得再宽限等待")
+            raise AssertionError("already_waited=True 且终态失败时不得再宽限等待")
+
+        monkeypatch.setattr(cf_mod, "async_wait_mqtt_loaded", _boom)
+        errors = {}
+        assert (
+            await self._flow(hass)._async_gate_mqtt_ready(errors, already_waited=True)
+            is False
+        )
+        assert errors["base"] == "broker_not_ready"
+
+    @pytest.mark.asyncio
+    async def test_already_waited_terminal_retry_state_skips_grace(self, monkeypatch):
+        """v1.7.18（BUG-11）：setup_retry 也算终态 → 维持快败。"""
+        hass = GateHass(mqtt_entries=[
+            types.SimpleNamespace(entry_id="m1", state="setup_retry")
+        ])
+
+        def _boom(*a, **k):
+            raise AssertionError("终态失败不得再宽限等待")
+
+        monkeypatch.setattr(cf_mod, "async_wait_mqtt_loaded", _boom)
+        errors = {}
+        assert (
+            await self._flow(hass)._async_gate_mqtt_ready(errors, already_waited=True)
+            is False
+        )
+        assert errors["base"] == "broker_not_ready"
+
+    @pytest.mark.asyncio
+    async def test_already_waited_pending_setup_still_gets_grace(self, monkeypatch):
+        """v1.7.18（BUG-11）：ensure 等满 30s 但 MQTT setup 仍在排队
+        （not_loaded/in_progress，HA 启动拥塞 31s 落地的真实窗口）——
+        不得白报一次 broker_not_ready，须再给一次宽限窗口。"""
+        hass = GateHass(mqtt_entries=[
+            types.SimpleNamespace(entry_id="m1", state="not_loaded")
+        ])
+        seen = {}
+
+        async def fake_wait(h, timeout):
+            seen["timeout"] = timeout
+            return True
+
+        monkeypatch.setattr(cf_mod, "async_wait_mqtt_loaded", fake_wait)
+        errors = {}
+        assert await self._flow(hass)._async_gate_mqtt_ready(
+            errors, already_waited=True
+        ) is True
+        assert seen["timeout"] == cf_mod.MQTT_READY_GRACE_SECONDS
+        assert "base" not in errors
+
+    @pytest.mark.asyncio
+    async def test_already_waited_disabled_entry_skips_grace(self, monkeypatch):
+        """v1.7.18（BUG-5/11 联动）：禁用条目是终态——快败且日志另有明示
+        （bootstrap 侧告警），不空等。"""
+        hass = GateHass(mqtt_entries=[
+            types.SimpleNamespace(entry_id="m1", state="not_loaded", disabled_by="user")
+        ])
+
+        def _boom(*a, **k):
+            raise AssertionError("禁用条目不得再宽限等待")
 
         monkeypatch.setattr(cf_mod, "async_wait_mqtt_loaded", _boom)
         errors = {}
@@ -537,8 +599,11 @@ class TestUserStepWiring:
     @pytest.mark.asyncio
     async def test_already_waited_passed_from_ensure_result(self, monkeypatch):
         """ensure 返回 False → 接线必须转成 gate 的 already_waited=True
-        （门禁不得再叠加宽限；audit#3 端到端钉桩）。"""
-        hass = GateHass(mqtt_entries=[types.SimpleNamespace(entry_id="m1")])
+        （门禁对终态失败不得再叠加宽限；audit#3 端到端钉桩。
+        v1.7.18 BUG-11 后须显式终态 state=setup_error）。"""
+        hass = GateHass(mqtt_entries=[
+            types.SimpleNamespace(entry_id="m1", state="setup_error")
+        ])
 
         async def ensure_false(h):
             return False

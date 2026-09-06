@@ -45,6 +45,10 @@ DOMAIN = "window_controller_gateway"
 # 与 SUPERVISOR_TOKEN，与 nginx /api/ha/ 同源）；E2E/调试用环境变量覆盖直连。
 DEFAULT_API = "http://supervisor/core/api"
 RETRY_HTTP_FAIL = 30.0
+# v1.7.18（第 7 轮审计 BUG-4）：建耳成功/判定已存在后的再检查冷却——
+# 替代旧"_ears_confirmed 永久缓存"（见 has_entries），既防每条上报都打
+# create 流程，又保证用户删除/禁用条目后 ≤30s 自动补种。
+SEED_RETRY_COOLDOWN = 30.0
 
 
 def parse_report(raw: str):
@@ -102,19 +106,23 @@ class DiscoveryProxy:
         self._log = log
         self._sleep = sleep
         self._replayed = set()   # 每 SN 至多重放一次
-        self._next_try = 0.0     # 全局失败退避（HA 重启窗口）
-        self._ears_confirmed = False  # 已确认存在过条目（不再 list）
+        self._next_try = 0.0     # 全局退避（HA 重启窗口/建耳冷却）
 
     def has_entries(self) -> bool:
-        if self._ears_confirmed:
-            return True
+        # v1.7.18（第 7 轮审计 BUG-4）：删去 _ears_confirmed 永久缓存——
+        # 旧实现确认过一次即永不 list：用户删除/禁用自动建的"等待条目"
+        # （卸载残留清理、看不惯占位卡等高概率动作）后，v1.7.11 的秒级
+        # 自动发现静默死亡直到容器重启。domain 判定同步补 state 过滤：
+        # 禁用/not_loaded 条目没挂心跳监听器，不算耳朵。改为每条上报实时
+        # list（一条 GET/≤10s，代价可忽略），上层 _next_try 冷却限频。
         entries = self._list()
         if entries is None:  # 查询失败 → 不改变结论，走重试退避
             raise RuntimeError("entries query failed")
-        found = any(e.get("domain") == DOMAIN for e in entries)
-        if found:
-            self._ears_confirmed = True
-        return found
+        return any(
+            e.get("domain") == DOMAIN
+            and (e.get("state") is None or e.get("state") == "loaded")
+            for e in entries
+        )
 
     def run_subprocess(self, argv) -> int:
         """长驻订阅循环。mosquitto_sub 退出（broker 重启等）即非零返回，
@@ -148,7 +156,10 @@ class DiscoveryProxy:
             if outcome not in ("created", "exists"):
                 self._next_try = now + RETRY_HTTP_FAIL
                 return
-            self._ears_confirmed = True
+            # v1.7.18（BUG-4）：以"短冷却"替代旧"永久确认缓存"——条目 setup
+            # 落地前（state 尚未 loaded）与用户删条目后的补种，都由冷却到期
+            # 后的下一条上报自然推进
+            self._next_try = now + SEED_RETRY_COOLDOWN
             if outcome == "exists":
                 self._log("[发现代理] 集成条目已存在，耳朵就位（无需引导）")
                 return

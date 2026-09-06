@@ -197,6 +197,14 @@
         }
 
         // ========== HA API 调用 ==========
+        // v1.7.18（第 7 轮审计 BUG-18）：用户正在交互的滑块不回写——30s 静默
+        // 刷新/控制后 2s 刷新与手指拖动重叠时，旧版无条件覆写 value 导致
+        // thumb 跳回、设置静默丢失（toast 却已提示"已发送"）。拖动中滑块即
+        // activeElement（鼠标/触摸通用）；松手 change 事件照常发控制，下轮
+        // 刷新自然同步真值。
+        function userInteracting(el) {
+            return !!el && document.activeElement === el;
+        }
         async function haApi(path, method = 'GET', body = null) {
             const opts = { method, headers: { 'Content-Type': 'application/json' }, cache: 'no-store' };
             if (body) opts.body = JSON.stringify(body);
@@ -230,10 +238,16 @@
                     await loadGatewayDevices(entry.entry_id, GATEWAY_SN_BY_ENTRY[entry.entry_id]);
                 }
             } catch (e) {
-                if (String(e).includes('HA API 401')) {
+                // v1.7.18（第 7 轮审计 BUG-19）：区分超时/断连/权限——旧版
+                // 12s 超时（HA 挂起/负载高）与 5xx 全提示"确保走侧边栏"，
+                // 把用户引向错误排障方向。
+                const _msg = String((e && e.message) || e);
+                if (_msg.includes('HA API 401')) {
                     container.innerHTML = '<div class="empty-state"><div class="icon">⚠️</div><p>面板无权直接读取网关列表</p><p class="hint">请在 HA → 设置 → 设备与服务 → 「慧尖」集成中管理网关</p></div>';
+                } else if (_msg.includes('请求超时')) {
+                    container.innerHTML = '<div class="empty-state"><div class="icon">⏳</div><p>HA 响应超时</p><p class="hint">HA 可能正在启动或负载较高，请稍候，页面会自动重试</p></div>';
                 } else {
-                    container.innerHTML = '<div class="empty-state"><div class="icon">📡</div><p>无法连接 HA API</p><p class="hint">请确保通过 HA 侧边栏访问</p></div>';
+                    container.innerHTML = '<div class="empty-state"><div class="icon">📡</div><p>无法连接 HA API</p><p class="hint">' + escapeHtml(_msg) + '（请确认 HA 正在运行、本页面经 HA 侧边栏打开）</p></div>';
                 }
                 container.innerHTML += '<div class="info-box"><h3>使用说明</h3><p>1. 重启 HA → 添加「慧尖」集成<br>2. 在网关设备上点击「配对」按钮添加子设备<br>3. 在 HA 设备页面控制子设备</p></div>';
             }
@@ -251,7 +265,13 @@
                 '<span class="gateway-name">' + safeName + '</span>' +
                 '<span class="gateway-sn">SN: ' + safeSn + '</span>' +
                 '</div></div><div style="display:flex;align-items:center;gap:8px;">' +
-                '<span class="badge badge-info" id="gw-status-' + safeEntryId + '">检测中</span>' +
+                // v1.7.18（第 7 轮审计 BUG-17）：配对窗口内重建直接渲染黄徽——
+                // 旧版重建后恒为 badge-info"检测中"，updateGatewayStatus 的
+                // L-3 守卫以 DOM 现值为前提（badge-warn 才护），守卫失效被
+                // 覆写"离线"，用户误判配对失败而重复点击
+                (Date.now() < (PAIRING_UNTIL[entryId] || 0)
+                    ? '<span class="badge badge-warn" id="gw-status-' + safeEntryId + '">配对中</span>'
+                    : '<span class="badge badge-info" id="gw-status-' + safeEntryId + '">检测中</span>') +
                 '<button class="btn btn-success btn-sm" onclick="startPairing(\'' + jsAttr(entryId) + '\')">🔗 配对</button>' +
                 '<button class="btn btn-slate btn-sm" onclick="checkGatewayStatus(\'' + jsAttr(entryId) + '\')" title="检查网关连接状态">状态</button>' +
                 '</div></div>' +
@@ -545,7 +565,8 @@
                 const speedSlider = document.querySelector('#dev-' + dev.id + ' .speed-slider');
                 if (speedSlider) {
                     speedSlider.disabled = false;
-                    if (speedEntity && speedEntity.state !== 'unknown' && speedEntity.state !== 'unavailable') {
+                    if (speedEntity && speedEntity.state !== 'unknown' && speedEntity.state !== 'unavailable'
+                            && !userInteracting(speedSlider)) {
                         const unit = speedEntity.attributes.unit_of_measurement || '';
                         speedSlider.value = speedEntity.state;
                         const valEl = document.querySelector('#dev-' + dev.id + ' .speed-value');
@@ -555,7 +576,8 @@
                 const strengthSlider = document.querySelector('#dev-' + dev.id + ' .strength-slider');
                 if (strengthSlider) {
                     strengthSlider.disabled = false;
-                    if (strengthEntity && strengthEntity.state !== 'unknown' && strengthEntity.state !== 'unavailable') {
+                    if (strengthEntity && strengthEntity.state !== 'unknown' && strengthEntity.state !== 'unavailable'
+                            && !userInteracting(strengthSlider)) {
                         const unit = strengthEntity.attributes.unit_of_measurement || '';
                         strengthSlider.value = strengthEntity.state;
                         const valEl = document.querySelector('#dev-' + dev.id + ' .strength-value');
@@ -588,7 +610,8 @@
                     // 判空补齐 null/''（与上方 :565 推导分支同口径）
                     if (pos !== undefined && pos !== null && pos !== '') statusText += ' | 位置: ' + pos + '%';
                     const slider = document.querySelector('#dev-' + dev.id + ' .position-slider');
-                    if (slider && pos !== undefined && pos !== null && pos !== '') {
+                    if (slider && pos !== undefined && pos !== null && pos !== ''
+                            && !userInteracting(slider)) {
                         slider.value = pos;
                         slider.nextElementSibling.textContent = pos + '%';
                     }

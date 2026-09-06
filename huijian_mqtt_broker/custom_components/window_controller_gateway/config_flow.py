@@ -206,11 +206,21 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 )
 
         # ---- 表单 ----
-        default_sn = gateway_sn_from_context or (user_input.get(CONF_GATEWAY_SN, "") if user_input else "")
+        # v1.7.18（第 7 轮审计 BUG-10）：回填优先级翻转——用户已提交过
+        # （user_input 存在，含被校验拒绝后重显）时以用户输入为准；旧实现
+        # context 值恒优先，用户输入非法被拒后表单"吞掉"刚填的内容，表现
+        # 为没保存。仅初次渲染（无 user_input）沿用发现 context 预填。
+        _ui_sn = user_input.get(CONF_GATEWAY_SN, "") if user_input else ""
+        _ui_name = user_input.get(CONF_GATEWAY_NAME, "") if user_input else ""
+        default_sn = _ui_sn or gateway_sn_from_context or ""
         if default_sn:
-            default_name = gateway_name_from_context or (user_input.get(CONF_GATEWAY_NAME, f"{DEFAULT_GATEWAY_NAME} {default_sn[-4:]}") if user_input else f"{DEFAULT_GATEWAY_NAME} {default_sn[-4:]}")
+            default_name = (
+                _ui_name
+                or gateway_name_from_context
+                or f"{DEFAULT_GATEWAY_NAME} {default_sn[-4:]}"
+            )
         else:
-            default_name = gateway_name_from_context or (user_input.get(CONF_GATEWAY_NAME, DEFAULT_GATEWAY_NAME) if user_input else DEFAULT_GATEWAY_NAME)
+            default_name = _ui_name or gateway_name_from_context or DEFAULT_GATEWAY_NAME
 
         data_schema = vol.Schema({
             vol.Optional(
@@ -504,8 +514,26 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return False
 
         if already_waited:
-            errors["base"] = "broker_not_ready"
-            return False
+            # v1.7.18（第 7 轮审计 BUG-11，审计#3 精化）：ensure 消耗满 30s
+            # 通常不必再宽限（同一时段难凭空就绪，审计#3 原意）——但条目
+            # **确凿仍在排队**（setup_in_progress/not_loaded 且未禁用）时，
+            # 31s 落地窗口白报一次 broker_not_ready 会误导用户。故仅当至少
+            # 一个条目处于"活跃排队"形态才放行到下方宽限；终态失败
+            # （setup_error/setup_retry/禁用）或状态未知/无条目一律保持快败。
+            pending_states = ("setup_in_progress", "not_loaded")
+
+            def _entry_state(e):
+                s = getattr(e, "state", None)
+                return getattr(s, "value", s)
+
+            positively_pending = any(
+                not getattr(e, "disabled_by", None)
+                and _entry_state(e) in pending_states
+                for e in self.hass.config_entries.async_entries("mqtt")
+            )
+            if not positively_pending:
+                errors["base"] = "broker_not_ready"
+                return False
 
         # 存在引导线索（已有 MQTT 条目，或有标记待消费）→ 给异步 setup 一次宽限窗口
         if await async_wait_mqtt_loaded(self.hass, MQTT_READY_GRACE_SECONDS):

@@ -13,6 +13,19 @@ set -e
 USERNAME=$(bashio::config 'username')
 PASSWORD=$(bashio::config 'password')
 
+# v1.6.3：用户名白名单校验（H4 根治）——用户名会拼进密码文件/ACL/heredoc，
+# 含 % \ 换行等字符可破坏 printf 输出与 acl 解析；非法则拒绝启动，明确报错。
+# v1.7.18（第 7 轮审计 BUG-21）：整体上移到"凭据自动恢复"之前——旧顺序下
+# 非法用户名总是先被恢复块改写成 huijian 才走到校验，这道防线实际不可达；
+# 且恢复提示把未校验原值回显进启动日志（ANSI/CR 控制符注入面）。报错不再
+# 回显原值，通过白名单后的恢复提示回显即安全。
+case "${USERNAME}" in
+    ''|*[!A-Za-z0-9_-]*)
+        echo "[错误] MQTT 用户名非法（仅允许字母/数字/下划线/连字符），拒绝启动"
+        exit 1
+        ;;
+esac
+
 # v1.7.12 凭据自动恢复默认（用户定案）：LoRa 网关固件内置 huijian/huijian2022
 # （端口本就在 :31 写死 2022），用户改配置页凭据只会把网关挡在门外
 # （not authorised 风暴且无从自救）——凡偏离固件内置值一律自动恢复默认并提示，
@@ -33,14 +46,7 @@ INSTALL_INTEGRATION=$(bashio::config 'install_integration')
 # 发现卡片，详见 gateway_discovery_proxy.py 头注释；关闭后仅剩传统等待路径）
 FAST_DISCOVERY=$(bashio::config 'fast_auto_discovery')
 
-# v1.6.3：用户名白名单校验（H4 根治）——用户名会拼进密码文件/ACL/heredoc，
-# 含 % \ 换行等字符可破坏 printf 输出与 acl 解析；非法则拒绝启动，明确报错
-case "${USERNAME}" in
-    ''|*[!A-Za-z0-9_-]*)
-        echo "[错误] MQTT 用户名非法（仅允许字母/数字/下划线/连字符）: '${USERNAME}'"
-        exit 1
-        ;;
-esac
+# （用户名白名单校验已上移至凭据恢复之前，v1.7.18 BUG-21）
 
 # host_network 模式：mosquitto 直接监听主机 2022 端口，无需 Docker 端口映射
 MQTT_PORT=2022
@@ -720,7 +726,7 @@ EOF
     # passwd/acl 同口径收紧 600——mosquitto 以 root 读 conf（进程内降权后
     # 不再回读），容器内 nginx worker/mosquitto 用户等低权进程不再可读。
     chmod 600 "${MOSQ_CONF}" 2>/dev/null || true
-    echo "[共存] 检测到官方 Mosquitto(:1883) → 自动写入桥接，重启 broker 生效"
+    echo "[共存] 检测到官方 Mosquitto(:1883) → 自动写入桥接（broker 重启/首次启动时加载生效）"
     kill -TERM "$(cat /run/mosquitto.pid 2>/dev/null)" 2>/dev/null || true
 }
 _bridge_off() {
@@ -741,10 +747,16 @@ BRIDGE_TICK=0
             LAST_TS=$(cat /run/bridge_last_ts 2>/dev/null || echo 0)
             # 净化（审计定案）：含非数字的垃圾会让 $((...)) 语法错误杀死
             # 整个巡检子 shell（v1.6.3 静默死同族故障）；空/非数字按 0 处理
-            # 并留意 0 开头会走八进制坑——一律归 0
             case "${LAST_TS}" in
                 ''|*[!0-9]*) LAST_TS=0 ;;
             esac
+            # v1.7.18（第 7 轮审计 BUG-20）：旧注释宣称"0 开头八进制坑一律
+            # 归 0"但实现从未落地——"078"这类全数字值过 case 后，$(( )) 按
+            # 八进制解析报 "value too great for base"，冷却判定失真且 set -e
+            # 下有机会杀死本巡检+桥对账子 shell（status.json 冻结）。显式
+            # 十进制解析：date +%s 永不出前导零，带前导零即异常值，按十进制
+            # 取数值最稳（不会误重置冷却）。
+            LAST_TS=$((10#$LAST_TS))
             NOW_TS=$(date +%s)
             if [ $((NOW_TS - LAST_TS)) -ge 120 ] 2>/dev/null; then
                 # 仅"真实状态迁移"（peer 在而无桥 / 桥在而无 peer）才动作并

@@ -163,7 +163,13 @@ class _LifecycleMixin:
             return False
             
         # 订阅主题
-        await self._subscribe_topics()
+        # v1.7.18（第 7 轮审计 BUG-1）：订阅失败不再静默当成功——旧版丢弃
+        # 返回值，条目照常 loaded 而入站永久丢单，唯一补救的重连循环 5 次
+        # 封顶（~2min）烧完后无人再管。返回 False 由调用方抛
+        # ConfigEntryNotReady，HA 条目级重试成为原生自愈通道。
+        if not await self._subscribe_topics():
+            _LOGGER.error("MQTT 订阅失败，稍后由 HA 自动重试条目加载")
+            return False
         
         # 启动定时检查任务，每30秒检查一次是否超时
         self._check_task = asyncio.create_task(

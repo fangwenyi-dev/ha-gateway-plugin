@@ -113,3 +113,15 @@ transfer_device:
       example: "100122501203"
       selector:
         text:
+
+unignore_gateway:
+  name: 取消忽略网关
+  description: 移除发现卡片上误点"忽略"的网关的忽略记录（v1.7.12 起忽略持久化跨重启，误点会导致该网关永不出卡）。取消后该网关下一次上报即重新出现发现卡片
+  fields:
+    gateway_sn:
+      name: 网关SN
+      description: 要取消忽略的网关序列号
+      required: true
+      example: "100121501186"
+      selector:
+        text:

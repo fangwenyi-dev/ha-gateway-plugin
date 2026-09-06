@@ -253,6 +253,18 @@ class _CtypeHandlersMixin:
         # 只信任 data.sn（子设备 SN）；顶层 payload.sn 是网关 SN，
         # 若网关未在 data 中回传子设备 SN，不把网关自身误当子设备添加
         device_sn = data.get("sn")
+        # v1.7.18（第 7 轮审计 BUG-2）：与 002/005 的 B-5 同型归一补齐——
+        # 部分固件 JSON 数字形态回包时 int 直接流入下方路径：get_device/
+        # 手动删除列表恒 miss → 绑定/解绑方向误判；add_device 内
+        # startswith/[-4:] TypeError 打断处理（配对确认静默丢失、会话滞留
+        # 60s；解绑本地删除不生效→幽灵设备面）。
+        if isinstance(device_sn, bool) or (
+            device_sn is not None and not isinstance(device_sn, (str, int, float))
+        ):
+            _LOGGER.warning("003 设备 SN 类型非法，按无 SN 处理: %r", device_sn)
+            device_sn = None
+        elif device_sn is not None:
+            device_sn = str(device_sn)
         bind_value = data.get("bind", None)
         # 按命令 id 匹配最近发出的 003 方向（发送端已记录 _bind_ops；
         # 记录为 (方向, 设备SN) 元组）。id 先经 _norm_cmd_id 归一：网关以
@@ -345,9 +357,9 @@ class _CtypeHandlersMixin:
         else:
             # 错误码7可能表示通讯距离不够，不记录为错误
             if errcode == 7:
-                _LOGGER.debug("设备操作失败，错误码: %d, SN: %s (可能是通讯距离不够)", errcode, device_sn)
+                _LOGGER.debug("设备操作失败，错误码: %s, SN: %s (可能是通讯距离不够)", errcode, device_sn)
             else:
-                _LOGGER.warning("设备操作失败，错误码: %d, SN: %s", errcode, device_sn)
+                _LOGGER.warning("设备操作失败，错误码: %s, SN: %s", errcode, device_sn)
 
     async def _handle_ctype_004(self, payload, ctype, data):
         """处理协议类型004：设备控制响应
@@ -366,9 +378,9 @@ class _CtypeHandlersMixin:
                 _LOGGER.debug("设备控制成功，但未返回设备SN")
         else:
             if errcode == 7:
-                _LOGGER.debug("设备控制失败，错误码: %d, SN: %s (可能是通讯距离不够)", errcode, device_sn)
+                _LOGGER.debug("设备控制失败，错误码: %s, SN: %s (可能是通讯距离不够)", errcode, device_sn)
             else:
-                _LOGGER.warning("设备控制失败，错误码: %d, SN: %s", errcode, device_sn)
+                _LOGGER.warning("设备控制失败，错误码: %s, SN: %s", errcode, device_sn)
 
     async def _handle_ctype_005(self, payload, ctype, data):
         """处理协议类型005：设备上报

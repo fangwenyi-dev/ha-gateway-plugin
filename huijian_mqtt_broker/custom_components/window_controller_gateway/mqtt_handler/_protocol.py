@@ -33,9 +33,13 @@ class _ProtocolMixin:
         int(self.command_id)，但网关回包的 id 可能以 "42"/42.0 形态 echo
         （去重层的 f-string 会抹平类型差异放行，pop 的精确匹配却会 miss，
         退回已知有竞态的存在性推断分支）。bool 特判 False→0/True→1 是固件
-        id 语义里不存在的形态，原样返回交给 miss 分支处理。"""
+        id 语义里不存在的形态，归一为 None 交 miss/旁路分支处理。"""
         if isinstance(raw, bool):
-            return raw
+            # v1.7.18（第 7 轮审计 BUG-14）：旧实现"原样返回"实为 False→0/
+            # True→1 真值——pop(True) 会命中 _bind_ops 键 1 的记账（dict 中
+            # True==1 同哈希）造成绑定方向误判。bool 是固件 id 语义里不存在
+            # 的形态，显式返回 None 才真正落到 miss/旁路分支。
+            return None
         if isinstance(raw, int):
             return raw
         if isinstance(raw, float) and raw.is_integer():
@@ -250,6 +254,15 @@ class _ProtocolMixin:
                 if gateway_sn.lower() != self.gateway_sn.lower():
                     return
                 
+                # v1.7.18（第 7 轮审计 BUG-15）：legacy 分支补在线记账——
+                # 旧实现收消息不刷新 last_gateway_report_time/connected，
+                # legacy 固件的网关永远被标"离线"（却又收得到指令，
+                # 1800s 口径与消息事实矛盾）。与标准路径同款收敛。
+                self.last_gateway_report_time = time.monotonic()
+                if not self.connected:
+                    self.connected = True
+                    self._notify_status_change()
+
                 response_type = payload.get("type")
                 
                 if response_type == "device_discovery":
@@ -271,6 +284,13 @@ class _ProtocolMixin:
                         device_name = device_info.get(ATTR_DEVICE_NAME, f"设备 {device_sn[-6:]}")
                         device_type = device_info.get("device_type", DEVICE_TYPE_WINDOW_OPENER)
                         
+                        # v1.7.18（第 7 轮审计 BUG-15）：B-6 同型门禁补齐——
+                        # 关闭自动发现后 legacy 通道同样不得入库新设备
+                        # （已登记设备走幂等 add/改名路径，不受影响）
+                        if (device_sn not in self.device_manager.devices
+                                and not self._auto_discovery_enabled()):
+                            _LOGGER.debug("auto_discovery 已关闭，跳过自动添加: %s", device_sn)
+                            continue
                         self._schedule_async_task(
                             self.device_manager.add_device(device_sn, device_name, device_type)
                         )
@@ -278,6 +298,18 @@ class _ProtocolMixin:
                 elif response_type == "device_status":
                     device_sn = payload.get(ATTR_DEVICE_SN)
                     if not device_sn:
+                        return
+                    # v1.7.18（BUG-15）：数值形态 SN 会在 update_device_status
+                    # 的"不存在则自动添加"漏斗里 TypeError，同款归一；并补
+                    # 未知设备门禁（已登记设备正常更新不受影响）
+                    if isinstance(device_sn, bool) or not isinstance(
+                        device_sn, (str, int, float)
+                    ):
+                        return
+                    if not isinstance(device_sn, str):
+                        device_sn = str(device_sn)
+                    if (self.device_manager.get_device(device_sn) is None
+                            and not self._auto_discovery_enabled()):
                         return
                     
                     status = payload.get("status", "unknown")
@@ -348,8 +380,11 @@ class _ProtocolMixin:
         )
         ok = await self._subscribe_topics()
         if not ok:
-            # 新 client 可能尚未就绪，下个巡检周期再试；补一次重连调度兜底
-            self._mqtt_client_id = None
+            # v1.7.18（第 7 轮审计 BUG-1）：旧实现在此置 None 兑现"下个巡检
+            # 周期再试"——但入口对 None 的语义是"从未订阅→跳过"，置 None
+            # 恰使重试分支永不可达（永久自锁）。保留旧身份（≠当前 client），
+            # 下轮巡检自然再试；_subscribe_topics 内已补重连调度兜底。
+            _LOGGER.warning("订阅重建失败（新 client 可能尚未就绪），保留旧身份待下轮巡检重试")
         return True
 
 

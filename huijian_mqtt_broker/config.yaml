@@ -1,5 +1,5 @@
 name: 慧尖 LoRa 网关
-version: "1.7.17"
+version: "1.7.18"
 slug: huijian_mqtt_broker
 description: 慧尖开窗器 LoRa 网关一体化插件，内置 Mosquitto Broker + 网关集成，安装即用
 url: 'https://github.com/fangwenyi-dev/ha-gateway-plugin'
@@ -86,7 +86,8 @@ options:
   # 经 Supervisor API 代发起发现流程——全新 HA（从未添加过集成）也能秒级在
   # 「设置→设备与服务」出现"慧尖网关"发现卡片（此前必须先手动添加一次
   # 集成才会有耳朵听上报）。置 false 回退传统发现路径。用户确认权不变：
-  # 卡片仍需本人点击配对，代理绝不自动建条目。
+  # 卡片仍需本人点击配对。代理唯一会自动创建的是零功能「等待条目」（无 SN、
+  # 不建实体，仅给 HA 装耳朵接收上报，v1.7.11 定案）；真实网关卡片仍须本人确认。
   fast_auto_discovery: true
 schema:
   # v1.7.16 商店回归修复（根因实证：home-assistant/supervisor

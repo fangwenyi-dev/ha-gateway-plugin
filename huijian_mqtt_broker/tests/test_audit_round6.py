@@ -273,7 +273,8 @@ class TestCmdIdNormalize:
         assert f(12.0) == 12
         assert f("12") == 12
         assert f("0012") == 12
-        assert f(True) is True          # bool 透传（int 语义陷阱，交给 miss 分支）
+        assert f(True) is None          # v1.7.18（BUG-14）：bool 归 None——原样透传时
+        assert f(False) is None         # pop(True)==pop(1) 会命中 _bind_ops 键 1 的记账
         assert f(None) is None
         assert f("abc") == "abc"        # 不可归一 → 原样返回，pop 自然 miss
         assert f(12.5) == 12.5          # 非整 float 不猜测，原样交给 miss 分支

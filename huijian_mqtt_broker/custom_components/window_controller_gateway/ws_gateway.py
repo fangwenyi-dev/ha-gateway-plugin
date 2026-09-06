@@ -46,6 +46,7 @@ import asyncio
 import json
 import logging
 import math
+import re
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -69,6 +70,7 @@ from .const import (
     WS_MAX_CLIENTS,
     WS_MAX_FRAME_BYTES,
     WS_RECV_TIMEOUT_SECONDS,
+    WS_RESERVED_PORTS,
     WS_TOKEN_CHARSET,
     WS_TOKEN_MAX_LEN,
     WS_TOKEN_MIN_LEN,
@@ -433,6 +435,12 @@ class WsGatewayServer:
         if not isinstance(value, (str, int, float)):
             return {"type": "control_ack", "ok": False, "msg": "invalid value"}
         value_s = str(value)
+        # v1.7.18（第 7 轮审计 BUG-16）：数值形态须再过线值格式校验——
+        # inf/nan 与 1e+308/1e999 等 str() 出设备不可解析的字面量照样透传
+        # 004 且 control_ack ok=true（假成功）。只放行十进制整数/小数；
+        # str 值维持 F6 白名单透传语义（设备端自校验）。
+        if not isinstance(value, str) and not re.fullmatch(r"-?\d+(\.\d+)?", value_s):
+            return {"type": "control_ack", "ok": False, "msg": "invalid value"}
         data = self._device_gateway(dev_sn)
         if data is not None:
             ok = await data["mqtt_handler"].send_ws_raw_004(dev_sn, attribute, value_s)
@@ -742,6 +750,16 @@ def ws_gateway_wanted(hass: HomeAssistant) -> Optional[Tuple[int, str]]:
                 raise ValueError
         except (ValueError, TypeError):
             port = DEFAULT_WS_GATEWAY_PORT
+        # v1.7.18（第 7 轮审计 BUG-7）：保留端口运行时防线——config_flow
+        # 表单已拦，但 Storage 手改/旧版本残留等非表单路径写入 port=2022
+        # （内置 broker 持口）会撞 OSError。回退默认口 + 告警，好过静默
+        # 不监听。
+        if port in WS_RESERVED_PORTS:
+            _LOGGER.warning(
+                "WS 网关端口 %d 与保留端口冲突（%s），已回退默认 %d",
+                port, sorted(WS_RESERVED_PORTS), DEFAULT_WS_GATEWAY_PORT,
+            )
+            port = DEFAULT_WS_GATEWAY_PORT
         token = options.get(CONF_WS_GATEWAY_TOKEN, DEFAULT_WS_GATEWAY_TOKEN)
         if not isinstance(token, str):
             token = DEFAULT_WS_GATEWAY_TOKEN
@@ -764,7 +782,12 @@ async def async_ensure_ws_gateway(hass: HomeAssistant) -> None:
     if wanted is None:
         if current is not None:
             await current.async_stop()
-            domain_data.pop(WS_GATEWAY_DATA_KEY, None)
+            # v1.7.18（第 7 轮审计 BUG-6，F2 对称补齐）：停止后删注册同样
+            # 须判等——async_stop 有真实让出点（客户端 close 最长 ~10s），
+            # 期间并发 ensure 可能已拉起新实例并登记；无条件 pop 会删掉
+            # 他人注册，孤儿监听器持旧令牌再也关不掉（"WS 已关"假象）。
+            if domain_data.get(WS_GATEWAY_DATA_KEY) is current:
+                domain_data.pop(WS_GATEWAY_DATA_KEY, None)
         return
 
     port, token = wanted
@@ -788,19 +811,40 @@ async def async_ensure_ws_gateway(hass: HomeAssistant) -> None:
         return
 
     server = WsGatewayServer(hass, port=port, token=token)
-    try:
-        await server.async_start()
-    except OSError as e:
-        _LOGGER.error("小程序 WS 网关启动失败（端口 %d 被占用或无权限？不影响其余功能）: %s", port, e)
+    # v1.7.18（第 7 轮审计 BUG-6）：端口撞车大概率是上一轮 ensure 的旧实例
+    # async_stop 尚未释放完（真实让出点）——旧实现一次撞车即放弃，"已保存
+    # 开启"冻结成永不监听。改为：复检活对端（有则 adopt）→ 等 1s 让旧口
+    # 释放 → 重试一次；仍败才放弃（放弃语义与注册清理保持 F2 判等）。
+    start_error: Optional[OSError] = None
+    for _attempt in (1, 2):
+        try:
+            await server.async_start()
+            start_error = None
+            break
+        except OSError as e:
+            start_error = e
+            existing = domain_data.get(WS_GATEWAY_DATA_KEY)
+            if existing is not None and existing is not server and not existing._stopping:
+                # 并发对端已注册成功：热同步 adopt，本实例让位
+                existing._token = token
+                existing._attach_listeners([data["device_manager"] for _gw, data in existing._entries_data()])
+                return
+            if _attempt == 1:
+                await asyncio.sleep(1.0)
+        except Exception as e:  # noqa: BLE001
+            _LOGGER.error("小程序 WS 网关启动异常（不影响其余功能）: %s", e, exc_info=True)
+            return
+    if start_error is not None:
+        _LOGGER.error(
+            "小程序 WS 网关启动失败（端口 %d 被占用或无权限？不影响其余功能，"
+            "下次条目变更/保存选项会再补拉）: %s", port, start_error,
+        )
         # v1.7.12（第 6 轮审计 F2）：本失败实例从未登记——无条件 pop 会误删
         # 并发另一路 ensure 成功方的注册（多条目并行 setup 实测窗口）：
         # 注册表真空后 unload/"关闭 WS"都停不掉那台仍在监听 9001 的孤儿
         # 服务器。仅当注册确实指向本实例时才清理。
         if domain_data.get(WS_GATEWAY_DATA_KEY) is server:
             domain_data.pop(WS_GATEWAY_DATA_KEY, None)
-        return
-    except Exception as e:  # noqa: BLE001
-        _LOGGER.error("小程序 WS 网关启动异常（不影响其余功能）: %s", e, exc_info=True)
         return
 
     # v1.7.12（审计 F2）：迟到撞车复检——async_start 是让出点，若另一并发

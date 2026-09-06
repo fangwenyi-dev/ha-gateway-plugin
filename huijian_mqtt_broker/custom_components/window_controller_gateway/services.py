@@ -600,6 +600,23 @@ async def handle_transfer_device(hass: HomeAssistant, call: ServiceCall) -> None
         raise ServiceValidationError(f"转移设备失败：{e}") from e
 
 
+async def handle_unignore_gateway(hass: HomeAssistant, call: ServiceCall) -> None:
+    """取消忽略网关（v1.7.18，第 7 轮审计 BUG-3）。
+
+    发现卡片上误点"忽略"后，v1.7.12 起忽略记录持久化跨重启——该 SN 永不
+    再出卡，而 async_unignore_gateway 一直没有任何生产调用方（误操作无
+    自救入口）。本服务是它的唯一出口：开发工具/自动化/YAML 均可调用。
+    取消后该网关的下一次上报即可重新触发发现卡片。
+    """
+    from .discovery import async_unignore_gateway
+
+    gateway_sn = str(call.data.get("gateway_sn", "")).strip()
+    if not gateway_sn:
+        raise ServiceValidationError("取消忽略：gateway_sn 不可为空")
+    await async_unignore_gateway(hass, gateway_sn)
+    _LOGGER.info("已取消忽略网关 %s（下次上报将重新出发现卡片）", gateway_sn)
+
+
 def register_services(hass: HomeAssistant) -> bool:
     """注册服务"""
     # P0 修复：所有服务处理器均为 async def，必须用 async 包装器传入
@@ -623,6 +640,9 @@ def register_services(hass: HomeAssistant) -> bool:
 
     async def _transfer_device(call: ServiceCall) -> None:
         await handle_transfer_device(hass, call)
+
+    async def _unignore_gateway(call: ServiceCall) -> None:
+        await handle_unignore_gateway(hass, call)
 
     # 注册服务
     try:
@@ -709,6 +729,16 @@ def register_services(hass: HomeAssistant) -> bool:
             schema=vol.Schema({
                 vol.Required("device_id"): cv.string,
                 vol.Required("new_gateway_sn"): cv.string,
+            })
+        )
+
+        # v1.7.18（第 7 轮审计 BUG-3）：误点"忽略"后的唯一自救出口
+        hass.services.async_register(
+            DOMAIN,
+            "unignore_gateway",
+            _unignore_gateway,
+            schema=vol.Schema({
+                vol.Required("gateway_sn"): cv.string,
             })
         )
 

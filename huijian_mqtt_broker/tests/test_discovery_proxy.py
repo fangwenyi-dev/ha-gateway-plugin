@@ -93,12 +93,47 @@ class TestBootstrap:
         p.handle_line(FIELD_005)
         assert pubs == [] and log == []
 
-    def test_ears_confirmed_cached_across_reports(self):
+    def test_seed_cooldown_between_reports(self):
+        """v1.7.18（BUG-4）：永久确认缓存改为建耳冷却——冷却窗内后续上报不动作。"""
         p, pubs, _, _ = _proxy(entries=[])
         p.handle_line(FIELD_005)
         pubs.clear()
-        p.handle_line(FIELD_005)          # 第二条上报：耳朵已确认，不再动作
+        p.handle_line(FIELD_005)          # 第二条上报：冷却窗内（now=1003 < 1030）
         assert pubs == []
+
+    def test_loaded_entry_counts_as_ear(self):
+        p, pubs, log, _ = _proxy(entries=[
+            {"domain": "window_controller_gateway", "state": "loaded"}])
+        p.handle_line(FIELD_005)
+        assert pubs == [] and log == []
+
+    def test_not_loaded_entry_is_not_an_ear(self):
+        """v1.7.18（BUG-4）：state≠loaded（禁用/setup 失败/被删残留）条目
+        没挂心跳监听器不算耳朵——旧版 domain 匹配即短路，卡片永不出现。
+        （无 state 字段按 loaded 兼容处理，见 test_existing_entry_no_action。）"""
+        p, pubs, log, _ = _proxy(entries=[
+            {"domain": "window_controller_gateway", "state": "not_loaded"}])
+        p.handle_line(FIELD_005)
+        assert len(pubs) == 2 and any("等待配置" in m for m in log)
+
+    def test_entry_evicted_reseeds_after_cooldown(self):
+        """v1.7.18（BUG-4 核心回归）：用户删除/禁用自动建的等待条目后，
+        代理必须冷却到期自动补种——旧 _ears_confirmed 缓存下 v1.7.11 的
+        秒级自动发现会静默死亡直到容器重启。"""
+        entries: list = []
+        p, pubs, log, clock = _proxy(entries=entries, create_outcome="created")
+        p.handle_line(FIELD_005)
+        entries.append({"domain": "window_controller_gateway", "state": "loaded"})
+        pubs.clear()
+        clock["t"] += 40
+        p.handle_line(FIELD_005)                  # 耳朵活着 → 纯观察
+        assert pubs == []
+        entries.clear()                            # 用户删除条目
+        clock["t"] += 40
+        other = json.dumps({"head": "$SH", "id": 9, "ctype": "002",
+                            "sn": "100199999999", "data": {}})
+        p.handle_line(other)
+        assert len(pubs) == 2, "条目被删后新 SN 上报应重新补种+重放出卡"
 
     def test_second_gateway_no_replay(self):
         p, pubs, _, _ = _proxy(entries=[])

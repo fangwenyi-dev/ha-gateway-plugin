@@ -489,11 +489,17 @@ class WindowControllerDeviceManager:
         # 强制设备类型为开窗器，忽略传入的其他类型
         device_type = DEVICE_TYPE_WINDOW_OPENER
 
+        device_existed = device_sn in self.devices
+
         # 设备数量上限检查：防止 MQTT 伪造消息无限注入设备导致
         # 实体注册表/持久化文件膨胀（DoS）。迁移（force=True）不受限，
         # 迁移流程内部有独立的容量校验。
+        # v1.7.18（第 7 轮审计 BUG-8）：cap 只拦"新设备"——旧实现置于
+        # 存在性检查之前，满载网关上对既有设备的重配对/再添加被整体拒绝，
+        # 下方存在分支的注册表重连/映射自愈/实体重建全部跳过（满载恰是最
+        # 需要自愈的场景）。既有设备再确认不构成增量。
         from .const import MAX_DEVICES_PER_GATEWAY
-        if not force and len(self.devices) >= MAX_DEVICES_PER_GATEWAY:
+        if not device_existed and not force and len(self.devices) >= MAX_DEVICES_PER_GATEWAY:
             _LOGGER.warning(
                 "设备数量已达上限 %d，拒绝添加新设备: %s", MAX_DEVICES_PER_GATEWAY, device_sn
             )
@@ -502,7 +508,6 @@ class WindowControllerDeviceManager:
         # 格式化设备名称
         device_name_with_sn = self._format_device_name(device_sn, device_name)
             
-        device_existed = device_sn in self.devices
         if device_existed:
             _LOGGER.debug("设备已存在: %s", device_sn)
             
