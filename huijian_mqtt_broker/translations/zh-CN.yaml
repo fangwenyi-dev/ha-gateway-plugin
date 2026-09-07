@@ -23,10 +23,12 @@ configuration:
       自动把集成代码落盘到 HA（升级加载项后重启即更新到新版）。
       建议保持开启。
   coexist_bridge_enabled:
-    name: zigbee2mqtt 共存桥（默认关闭）
+    name: MQTT 共存桥（默认关闭）
     description: >-
-      开启后探测本机 1883 端口，发现官方「Mosquitto broker」加载项即
-      自动搭 z2m 消息桥让两者共存。官方 7.x 起强制认证，须同时成对填写
+      开启后探测本机 1883 端口，发现官方「Mosquitto broker」加载项即自动
+      搭消息桥共存（默认接 zigbee2mqtt 双向 + HA 发现主题进）。ESPHome、
+      Tasmota 等其他 MQTT 加载项经下方「共存桥 · 追加桥接主题」打通后即可
+      在官方 broker 上全功能使用。官方 7.x 起强制认证，须同时成对填写
       下方两项官方账号凭据，否则桥连不上（仅官方侧日志每 30 秒出现一条
       拒绝记录，慧尖自身功能不受影响）。只用慧尖网关请保持关闭。
   coexist_official_user:
@@ -38,6 +40,15 @@ configuration:
     name: 共存桥 · 官方 broker 密码
     description: >-
       上述官方账号的密码。只填一半会按匿名桥降级并打警告。
+  coexist_bridge_topics:
+    name: 共存桥 · 追加桥接主题
+    description: >-
+      默认桥只接 zigbee2mqtt/#（双向）与 homeassistant/#（进）。要让
+      ESPHome、Tasmota 等加载项经官方 broker 全功能共存，在此追加它们
+      的主题树：逗号分隔「主题[:方向]」，方向取 in（设备→HA）/out
+      （HA→设备）/both（双向，缺省）。示例：esphome/# 或
+      tele/#:in, stat/#:in, cmnd/#:out。改后重启慧尖生效。gateway、test
+      等保留树与全匹配模式代码级拒绝——开窗器指令面永不跨桥（安全红线）。
   fast_auto_discovery:
     name: 网关快速自动发现
     description: >-

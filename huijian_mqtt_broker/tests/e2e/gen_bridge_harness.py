@@ -39,7 +39,10 @@ fns = (m.group(1)
         # v1.6.26（D-3）：总开关进 harness（默认 true=生产默认；e2e 可置
         # TEST_BRIDGE_ENABLED=false 验证熔断/拆桥）
         .replace("bashio::config 'coexist_bridge_enabled'",
-                 'echo "${TEST_BRIDGE_ENABLED:-true}"'))
+                 'echo "${TEST_BRIDGE_ENABLED:-true}"')
+        # v1.7.19（方案一）：追加主题腿占位——净化器在 1a+ 段（本抽取区
+        # 之外），harness 用测试环境变量供给其产物；缺省空=默认三腿不变
+        .replace("${BRIDGE_TOPICS_EXTRA}", "${TEST_BRIDGE_TOPICS_EXTRA:-}"))
 
 MOCK = """
 # —— 主自愈循环模拟：**逐行对齐 run.sh 真实主循环**（v1.6.20 语义）：

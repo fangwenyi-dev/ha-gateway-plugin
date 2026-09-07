@@ -116,6 +116,9 @@ def test_acl_bridge_alignment_no_wildcard():
                  "topic readwrite gateway/+",          # 慧尖协议三行自 1.6.x 沿用
                  ):
         assert need in ha_seg, f"ha_mqtt 段缺 {need}"
+    # v1.7.19（方案一）：动态追加腿 ACL 必须落在 ha_mqtt 段内（与桥腿同源
+    # 同位置，v1.6.24 逐条对齐不变量的扩展形态；行为验证见 test_v1719）
+    assert "${BRIDGE_ACL_EXTRA}" in ha_seg, "追加腿 ACL 未注入 ha_mqtt 段"
     # LoRa 网关用户段不得含 zigbee2mqtt/#（z2m 域隔离）
     gw_seg = _seg(r"\$\{USERNAME\}（LoRa 网关", r"\$SYS 主题（只读）", "huijian ACL 段")
     assert "zigbee2mqtt" not in gw_seg, "网关账号不得触 z2m 域"
@@ -145,6 +148,10 @@ def test_bridge_conf_format_redline():
         "topic zigbee2mqtt/# out 1",
         "topic zigbee2mqtt/# in 1",
         "topic homeassistant/# in 1",
+        # v1.7.19（方案一）：追加腿占位——内容由 1a+ 净化器渲染（gateway/
+        # test/通配首层/注入形态在写入门上代码级拒绝），净化器本身由
+        # tests/test_v1719_bridge_topics.py **执行生产 bash 段**逐条实证
+        "${BRIDGE_TOPICS_EXTRA}",
     ], f"桥块出现未实证行: {lines}"
     # gateway 腿永久摘除的钉桩（匿名@1883 穿桥控固件=实锤攻击链，安全评审
     # 定案）：桥块与 ACL 白名单都不得出现跨桥 gateway 的 topic 行

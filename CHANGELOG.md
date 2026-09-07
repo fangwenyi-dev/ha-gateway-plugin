@@ -3,6 +3,21 @@
 所有版本变更记录在此文件中。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.7.19] - 2026-09-08
+
+共存根治批（方案一：桥主题白名单可配置化）：安装慧尖后，官方 Mosquitto 上的**任意** MQTT 加载项（ESPHome/Tasmota/Shelly/自研前缀…）可与慧尖互不干扰地全功能共存，不再只有 zigbee2mqtt 有活路。
+
+### Added
+
+- **`coexist_bridge_topics` 共存桥追加主题**（配置页「共存桥 · 追加桥接主题」）：逗号分隔 `主题[:方向]`（in=官方→慧尖、out=慧尖→官方、缺省 both），在默认双腿（`zigbee2mqtt/#` 双向 + `homeassistant/#` 进）之上追加桥腿。每条桥腿在 ha_mqtt 账号 ACL 逐条对齐派生（in→read / out→write / both→readwrite），维持 v1.6.24"爆炸半径不超桥白名单"安全不变量。改后重启慧尖生效；留空=行为与旧版逐字节一致。
+- 安全红线**代码级固化，配置不可解除**：gateway/test/$SYS 保留树、`#`/`+` 通配首层（全匹配会圈进慧尖树）、`#` 非末层与 `+` 混层等 mosquitto 拒载形态、字符白名单外的一切注入形态（反引号/分号/换行/`$()`）全部在写入门上拒绝并打 `[共存桥] 拒绝 …` 日志跳过；homeassistant 树 out 腿永久钳制（防心跳回灌）；上限 16 树。
+
+### Tests
+
+- 新增 `tests/test_v1719_bridge_topics.py` 36 用例：净化器**逐字抽出生产 bash 段真实执行**（raw 值 base64 内嵌 + RAWLEN 自检防传输变形——开发期实锤旁路文件路径换算失败会令拒绝类断言集体假阴）；gateway/保留树/注入/通配形态逐类钉死；桥腿与 ACL 同源咬合静态锚。
+- `test_v1624` 桥块红线条目纳入 `${BRIDGE_TOPICS_EXTRA}` 占位、ha_mqtt 段钉上 `${BRIDGE_ACL_EXTRA}` 注入点；e2e harness 生成器接 `TEST_BRIDGE_TOPICS_EXTRA`（默认空=既有实证不变）。
+- 文档：README 共存章节改写为普适共存模型（含 ESPHome/Tasmota/Shelly 填法矩阵）；配置页说明卡 + Supervisor 中文/英文翻译同步。
+
 ## [1.7.18] - 2026-09-08
 
 第 7 轮全量审计（5 路并行审计 + 父级逐条独立核验 + 上游 HA 源码实证）修复批：23 条真实缺陷清零，审计原始 32 条中 3 条误报驳回、约 7 条撞既往定案红线不列。钉桩 tests/test_v1718_audit.py（16 用例）+ 更新 test_v1712/test_mqtt_gate/test_discovery_proxy 至新契约。

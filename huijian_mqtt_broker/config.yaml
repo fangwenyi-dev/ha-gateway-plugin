@@ -1,5 +1,5 @@
 name: 慧尖 LoRa 网关
-version: "1.7.18"
+version: "1.7.19"
 slug: huijian_mqtt_broker
 description: 慧尖开窗器 LoRa 网关一体化插件，内置 Mosquitto Broker + 网关集成，安装即用
 url: 'https://github.com/fangwenyi-dev/ha-gateway-plugin'
@@ -82,6 +82,18 @@ options:
   # 纯慧尖用户永远无需理会本项。
   coexist_official_user: ""
   coexist_official_password: ""
+  # v1.7.19（方案一：普适共存）：共存桥【追加】主题树。HA 的 MQTT 集成全局
+  # 唯一且必须钉在慧尖内置 broker（网关主题不可跨桥），官方 broker 上其他
+  # MQTT 生态（ESPHome/Tasmota/Shelly/自研前缀…）与 HA 互通的唯一通道就是
+  # 这座桥——旧桥只接 z2m 两棵树，其他加载项"能发现、控不了"。本项在默认腿
+  # （zigbee2mqtt/# 双向 + homeassistant/# 进）之上追加分隔条目：
+  #   pattern[:direction] 逗号分隔；direction 取 in|out|both，缺省 both；
+  #   in=官方→慧尖（设备状态/上报进 HA），out=慧尖→官方（HA 命令送达设备）。
+  # 例：完整接管 ESPHome 生态填 "esphome/#"；Tasmota 按腿填
+  #   "tele/#:in, stat/#:in, cmnd/#:out"。改后重启慧尖生效。
+  # 红线（代码级不可配解）：gateway/test/$SYS 保留树、通配首层、全匹配 #
+  # 一律拒绝；homeassistant 树重复请求忽略（out 腿永久钳制防心跳回灌）。
+  coexist_bridge_topics: ""
   # v1.7.11 快速自动发现：容器内代理订阅 gateway/rpt_rsp，捕获网关上报即
   # 经 Supervisor API 代发起发现流程——全新 HA（从未添加过集成）也能秒级在
   # 「设置→设备与服务」出现"慧尖网关"发现卡片（此前必须先手动添加一次
@@ -111,4 +123,5 @@ schema:
   coexist_bridge_enabled: bool
   coexist_official_user: str?
   coexist_official_password: password?
+  coexist_bridge_topics: str?
   fast_auto_discovery: bool

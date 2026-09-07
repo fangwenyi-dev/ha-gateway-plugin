@@ -149,6 +149,112 @@ echo "[OK] 密码文件权限已设置 (600, mosquitto:mosquitto)"
 # v1.6.3：删除"密码文件内容诊断"打印——即使命令端截断，前 20 字符
 # 已足够泄露盐值与算法参数，属凭据外泄面
 
+# ---------- 1a+. 共存桥追加主题白名单（v1.7.19 方案一） ----------
+# BEGIN BRIDGE-TOPICS-SANITIZER（test_v1719 逐字抽出执行——移动/改名须同步锚）
+# 背景（共存根因）：HA 的 MQTT 集成全局单条目，慧尖为保证网关可达必须把它
+# 钉在内置 broker(:2022)；官方「Mosquitto broker」上其他生态（ESPHome/
+# Tasmota/自研前缀…）要与 HA 互通，唯一通道是共存桥——但旧桥只接
+# zigbee2mqtt/# 与 homeassistant/# 两棵树，其他加载项"能发现、控不了"半残。
+# 本净化器把 coexist_bridge_topics 的追加树（逗号分隔 pattern[:in|out|both]，
+# 方向缺省 both）渲染成两组逐条对齐的行：
+#   BRIDGE_TOPICS_EXTRA → 桥块 topic 腿；BRIDGE_ACL_EXTRA → ha_mqtt ACL
+#   （in→read / out→write / both→readwrite，维持 v1.6.24"爆炸半径不超桥腿"）。
+# 代码级红线（配置不可解除）：
+#   1) gateway/test 保留树拒绝（穿桥未认证开窗链，v1.6.24 安全评审定案）；
+#   2) 首层必须具名字面量（禁 #/+ 开头——全匹配会圈进慧尖树）；'#' 仅可
+#      末层、'+' 仅可整层（mosquitto conf 拒载形态在写入前拦截）；
+#   3) 字符白名单挡 conf/ACL 注入（$、空格、反引号、分号、换行全部不可达）；
+#   4) homeassistant 树方向钳制为 in（out 会把内置侧心跳回灌官方 broker，
+#      v1.6.24 定案），zigbee2mqtt 树默认桥已双向——两者重复请求仅提示忽略；
+#   5) 上限 16 树（防配置误刷导致 conf 膨胀）。
+BRIDGE_TOPICS_RAW=$(bashio::config 'coexist_bridge_topics' 2>/dev/null || true)
+BRIDGE_TOPICS_EXTRA=""
+BRIDGE_ACL_EXTRA=""
+BRIDGE_EXTRA_TREES=0
+_seen_pats=" "
+if [ -n "${BRIDGE_TOPICS_RAW}" ]; then
+    IFS=',' read -r -a _BTOK_ARR <<< "${BRIDGE_TOPICS_RAW}"
+    for _btok in "${_BTOK_ARR[@]}"; do
+        _btok=${_btok//[[:space:]]/}
+        [ -z "${_btok}" ] && continue
+        _bpat="${_btok}"
+        _bdir=both
+        case "${_btok}" in
+            *:*) _bpat="${_btok%%:*}"; _bdir="${_btok##*:}" ;;
+        esac
+        _bdir=$(printf '%s' "${_bdir}" | tr 'A-Z' 'a-z')
+        case "${_bdir}" in
+            in|out|both) ;;
+            *) echo "[共存桥] 拒绝 '${_btok}'：方向只允许 in/out/both"; continue ;;
+        esac
+        if [ "${#_bpat}" -gt 100 ] || [ -z "${_bpat}" ]; then
+            echo "[共存桥] 拒绝 '${_btok}'：主题为空或超长(>100)"; continue
+        fi
+        if [ "${_bpat}" != "$(printf '%s' "${_bpat}" | tr -cd 'A-Za-z0-9_./#+-')" ]; then
+            echo "[共存桥] 拒绝 '${_btok}'：含非法字符（仅允许字母/数字/_-./#+）"; continue
+        fi
+        _bfs="${_bpat%%/*}"
+        if [ -z "${_bfs}" ]; then
+            echo "[共存桥] 拒绝 '${_btok}'：首层必须为具名字面量"; continue
+        fi
+        case "${_bfs}" in
+            *'+'*|*'#'*)
+                echo "[共存桥] 拒绝 '${_btok}'：首层禁通配（全匹配会圈进慧尖保留树）"; continue ;;
+        esac
+        case "${_bfs}" in
+            [Gg][Aa][Tt][Ee][Ww][Aa][Yy])
+                echo "[共存桥] 拒绝 '${_btok}'：gateway 树禁跨桥（安全红线，配置不可解除）"; continue ;;
+            [Tt][Ee][Ss][Tt])
+                echo "[共存桥] 拒绝 '${_btok}'：test 健康检查树保留"; continue ;;
+            [Hh][Oo][Mm][Ee][Aa][Ss][Ss][Ii][Ss][Tt][Aa][Nn][Tt])
+                echo "[共存桥] homeassistant 树默认桥已含 in 腿（out 永久钳制，防心跳回灌），忽略 '${_btok}'"; continue ;;
+            [Zz][Ii][Gg][Bb][Ee][Ee]2[Mm][Qq][Tt][Tt])
+                echo "[共存桥] zigbee2mqtt 树默认桥已双向，忽略 '${_btok}'"; continue ;;
+        esac
+        if printf '%s' "${_bpat}" | awk -F/ '{
+                for (i = 1; i <= NF; i++) {
+                    l = $i
+                    if (l ~ /^[A-Za-z0-9_.-]+$/) continue
+                    if (i < NF && l == "+") continue
+                    if (i == NF && l == "#") continue
+                    print "bad"; exit
+                }
+            }' | grep -q '^bad$'; then
+            echo "[共存桥] 拒绝 '${_btok}'：通配符须整层（+）且 # 只能位于末层"; continue
+        fi
+        case "${_seen_pats}" in
+            *" ${_bpat} "*) echo "[共存桥] 忽略重复主题 '${_bpat}'"; continue ;;
+        esac
+        _seen_pats="${_seen_pats}${_bpat} "
+        if [ "${BRIDGE_EXTRA_TREES}" -ge 16 ]; then
+            echo "[共存桥] 已达追加主题上限 16 树，忽略 '${_btok}'"; continue
+        fi
+        BRIDGE_EXTRA_TREES=$((BRIDGE_EXTRA_TREES + 1))
+        case "${_bdir}" in
+            both)
+                BRIDGE_TOPICS_EXTRA="${BRIDGE_TOPICS_EXTRA}topic ${_bpat} out 1
+topic ${_bpat} in 1
+"
+                BRIDGE_ACL_EXTRA="${BRIDGE_ACL_EXTRA}topic readwrite ${_bpat}
+" ;;
+            out)
+                BRIDGE_TOPICS_EXTRA="${BRIDGE_TOPICS_EXTRA}topic ${_bpat} out 1
+"
+                BRIDGE_ACL_EXTRA="${BRIDGE_ACL_EXTRA}topic write ${_bpat}
+" ;;
+            in)
+                BRIDGE_TOPICS_EXTRA="${BRIDGE_TOPICS_EXTRA}topic ${_bpat} in 1
+"
+                BRIDGE_ACL_EXTRA="${BRIDGE_ACL_EXTRA}topic read ${_bpat}
+" ;;
+        esac
+    done
+    if [ -n "${BRIDGE_TOPICS_EXTRA}" ]; then
+        echo "[共存桥] 追加桥腿共 $(printf '%s' "${BRIDGE_TOPICS_EXTRA}" | grep -c '^topic ' || true) 条（coexist_bridge_topics，改配置后重启慧尖生效）"
+    fi
+fi
+# END BRIDGE-TOPICS-SANITIZER
+
 # ---------- 1b. 动态生成 ACL 文件 ----------
 ACL_FILE="/etc/mosquitto/acl"
 {
@@ -184,7 +290,7 @@ user ${HA_MQTT_USERNAME}
 
 topic readwrite homeassistant/#
 topic readwrite zigbee2mqtt/#
-
+${BRIDGE_ACL_EXTRA}
 # 慧尖网关协议主题
 topic readwrite gateway/+
 topic readwrite gateway/+/req
@@ -716,6 +822,9 @@ ${BRIDGE_CREDS}
 topic zigbee2mqtt/# out 1
 topic zigbee2mqtt/# in 1
 topic homeassistant/# in 1
+# v1.7.19（方案一）：coexist_bridge_topics 追加树（1a+ 净化器渲染，逐条对齐
+# ha_mqtt ACL；gateway/test/$SYS/全匹配形态已在写入门上代码级拒绝）。
+${BRIDGE_TOPICS_EXTRA}
 # 禁 gateway/# 跨桥（v1.6.24 安全评审定案，实测取证）：in 腿等于把对端
 # 信任域直连慧尖执行器——匿名@1883 publish gateway/{sn}/req 可穿桥达固件
 # 实现未认证物理开窗。慧尖流量隔离在本 broker；若 HA 的 MQTT 条目被其他

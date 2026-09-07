@@ -33,7 +33,7 @@ Web UI（侧边栏「慧尖」）或 设置 → 设备与服务 → 添加集成
 配网后自动接入本插件。设备实体覆盖 Cover / Button / Sensor / Number，
 支持开/关/停/内倒/位置/速度/力度与子设备重命名。
 
-## 与 zigbee2mqtt 共存
+## 与其他 MQTT 加载项共存（zigbee2mqtt / ESPHome / Tasmota…）
 
 慧尖内置 broker 支持多账号 ACL 隔离，可与 zigbee2mqtt 加载项共存，两条路径任选：
 
@@ -50,15 +50,36 @@ broker，单 broker 即全家桶，**无需共存桥**。
 
 ### 路径 B — 已有官方「Mosquitto broker」加载项（共存桥，默认关）
 
-若 z2m 必须跑在官方 Mosquitto 上（如已有存量设备/其他系统依赖），慧尖提供
-自动共存桥：在慧尖「配置」页把 **zigbee2mqtt 共存桥（coexist_bridge_enabled）**
-开关打开，并**成对填写**官方 broker 的账号密码（`coexist_official_user/
-password`——必须是官方加载项自己配置页添加的账号，勿填 huijian/huijian2022，
-官方用户库里没有），重启慧尖即建桥。
+若 z2m/其他 MQTT 加载项必须跑在官方 Mosquitto 上（如已有存量设备/其他系统
+依赖），慧尖提供自动共存桥：在慧尖「配置」页把 **MQTT 共存桥
+（coexist_bridge_enabled）** 开关打开，并**成对填写**官方 broker 的账号密码
+（`coexist_official_user/password`——必须是官方加载项自己配置页添加的账号，
+勿填 huijian/huijian2022，官方用户库里没有），重启慧尖即建桥。
 
-- 桥只接 `zigbee2mqtt/#` 双向 + `homeassistant/#` 单向进，**不转发慧尖
-  `gateway/#` 主题**（防止外部信任域直连开窗执行器）；
-- 官方 Mosquitto 停止/卸载后桥自动拆除；开关改回关，已建桥 30 秒内自动拆；
+背景（为何需要桥）：HA 的 MQTT 集成全局唯一，慧尖为保证网关可达必须把它
+指向内置 broker（:2022）；官方 broker 上的其他设备要与 HA 互通，唯一通道
+就是这座方向分离桥。
+
+- 默认桥只接 `zigbee2mqtt/#` 双向 + `homeassistant/#` 单向进；
+- **v1.7.19 起可配置追加主题树**（`coexist_bridge_topics`）：逗号分隔
+  `主题[:方向]`，方向 `in`=官方→慧尖（设备状态进 HA）、`out`=慧尖→官方
+  （HA 命令送达设备）、缺省 `both`。常用生态示例：
+
+  | 加载项 | 追加桥接主题填法 |
+  |--------|------------------|
+  | ESPHome（MQTT 模式） | `esphome/#` |
+  | Tasmota | `tele/#:in, stat/#:in, cmnd/#:out` |
+  | Shelly | `shellies/#` |
+  | 自研前缀 | `你的前缀/#` |
+
+  每条桥腿会自动、逐条对齐地扩 HA 连接账号的最小权限 ACL（in→只读、
+  out→只写、both→读写），爆炸半径不超桥腿（v1.6.24 安全不变量）；
+- **代码级红线（配置不可解除）**：`gateway/…`、`test/…`、`$SYS`、`#` 或
+  `+` 开头的通配全匹配一律拒绝写入——开窗器指令面永不跨桥（防未认证
+  物理控制）；`homeassistant` 树 out 腿永久钳制（防心跳回灌干扰官方侧
+  用户）。违规项启动日志会打 `[共存桥] 拒绝 …` 并跳过，不影响其他项；
+- 改配置后重启慧尖生效；官方 Mosquitto 停止/卸载后桥自动拆除；开关改回
+  关，已建桥 30 秒内自动拆；
 - 该开关**默认关闭**（v1.7.13 定案）：官方 7.x 起强制认证，未配凭据的桥
   连不上只会在官方侧日志留下周期拒绝记录，故改为手动开闸制；
 - 若你的 `1883` 端口跑的是其他第三方服务（部分 NAS 套件如此），请保持
