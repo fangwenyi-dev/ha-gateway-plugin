@@ -11,7 +11,12 @@
 ## 安装方法
 
 1. 在 HA 中打开 **设置 → 加载项 → 加载项商店 → ⋮ → 仓库**
-2. 添加仓库地址：`https://github.com/fangwenyi-dev/ha-gateway-plugin`
+2. 添加仓库地址（**二选一**，勿同加——同 slug 会在商店重复出现）：
+   - GitHub：`https://github.com/fangwenyi-dev/ha-gateway-plugin`
+   - 国内 GitHub 拉取失败/超时（Supervisor 日志 `store.git … unexpected eof`
+     / `StoreGitError`）时用 Gitee 镜像（逐提交同步）：
+     `https://gitee.com/fangwenyi-dev/ha-gateway-plugin`
+   已安装加载项不受 GitHub 连接影响（镜像走阿里云 ACR，运行纯局域网）。
 3. 在加载项商店中找到「慧尖 LoRa 网关」并安装
 4. 点击启动 — 全部自动完成：
    - ✅ Mosquitto broker 启动，监听 2022 端口
