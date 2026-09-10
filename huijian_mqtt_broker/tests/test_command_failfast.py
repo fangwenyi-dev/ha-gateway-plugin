@@ -116,6 +116,35 @@ class TestCoverCommandsFailfast:
         await _cover(h).async_open_cover()
         assert h.calls == [("5005X", "open", None)]
 
+    # ---- v1.7.20 set_cover_position：与 open/close/stop 同族失败口径 ----
+    @pytest.mark.asyncio
+    async def test_set_position_success_args(self):
+        h = RecHandler(result=True)
+        await _cover(h).async_set_cover_position(position=42)
+        assert h.calls == [("5005X", "set_position", {"position": 42})]
+
+    @pytest.mark.asyncio
+    async def test_set_position_undelivered_raises(self):
+        h = RecHandler(result=False)
+        with pytest.raises(HomeAssistantError):
+            await _cover(h).async_set_cover_position(position=50)
+
+    @pytest.mark.asyncio
+    async def test_set_position_exception_raises(self):
+        h = RecHandler(exc=RuntimeError("broker down"))
+        with pytest.raises(HomeAssistantError):
+            await _cover(h).async_set_cover_position(position=50)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("bad", [-1, 101, None, "abc"])
+    async def test_set_position_invalid_rejected_before_send(self, bad):
+        # v1.6.19 B-LOW11 同口径：越界/非法在实体层即拒，绝不落到
+        # "0=关窗" 的反向动作；且不得消耗一次命令下发
+        h = RecHandler(result=True)
+        with pytest.raises(HomeAssistantError):
+            await _cover(h).async_set_cover_position(position=bad)
+        assert h.calls == []
+
 
 class TestButtonPressFailfast:
     @pytest.mark.asyncio

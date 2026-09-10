@@ -9,6 +9,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.components.cover import (
+    ATTR_POSITION,
     CoverEntity,
     CoverEntityFeature,
     CoverDeviceClass,
@@ -23,6 +24,7 @@ from .const import (
     COMMAND_OPEN,
     COMMAND_CLOSE,
     COMMAND_STOP,
+    COMMAND_SET_POSITION,
     DEVICE_STATUS_OPEN,
     DEVICE_STATUS_CLOSED,
     DEVICE_STATUS_UNKNOWN,
@@ -74,7 +76,15 @@ class WindowControllerCover(WindowControllerBaseEntity, RestoreEntity, CoverEnti
         self._attr_supported_features = (
             CoverEntityFeature.OPEN |
             CoverEntityFeature.CLOSE |
-            CoverEntityFeature.STOP
+            CoverEntityFeature.STOP |
+            # v1.7.20（HomeKit Window 映射根治，用户方案拍板：默认开启）：
+            # 上游 homekit/type_covers.py 实证 Window accessory "must
+            # support set_cover_position"——缺这一位时 device_class=window
+            # 的实体在 Apple Home 退化成锁死关闭的窗/卷帘。位置端点不会
+            # 重新引入置灰：v1.6.16 的防线是 assumed_state=True（前端
+            # canOpen/canClose 公式被其短路，见下方注释），position 双保险
+            # 自本版本起让位于 HomeKit 刚需。
+            CoverEntityFeature.SET_POSITION
         )
         # 始终可用，防止变灰
         self._attr_available = True
@@ -112,9 +122,10 @@ class WindowControllerCover(WindowControllerBaseEntity, RestoreEntity, CoverEnti
         副作用是 HA 标准 state 计算（is_closed=None → state=None）
         使 cover.state **永远输出 unknown**——历史曲线、自动化触发条件、
         LLM 语义控制与 Web 管理面板状态行全部失效。现恢复真实语义：
-        窗闭合时原生卡片「关」按钮置灰属 HA 正常行为；Web 面板按钮
-        为自定义控件不受影响。current_cover_position 仍返回 None，
-        避免位置 0/100 端点连带置灰。
+        窗闭合时原生卡片「关」按钮置灰属 HA 正常行为；Web 面板按钮为
+        自定义控件不受影响。位置端点（0/100）连带置灰的风险由 v1.6.16
+        assumed_state 统一防线接管；v1.7.20 起 current_cover_position
+        暴露真实位置供 HomeKit Window。
         """
         device = self.device_manager.get_device(self.device_sn)
         if device:
@@ -209,13 +220,41 @@ class WindowControllerCover(WindowControllerBaseEntity, RestoreEntity, CoverEnti
 
     @property
     def current_cover_position(self):
-        """始终返回None，HA不知道位置，所以所有按钮都可点击
+        """v1.7.20：暴露真实位置（HomeKit Window/LLM/卡片滑块的输入面）。
 
-        注意：如果返回 0，HA 会自动灰掉关闭按钮；
-        如果返回 100，HA 会自动灰掉打开按钮。
-        因此必须返回 None 来保证所有按钮始终可用。
-        位置信息通过 extra_state_attributes 供用户查看。
+        优先级：
+        1. 设备缓存 r_travel ∈ [0,100] → 如实返回（校准后电机上报）；
+        2. 未校准（255）/非法/缺失 → 按开/关状态端点兜底（用户拍板方案 a，
+           与固件"open=全开、close=全关"物理端点一致；部分行程后停机且
+           未校准时会有偏差，校准后自动恢复精确）；
+        3. 状态超时（SENSOR_TIMEOUT_MINUTES 同 is_closed 判据）/无缓存 →
+           None（HomeKit 保持上次值，不谎报）。
+
+        历史注记：v1.0.1~v1.6.19 此属性恒 None 是"防原生卡片按钮置灰"的
+        双保险；v1.6.16 起防置灰正解已是 assumed_state=True 短路前端
+        canOpen/canClose 判据（见 __init__ 注释），本属性暴露不再影响三键
+        常亮——而 HomeKit Window accessory 恰恰**必须**位置能力
+        （上游 type_covers.py 实证）。
         """
+        device = self.device_manager.get_device(self.device_sn)
+        if not device:
+            return None
+        # 与 is_closed 同款时效闸：网关长期失联时不输出陈旧位置
+        _lu = device.get("last_update")
+        if _lu and (time.time() - _lu) > SENSOR_TIMEOUT_MINUTES * 60:
+            return None
+        r_travel = (device.get("attributes") or {}).get("r_travel")
+        try:
+            raw = int(r_travel)
+            if 0 <= raw <= 100:
+                return raw
+        except (ValueError, TypeError):
+            pass
+        status = device.get("status")
+        if status == DEVICE_STATUS_OPEN:
+            return 100
+        if status == DEVICE_STATUS_CLOSED:
+            return 0
         return None
 
     @property
@@ -280,6 +319,32 @@ class WindowControllerCover(WindowControllerBaseEntity, RestoreEntity, CoverEnti
         if not success:
             raise HomeAssistantError("停止失败：命令未送达（网关或设备离线）")
         _LOGGER.info("Cover停止: %s", self.device_sn)
+
+    async def async_set_cover_position(self, **kwargs) -> None:
+        """定位到指定开度 0-100（v1.7.20：HomeKit Window 滑块/
+        cover.set_cover_position 服务入口）。
+
+        命令链与 Web 面板位置滑块同构：004 set_position + w_travel 属性。
+        越界/非法值在本层即拒（不回退——v1.6.19 B-LOW11 同口径：静默夹取
+        或兜 0 会把"开到 150%"执行成反向动作）；未校准电机固件侧会拒绝
+        执行，表现为命令未送达/失败，由 HomeKit/服务调用方如实收到报错。
+        """
+        position = kwargs.get(ATTR_POSITION)
+        try:
+            position_int = int(position)
+        except (ValueError, TypeError, OverflowError):
+            raise HomeAssistantError(f"设置位置失败：无效的位置值 {position!r}")
+        if not 0 <= position_int <= 100:
+            raise HomeAssistantError(f"设置位置失败：位置超出范围(0-100): {position_int}")
+        try:
+            success = await self._get_mqtt_handler().send_command(
+                self.device_sn, COMMAND_SET_POSITION, {"position": position_int})
+        except Exception as e:
+            _LOGGER.error("Cover设置位置失败 %s: %s", self.device_sn, e)
+            raise HomeAssistantError(f"设置位置失败：{e}") from e
+        if not success:
+            raise HomeAssistantError("设置位置失败：命令未送达（网关或设备离线）")
+        _LOGGER.info("Cover设置位置: %s → %d%%", self.device_sn, position_int)
 
 async def async_setup_entry(
     hass: HomeAssistant,

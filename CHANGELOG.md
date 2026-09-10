@@ -3,6 +3,28 @@
 所有版本变更记录在此文件中。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.7.20] - 2026-09-10
+
+Apple Home（HomeKit Bridge）"窗子"正确映射批：开窗器实体补齐位置能力面。旧实体在 HomeKit 桥落入 `WindowCoveringBasic`（开/关/停三态、无百分比），本版起进入真正的 `Window` accessory（位置滑块 + 开度回显）。
+
+### Added
+
+- **cover 实体暴露位置能力（HomeKit Window 刚需）**：上游 `homeassistant/components/homekit/type_covers.py` 实证 `Window`/`OpeningDevice` 准入判据为 `supported_features & SET_POSITION`——缺位时 window 类设备退化为 `WindowCoveringBasic`（仅 open/close/stop，`current_cover_position` 恒 None 时 Apple 端也无开度可显）。用户以 template cover 实证"加上位置参数即正确映射成窗子"，本版本原生对齐：
+  - `supported_features` 增加 `SET_POSITION`（完整位掩码 15 = open|close|set_position|stop）；
+  - `current_cover_position` 返回真实 `r_travel`（0-100 如实回；未校准 255/缺失按开/关状态端点兜底 100/0，校准后自动恢复精确；与 `is_closed` 同款 `SENSOR_TIMEOUT_MINUTES` 时效闸，失联不谎报）；
+  - `async_set_cover_position` 复用现成 004 `set_position` 命令链（与 Web 面板位置滑块同构），越界/非法在实体层即拒（v1.6.19 B-LOW11 口径：绝不静默兜 0 执行反向动作），失败与 open/close/stop 同族如实上抛。
+- **v1.6.16"三键恒可点"定案不受影响**：防置灰的正解是 `assumed_state=True` 短路前端 `canOpen/canClose` 判据（`home-assistant/frontend` cover.ts 实证），"position 恒 None"只是当年的双保险——本版让位给 HomeKit 刚需，钉桩测试同步演进并保住 assumed_state 断言。
+
+### Tests
+
+- `test_cover_state.py`：`current_cover_position` 契约测试改判新语义（真实位置/255 端点兜底/时效闸/双盲 None 多面）+ SET_POSITION 位与位掩码断言；`test_command_failfast.py` 增 set_cover_position 成功参数/未送达抛错/异常抛错/非法值拒发四族。
+- `tests/conftest.py` cover 替身对齐上游真实位值（`OPEN=1 CLOSE=2 SET_POSITION=4 STOP=8`——旧替身 `STOP=4` 恰占真实 SET_POSITION 位，位掩码断言在替身语义下会失真），补 `ATTR_POSITION`。
+- 真栈 E2E（CI 硬门禁）新增 H2 段：真实 HA 核对 cover 实体 `device_class=window` + `SET_POSITION` 位 + `current_position=50`（002 上报驱动），并调 `cover.set_cover_position` 服务、在真 broker 的 req 主题捕获 `value=37/w_travel` 的 004 报文——Apple Home 滑块的完整链路（服务→集成→broker）真栈实证。
+
+### Docs
+
+- README 新增 Apple Home（HomeKit Bridge）映射说明：升级后需重启 HA（集成代码换载），桥按 Window 重建 accessory；未校准电机位置以开/关端点近似，校准后恢复精确百分比。
+
 ## [1.7.19] - 2026-09-08
 
 共存根治批（方案一：桥主题白名单可配置化）：安装慧尖后，官方 Mosquitto 上的**任意** MQTT 加载项（ESPHome/Tasmota/Shelly/自研前缀…）可与慧尖互不干扰地全功能共存，不再只有 zigbee2mqtt 有活路。

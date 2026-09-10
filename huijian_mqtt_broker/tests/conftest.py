@@ -180,9 +180,15 @@ ha_components_sensor.SensorStateClass = type(
     "SensorStateClass", (), {"MEASUREMENT": "measurement"}
 )
 ha_components_cover.CoverEntity = type("CoverEntity", (), {})
+# v1.7.20 对齐上游 homeassistant/components/cover/const.py::CoverEntityFeature
+# 真实位值（OPEN=1 CLOSE=2 SET_POSITION=4 STOP=8）——旧替身 STOP=4 恰为
+# 真实 SET_POSITION 位，位掩码断言在替身语义下会失真；ATTR_POSITION 为
+# 生产导入符号（真值 "position"，上游 cover/__init__ 自 homeassistant.const
+# 重导出）
 ha_components_cover.CoverEntityFeature = type(
-    "CoverEntityFeature", (), {"OPEN": 1, "CLOSE": 2, "STOP": 4}
+    "CoverEntityFeature", (), {"OPEN": 1, "CLOSE": 2, "SET_POSITION": 4, "STOP": 8}
 )
+ha_components_cover.ATTR_POSITION = "position"
 ha_components_cover.CoverDeviceClass = type("CoverDeviceClass", (), {"WINDOW": "window", "CURTAIN": "curtain"})
 ha_components_number.NumberEntity = type("NumberEntity", (), {})
 ha_components_number.NumberMode = type("NumberMode", (), {"SLIDER": "slider"})

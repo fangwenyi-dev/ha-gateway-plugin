@@ -233,6 +233,78 @@ if not found:
     die("002 子设备未进入设备注册表（_quick_add_device/registry 链路异常）")
 step("H", f"MQTT→handler→registry→REST 全链路实证 ✓（ack 捕获 {len(acks)} 条→req）")
 
+# ---------- H2. v1.7.20 HomeKit Window 契约（真栈实证） ----------
+# 上游 homeassistant/components/homekit/type_covers.py 实证：Window
+# accessory 判据 = device_class window + supported_features & SET_POSITION
+# (4) + current_position 数值（"must support set_cover_position"）。
+# 本段用真实 HA 核对该实体状态三输入，并走一次
+# cover.set_cover_position 服务 → 真 broker req 主题捕获 004——即
+# Apple Home 滑块拖动的完整链路（只差 HAP 协议层，那层由用户模板实证）。
+step("H2", "cover 实体 HomeKit Window 输入面 + set_cover_position 真发 004")
+
+
+def _find_cover_entity(obj):
+    if isinstance(obj, dict):
+        if obj.get("domain") == "cover" and obj.get("entity_id"):
+            return obj["entity_id"]
+        for v in obj.values():
+            r = _find_cover_entity(v)
+            if r:
+                return r
+    elif isinstance(obj, list):
+        for v in obj:
+            r = _find_cover_entity(v)
+            if r:
+                return r
+    return None
+
+
+_cover_eid = _find_cover_entity(devs)
+if not _cover_eid:
+    die("devices 视图未见 cover 实体（cover platform 未建立）")
+cov_attrs = {}
+_dead = time.time() + 20
+while time.time() < _dead:
+    st_cov, cov_state = call("GET", f"/api/states/{_cover_eid}")
+    if st_cov == 200:
+        cov_attrs = (cov_state or {}).get("attributes", {})
+        if isinstance(cov_attrs.get("current_position"), int):
+            break
+    time.sleep(2)
+if not cov_attrs.get("supported_features", 0) & 4:
+    die(f"supported_features 缺 SET_POSITION(4)（={cov_attrs.get('supported_features')}）→ HomeKit 将退化")
+if cov_attrs.get("device_class") != "window":
+    die(f"device_class != window（={cov_attrs.get('device_class')}）")
+if cov_attrs.get("current_position") != 50:
+    die(f"r_travel=50 上报后 current_position 应为 50（={cov_attrs.get('current_position')}）")
+# 状态口径钉死（v1.6.8 定案）：status 推导 open=50≠0；即便按位置分支计算
+# 的 HA 旧版 state 逻辑，50>0 同判 open——两代口径下该断言恒成立。
+if (cov_state or {}).get("state") != "open":
+    die(f"cover.state 应为 open（={cov_state}）——位置暴露不得改变状态口径")
+_n0 = len(acks)
+st_scp, scp_resp = call("POST", "/api/services/cover/set_cover_position",
+                        json_body={"entity_id": _cover_eid, "position": 37})
+if st_scp >= 300:
+    die(f"cover.set_cover_position 服务调用失败: HTTP {st_scp} {scp_resp}")
+_pos_seen = False
+_dead = time.time() + 15
+while time.time() < _dead and not _pos_seen:
+    for raw in acks[_n0:]:
+        try:
+            j = json.loads(raw)
+        except Exception:
+            continue
+        dat = j.get("data") or {}
+        if (str(dat.get("value")) == "37"
+                and dat.get("attribute") == "w_travel"
+                and dat.get("sn") == DEV_SN):
+            _pos_seen = True
+            break
+    time.sleep(0.5)
+if not _pos_seen:
+    die("req 主题未捕获 value=37/w_travel 的 004 报文（服务→MQTT 下发链路断）")
+step("H2", "HomeKit Window 实证：SET_POSITION 位/窗类/position=50 读 + 004 真发 ✓")
+
 # ---------- I. WS 网关默认监听 ----------
 step("I", f"WS 网关 {WS_PORT} 常听断言（v1.6.16 默认开语义守护）")
 ok = False
@@ -272,6 +344,7 @@ if summary:
         f.write("## E2E 真栈结果\n"
                 "- onboarding/config flow/002 上报全链路真栈 ✓\n"
                 f"- gateway_online + 子设备注册 + WS {WS_PORT} 常听 ✓\n"
+                "- HomeKit Window 契约：SET_POSITION/窗类/position 读 + set_cover_position→004 真发 ✓\n"
                 f"- soak 500 条注入 ~{rate:.0f}/s，HA 全程可用\n")
 
 pc.loop_stop()

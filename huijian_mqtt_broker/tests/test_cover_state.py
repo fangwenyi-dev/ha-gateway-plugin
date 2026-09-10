@@ -7,6 +7,7 @@ cover.state **永远输出 unknown**，Web 状态行、历史曲线、自动化�
 这是"静默失效面"——旧测试从不构造 device，故 is_closed 恒 None 也无人报错。
 """
 import asyncio
+import time
 from types import SimpleNamespace
 
 from custom_components.window_controller_gateway.cover import WindowControllerCover
@@ -15,6 +16,7 @@ from custom_components.window_controller_gateway.const import (
     DEVICE_STATUS_CLOSED,
     DEVICE_STATUS_UNKNOWN,
     DEVICE_STATUS_CONNECTED,
+    SENSOR_TIMEOUT_MINUTES,
 )
 
 
@@ -184,11 +186,22 @@ class TestAlwaysControllableButtons:
         assert open_cov.is_closed is False   # state 仍真实输出 open
         assert closed_cov.is_closed is True  # state 仍真实输出 closed
 
-    def test_current_cover_position_stays_none(self):
-        # 位置端点（0/100）会经 isFullyOpen/Closed 重新引入端点置灰，
-        # 双保险面：本属性必须恒 None，位置只走 extra_state_attributes
-        for status in (DEVICE_STATUS_OPEN, DEVICE_STATUS_CLOSED):
-            assert self._make(status).current_cover_position is None
+    def test_current_cover_position_contract_v1720(self):
+        """v1.7.20 契约演进：恒 None 的双保险让位于 HomeKit Window 刚需
+        （上游 type_covers.py 实证 Window "must support set_cover_position"）。
+        防置灰不依赖本属性——assumed_state=True 短路判据（上方测试不变）。
+        语义：有效 r_travel 如实回；未校准(255)/缺失按开/关端点兜底（方案 a）；
+        两头都不知道 → None；与 is_closed 同款时效闸。"""
+        assert _make_cover_attrs(DEVICE_STATUS_OPEN, {"r_travel": 65}).current_cover_position == 65
+        assert _make_cover_attrs(DEVICE_STATUS_OPEN, {"r_travel": "0"}).current_cover_position == 0
+        assert _make_cover_attrs(DEVICE_STATUS_OPEN, {"r_travel": 255}).current_cover_position == 100
+        assert _make_cover_attrs(DEVICE_STATUS_CLOSED, {"r_travel": 255}).current_cover_position == 0
+        assert _make_cover_attrs(DEVICE_STATUS_CLOSED, {}).current_cover_position == 0
+        assert _make_cover_attrs(DEVICE_STATUS_UNKNOWN, {}).current_cover_position is None
+        assert _make_cover_attrs(DEVICE_STATUS_CONNECTED, {"r_travel": "abc"}).current_cover_position is None
+        stale = _make_cover_attrs(DEVICE_STATUS_OPEN, {"r_travel": 65})
+        stale.device_manager._device["last_update"] = time.time() - (SENSOR_TIMEOUT_MINUTES * 60 + 1)
+        assert stale.current_cover_position is None, "失联设备不得输出陈旧位置"
 
     def test_stop_feature_declared(self):
         # 渲染门槛：无 STOP feature 时前端根本不画停键（canStop 恒真无用武之地）
@@ -199,3 +212,7 @@ class TestAlwaysControllableButtons:
         assert feats & CoverEntityFeature.STOP
         assert feats & CoverEntityFeature.OPEN
         assert feats & CoverEntityFeature.CLOSE
+        # v1.7.20：HomeKit Window 准入位（缺位则 device_class=window 在
+        # Apple Home 退化为锁死关闭），真实位值 4（conftest 替身已对齐上游）
+        assert feats & CoverEntityFeature.SET_POSITION
+        assert feats == (1 | 2 | 4 | 8), f"feature 位掩码漂移: {feats}"
