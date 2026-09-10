@@ -139,8 +139,32 @@ GATEWAY_PAIRING_TIMEOUT: Final = 60
 GATEWAY_CONNECT_TIMEOUT: Final = 10      # 配置流程中等待网关首次上报的最长时间（秒）
 SLIDER_DEBOUNCE_SECONDS: Final = 1       # 速度/力度滑动条防抖：停止拖动 N 秒后才发送命令
 
-# ==================== 设备SN前缀 ====================
+# ==================== 设备SN前缀（机型码） ====================
 DEVICE_SN_PREFIX_WIND_LOCK: Final = "5005"  # 支持内倒/平开模式的LoRa子设备SN前四位
+
+# v1.7.21（用户 2026-09-10 提供的权威机型矩阵）：SN 前四位 = 机型码。
+# 百分比（位置）能力逐机型不同，而 HomeKit 的准入判据是
+# covered by supported_features & SET_POSITION（上游 homekit/accessories.py:
+# window + SET_POSITION → Window 服务；无该位 → WindowCoveringBasic）：
+#   5001 推拉窗            ✓ 百分比
+#   5002 平开窗            ✗ 暂不支持（用户："以后有可能支持"）
+#   5003 低功耗窗帘        ✓
+#   5004 指纹锁            — 非开窗器
+#   5005 内开内倒执手电机  ✓（另有内倒/平开模式按钮）
+#   5006 平推主机          ✓
+#   5007 后装开窗电机      ✓
+# 因此 SET_POSITION 只对下表机型声明：5002（及未知前缀）走 HA/Apple 原生
+# 三态语义（WindowCoveringBasic：>70 开 / <30 关 / 中间停=暂停），既不会
+# 出现"拖了没反应"的假滑块，也不会把无效位指令打到 LoRa 空口上。
+# 5002 未来固件支持百分比时：把 "5002" 加进本表即可，无需其他改动。
+POSITION_CAPABLE_SN_PREFIXES: Final = frozenset({"5001", "5003", "5005", "5006", "5007"})
+
+# v1.7.21 位置命令合并窗口（机制二：首发立即 + 窗口内只发最终值）。
+# 由来：Apple 窗子磁贴拖动期**持续写** TargetPosition（实机日志 34→46→47
+# 间隔约 250ms），旧实现每条都直发 004 → 一次拖动十几条报文全压到 LoRa
+# 空口（还要等网关逐条 ack）。首发立即发保住 v1.6.9 failfast 契约（未送达
+# 仍同步抛错），窗内后续只记 pending，静默 0.5s 后补发最后一条。
+POSITION_COALESCE_SECONDS: Final = 0.5
 
 # ==================== 小程序局域网 WS 网关（v1.6.15） ====================
 # 复刻固件 app_ws_gateway.c 的 JSON-over-WebSocket 契约，让微信慧尖小程序

@@ -28,7 +28,8 @@ HA = os.environ.get("E2E_HA_URL", "http://127.0.0.1:8123").rstrip("/")
 MQTT_HOST = os.environ.get("E2E_MQTT_HOST", "127.0.0.1")
 MQTT_PORT = int(os.environ.get("E2E_MQTT_PORT", "2022"))
 GW_SN = "E2EGW0000001"
-DEV_SN = "100020003001"
+DEV_SN = "500700000001"     # v1.7.21：SN 前四位=机型码，5007 支持百分比
+DEV_SN_5002 = "500200000001"  # 5002 平开窗：暂不支持百分比（走三态形态）
 WS_PORT = int(os.environ.get("E2E_WS_PORT", "9001"))
 CLIENT_ID = "https://e2e.local.test/"
 
@@ -207,10 +208,15 @@ time.sleep(1)  # 让 SUB 报文过网再发布，观测才可靠
 
 
 def publish_002(rid, rtravel):
+    # v1.7.21：双机型同报——SN 前四位即机型码，能力逐机型不同。
+    # 5007 后装开窗电机（支持百分比）+ 5002 平开窗（暂不支持，r_travel=255
+    # 即实机"未校准"形态）。两条分支都必须在真栈上被证伪/证实。
     payload = {"head": {"cmdid": "002", "id": rid}, "ctype": "002", "id": rid,
                "sn": GW_SN, "data": {"status": 1, "devices": [
-                   {"sn": DEV_SN, "model": "5005", "battery": 1210,
-                    "r_travel": rtravel}]}}
+                   {"sn": DEV_SN, "model": "5007", "battery": 1210,
+                    "r_travel": rtravel},
+                   {"sn": DEV_SN_5002, "model": "5002", "battery": 1200,
+                    "r_travel": 255}]}}
     pc.publish("gateway/rpt_rsp", json.dumps(payload)).wait_for_publish(timeout=5)
 
 
@@ -223,7 +229,11 @@ while time.time() < deadline:
     st, devs = call("GET", f"/api/window_controller_gateway/devices?config_entry_id={entry}")
     if st == 200 and isinstance(devs, list) and devs:
         online = any(d.get("gateway_online") is True for d in devs)
-        found = any(DEV_SN in json.dumps(d) for d in devs)
+        # v1.7.21：视图是扁平设备列表（网关 + 各子设备各自一条），
+        # 按 identifiers 取 SN 集合判两台子设备都已注册
+        _sns = {i[1] for d in devs for i in (d.get("identifiers") or [])
+                if isinstance(i, list) and len(i) > 1}
+        found = DEV_SN in _sns and DEV_SN_5002 in _sns
         if online and found:
             break
     time.sleep(3)
@@ -243,49 +253,62 @@ step("H", f"MQTT→handler→registry→REST 全链路实证 ✓（ack 捕获 {l
 step("H2", "cover 实体 HomeKit Window 输入面 + set_cover_position 真发 004")
 
 
-def _find_cover_entity(obj):
-    if isinstance(obj, dict):
-        if obj.get("domain") == "cover" and obj.get("entity_id"):
-            return obj["entity_id"]
-        for v in obj.values():
-            r = _find_cover_entity(v)
-            if r:
-                return r
-    elif isinstance(obj, list):
-        for v in obj:
-            r = _find_cover_entity(v)
-            if r:
-                return r
-    return None
+def _cover_entities_by_sn(devs):
+    """devices 视图 → {子设备SN: cover 实体}（identifiers 带 SN，零猜测）"""
+    out = {}
+    for d in devs or []:
+        if not isinstance(d, dict):
+            continue
+        sns = [i[1] for i in (d.get("identifiers") or []) if isinstance(i, list) and len(i) > 1]
+        if not sns:
+            continue
+        for e in (d.get("entities") or []):
+            if e.get("domain") == "cover":
+                out[sns[0]] = e["entity_id"]
+    return out
 
 
-_cover_eid = _find_cover_entity(devs)
-if not _cover_eid:
-    die("devices 视图未见 cover 实体（cover platform 未建立）")
-cov_attrs = {}
-_dead = time.time() + 20
-while time.time() < _dead:
-    st_cov, cov_state = call("GET", f"/api/states/{_cover_eid}")
-    if st_cov == 200:
-        cov_attrs = (cov_state or {}).get("attributes", {})
-        if isinstance(cov_attrs.get("current_position"), int):
-            break
-    time.sleep(2)
+_cover_map = _cover_entities_by_sn(devs)
+_eid_5007 = _cover_map.get(DEV_SN)
+_eid_5002 = _cover_map.get(DEV_SN_5002)
+if not _eid_5007 or not _eid_5002:
+    die(f"devices 视图未见两台子设备的 cover 实体（{_cover_map}）")
+
+
+def _state_attrs(eid, want_position=None):
+    """轮询实体状态直到出现期望形态（cover 实体异步创建）"""
+    attrs, state = {}, {}
+    deadline = time.time() + 20
+    while time.time() < deadline:
+        st, body = call("GET", f"/api/states/{eid}")
+        if st == 200:
+            attrs = (body or {}).get("attributes", {})
+            state = body or {}
+            if want_position is None or isinstance(attrs.get("current_position"), int):
+                break
+        time.sleep(2)
+    return attrs, state
+
+
+# --- 支持百分比的机型（5007）：Window 形态三输入 + 004 真发 ---
+cov_attrs, cov_state = _state_attrs(_eid_5007, want_position=True)
 if not cov_attrs.get("supported_features", 0) & 4:
-    die(f"supported_features 缺 SET_POSITION(4)（={cov_attrs.get('supported_features')}）→ HomeKit 将退化")
+    die(f"5007 supported_features 缺 SET_POSITION(4)（={cov_attrs.get('supported_features')}）")
 if cov_attrs.get("device_class") != "window":
-    die(f"device_class != window（={cov_attrs.get('device_class')}）")
+    die(f"5007 device_class != window（={cov_attrs.get('device_class')}）")
 if cov_attrs.get("current_position") != 50:
     die(f"r_travel=50 上报后 current_position 应为 50（={cov_attrs.get('current_position')}）")
+if cov_attrs.get("position_capable") is not True:
+    die("5007 的 position_capable 属性应为 True")
 # 状态口径钉死（v1.6.8 定案）：status 推导 open=50≠0；即便按位置分支计算
 # 的 HA 旧版 state 逻辑，50>0 同判 open——两代口径下该断言恒成立。
 if (cov_state or {}).get("state") != "open":
     die(f"cover.state 应为 open（={cov_state}）——位置暴露不得改变状态口径")
 _n0 = len(acks)
 st_scp, scp_resp = call("POST", "/api/services/cover/set_cover_position",
-                        json_body={"entity_id": _cover_eid, "position": 37})
+                        json_body={"entity_id": _eid_5007, "position": 37})
 if st_scp >= 300:
-    die(f"cover.set_cover_position 服务调用失败: HTTP {st_scp} {scp_resp}")
+    die(f"5007 cover.set_cover_position 服务调用失败: HTTP {st_scp} {scp_resp}")
 _pos_seen = False
 _dead = time.time() + 15
 while time.time() < _dead and not _pos_seen:
@@ -303,7 +326,27 @@ while time.time() < _dead and not _pos_seen:
     time.sleep(0.5)
 if not _pos_seen:
     die("req 主题未捕获 value=37/w_travel 的 004 报文（服务→MQTT 下发链路断）")
-step("H2", "HomeKit Window 实证：SET_POSITION 位/窗类/position=50 读 + 004 真发 ✓")
+
+# --- 无百分比的机型（5002）：必须落回三态形态，且位置服务被拒 ---
+cov2_attrs, cov2_state = _state_attrs(_eid_5002)
+if cov2_attrs.get("supported_features", 0) & 4:
+    die(f"5002 不应声明 SET_POSITION（={cov2_attrs.get('supported_features')}）——"
+        "否则 HomeKit 出现假滑块且丢失三段式暂停")
+if cov2_attrs.get("position_capable") is not False:
+    die("5002 的 position_capable 属性应为 False")
+if cov2_attrs.get("device_class") != "window":
+    die(f"5002 device_class 应仍为 window（={cov2_attrs.get('device_class')}）")
+st_rej, rej_body = call("POST", "/api/services/cover/set_cover_position",
+                        json_body={"entity_id": _eid_5002, "position": 37})
+if st_rej < 400:
+    die(f"5002 的位置服务调用应被 HA 拒绝（HTTP {st_rej}）——无百分比硬件不得受理")
+_n1 = len(acks)
+time.sleep(2)
+_leaked = [a for a in acks[_n1:] if DEV_SN_5002 in a and "w_travel" in a]
+if _leaked:
+    die(f"5002 的无效位置指令泄漏到 LoRa 空口：{_leaked[:1]}")
+step("H2", "HomeKit 双机型实证：5007 Window(SET_POSITION+position=50+004 真发) / "
+           "5002 三态(无位置位、位置服务被拒、无空口泄漏) ✓")
 
 # ---------- I. WS 网关默认监听 ----------
 step("I", f"WS 网关 {WS_PORT} 常听断言（v1.6.16 默认开语义守护）")
@@ -325,7 +368,7 @@ t0 = time.time()
 for i in range(500):
     payload = {"head": {"cmdid": "002", "id": 10000 + i}, "ctype": "002",
                "id": 10000 + i, "sn": GW_SN, "data": {"status": 1, "devices": [
-                   {"sn": DEV_SN, "model": "5005", "battery": 1210,
+                   {"sn": DEV_SN, "model": "5007", "battery": 1210,
                     "r_travel": i % 101}]}}
     pc.publish("gateway/rpt_rsp", json.dumps(payload))
     if i % 50 == 49:
@@ -344,7 +387,7 @@ if summary:
         f.write("## E2E 真栈结果\n"
                 "- onboarding/config flow/002 上报全链路真栈 ✓\n"
                 f"- gateway_online + 子设备注册 + WS {WS_PORT} 常听 ✓\n"
-                "- HomeKit Window 契约：SET_POSITION/窗类/position 读 + set_cover_position→004 真发 ✓\n"
+                "- HomeKit 双机型：5007 Window(SET_POSITION/position/004 真发)、5002 三态(位置服务被拒) ✓\n"
                 f"- soak 500 条注入 ~{rate:.0f}/s，HA 全程可用\n")
 
 pc.loop_stop()

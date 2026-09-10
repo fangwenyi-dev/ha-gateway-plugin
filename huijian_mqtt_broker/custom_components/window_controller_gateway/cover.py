@@ -25,6 +25,8 @@ from .const import (
     COMMAND_CLOSE,
     COMMAND_STOP,
     COMMAND_SET_POSITION,
+    POSITION_CAPABLE_SN_PREFIXES,
+    POSITION_COALESCE_SECONDS,
     DEVICE_STATUS_OPEN,
     DEVICE_STATUS_CLOSED,
     DEVICE_STATUS_UNKNOWN,
@@ -73,19 +75,31 @@ class WindowControllerCover(WindowControllerBaseEntity, RestoreEntity, CoverEnti
         )
         self._attr_name = "开窗器"
         self._entry_id = entry_id
+        # v1.7.21（机型能力分流）：SN 前四位即机型码，百分比能力逐机型不同
+        # （5001/5003/5005/5006/5007 支持；5002 平开窗暂不支持——见 const.py
+        # 权威矩阵）。未知前缀一律按"不支持"兜底：宁可退化为三态（功能完整、
+        # 不会假动作），也不能在无百分比硬件上声明 SET_POSITION。
+        self._position_capable = str(device_sn)[:4] in POSITION_CAPABLE_SN_PREFIXES
         self._attr_supported_features = (
             CoverEntityFeature.OPEN |
             CoverEntityFeature.CLOSE |
             CoverEntityFeature.STOP |
-            # v1.7.20（HomeKit Window 映射根治，用户方案拍板：默认开启）：
-            # 上游 homekit/type_covers.py 实证 Window accessory "must
-            # support set_cover_position"——缺这一位时 device_class=window
-            # 的实体在 Apple Home 退化成锁死关闭的窗/卷帘。位置端点不会
-            # 重新引入置灰：v1.6.16 的防线是 assumed_state=True（前端
-            # canOpen/canClose 公式被其短路，见下方注释），position 双保险
-            # 自本版本起让位于 HomeKit 刚需。
-            CoverEntityFeature.SET_POSITION
+            # v1.7.20/1.7.21（HomeKit Window 映射根治）：上游
+            # homekit/accessories.py 决策树实证——window + SET_POSITION →
+            # Window 服务（位置磁贴）；缺该位 → WindowCoveringBasic（Apple
+            # 自己做三段式：>70 开 / <30 关 / 中间停=暂停）。所以这一位既
+            # 决定"是否显示为窗户"，也决定"有没有暂停"——只对真支持百分比
+            # 的机型声明，两种形态各自诚实。位置端点不会重新引入置灰：
+            # v1.6.16 的防线是 assumed_state=True（前端 canOpen/canClose
+            # 公式被其短路，见下方注释）。
+            (CoverEntityFeature.SET_POSITION if self._position_capable else 0)
         )
+        # v1.7.21 位置命令合并（机制二）运行时状态：pending 值 + 定时器 +
+        # 上次真实下发时刻（monotonic）。仅位置命令走合并，开/关/停是离散
+        # 用户动作，逐次下发。
+        self._pending_position = None
+        self._coalesce_handle = None
+        self._last_position_send = 0.0
         # 始终可用，防止变灰
         self._attr_available = True
         # v1.6.16（用户定案：原生卡片开/关/停三键任何状态下必须可点）：
@@ -235,7 +249,13 @@ class WindowControllerCover(WindowControllerBaseEntity, RestoreEntity, CoverEnti
         canOpen/canClose 判据（见 __init__ 注释），本属性暴露不再影响三键
         常亮——而 HomeKit Window accessory 恰恰**必须**位置能力
         （上游 type_covers.py 实证）。
+
+        v1.7.21：无百分比能力的机型（5002 平开窗等）恒返 None——它走
+        WindowCoveringBasic 形态，位置由 Apple 依 state 自行映射 0/100，
+        我们谎报数值只会让"假滑块"更有迷惑性。
         """
+        if not self._position_capable:
+            return None
         device = self.device_manager.get_device(self.device_sn)
         if not device:
             return None
@@ -261,6 +281,9 @@ class WindowControllerCover(WindowControllerBaseEntity, RestoreEntity, CoverEnti
     def extra_state_attributes(self):
         """返回额外状态属性，供用户查看设备实际位置和状态"""
         attrs = {}
+        # v1.7.21：机型百分比能力（Web 面板/诊断可见；HomeKit 侧由
+        # supported_features 的 SET_POSITION 位体现）
+        attrs["position_capable"] = self._position_capable
         device = self.device_manager.get_device(self.device_sn)
         if device:
             status = device.get("status")
@@ -324,10 +347,17 @@ class WindowControllerCover(WindowControllerBaseEntity, RestoreEntity, CoverEnti
         """定位到指定开度 0-100（v1.7.20：HomeKit Window 滑块/
         cover.set_cover_position 服务入口）。
 
-        命令链与 Web 面板位置滑块同构：004 set_position + w_travel 属性。
-        越界/非法值在本层即拒（不回退——v1.6.19 B-LOW11 同口径：静默夹取
-        或兜 0 会把"开到 150%"执行成反向动作）；未校准电机固件侧会拒绝
-        执行，表现为命令未送达/失败，由 HomeKit/服务调用方如实收到报错。
+        v1.7.21 命令合并（机制二：首发立即 + 窗口内只发最终值）：
+        Apple 窗子磁贴拖动期**持续写** TargetPosition（实机日志 34→46→47
+        间隔约 250ms），旧实现逐条直发 004 → 一次拖动十几条报文全压到 LoRa
+        空口。现行为：
+          - 距上次真实下发 ≥ POSITION_COALESCE_SECONDS 的首次调用：立即下发
+            （保住 v1.6.9 failfast：未送达仍同步抛 HomeAssistantError）；
+          - 窗口内后续调用：只更新 pending 并重置定时器（界面回显由 Apple
+            自行乐观吸附，不受影响）；
+          - 静默 POSITION_COALESCE_SECONDS 后：补发最后一条（此时已无调用方
+            可抛错，失败只落日志——这是机制二的契约边界，用户已拍板）。
+        越界/非法值仍在**合并之前**即拒（v1.6.19 B-LOW11 口径）。
         """
         position = kwargs.get(ATTR_POSITION)
         try:
@@ -336,15 +366,93 @@ class WindowControllerCover(WindowControllerBaseEntity, RestoreEntity, CoverEnti
             raise HomeAssistantError(f"设置位置失败：无效的位置值 {position!r}")
         if not 0 <= position_int <= 100:
             raise HomeAssistantError(f"设置位置失败：位置超出范围(0-100): {position_int}")
+        if not self._position_capable:
+            # 该机型无百分比硬件（5002 等）：HA 核心服务层本已按
+            # supported_features 拦截（ServiceValidationError），此处兜底
+            # 防内部误用——绝不把无效的 w_travel 指令打到 LoRa 空口上。
+            raise HomeAssistantError(
+                f"设置位置失败：机型 {str(self.device_sn)[:4]} 不支持百分比定位"
+            )
+        # 首发立即：无 pending 且在合并窗口之外
+        if self._pending_position is None and (
+            time.monotonic() - self._last_position_send
+        ) >= POSITION_COALESCE_SECONDS:
+            await self._send_position(position_int)
+            return
+        # 窗口内：只记最后值，静默窗口结束后补发
+        self._pending_position = position_int
+        if self._coalesce_handle is not None:
+            self._coalesce_handle.cancel()
+        if self.hass is None:
+            # 实体已被移除（拖滑块后立即删设备）：无法建定时器则直接放弃，
+            # 不留悬挂 pending
+            self._pending_position = None
+            return
+        self._coalesce_handle = self.hass.loop.call_later(
+            POSITION_COALESCE_SECONDS, self._on_coalesce_fired
+        )
+
+    def _on_coalesce_fired(self):
+        """合并窗口结束：仅补发最后一次设定的位置（机制二 trailing 段）"""
+        self._coalesce_handle = None
+        value = self._pending_position
+        self._pending_position = None
+        # 守卫（number 实体 v1.6.3 同款）：实体已移除时不再创建发送任务
+        if self.hass is None or value is None:
+            return
+        self.hass.async_create_task(self._send_position_deferred(value))
+
+    async def _send_position(self, position_int: int, raise_on_failure: bool = True) -> bool:
+        """真实下发 004 set_position。
+
+        raise_on_failure=False（合并补发路径）时不抛错：那一路已无调用方
+        在等，失败只能落日志，由调用方法自行告警。
+        """
         try:
             success = await self._get_mqtt_handler().send_command(
                 self.device_sn, COMMAND_SET_POSITION, {"position": position_int})
         except Exception as e:
-            _LOGGER.error("Cover设置位置失败 %s: %s", self.device_sn, e)
-            raise HomeAssistantError(f"设置位置失败：{e}") from e
+            if raise_on_failure:
+                _LOGGER.error("Cover设置位置失败 %s: %s", self.device_sn, e)
+                raise HomeAssistantError(f"设置位置失败：{e}") from e
+            _LOGGER.error("Cover设置位置(合并补发)异常 %s: %s", self.device_sn, e)
+            return False
         if not success:
-            raise HomeAssistantError("设置位置失败：命令未送达（网关或设备离线）")
+            if raise_on_failure:
+                raise HomeAssistantError("设置位置失败：命令未送达（网关或设备离线）")
+            return False
+        # 仅成功才记窗口起点：失败后应立即允许重试，不被合并窗口拖延
+        self._last_position_send = time.monotonic()
         _LOGGER.info("Cover设置位置: %s → %d%%", self.device_sn, position_int)
+        return True
+
+    async def _send_position_deferred(self, position_int: int) -> None:
+        """补发（trailing）路径：无调用方在等，失败只落日志并标注当时值。
+
+        v1.6.3/v1.6.4/v1.6.10 三条教训照抄：create_task 出去后实体可能已被
+        删除（TOCTOU）——每个 await 前重新确认 self.hass，且后台任务不得
+        抛出未处理异常。
+        """
+        if self.hass is None:
+            return
+        try:
+            success = await self._send_position(position_int, raise_on_failure=False)
+        except Exception as e:  # noqa: BLE001 —— 后台任务兜底
+            _LOGGER.error("Cover设置位置(合并补发)异常 %s: %s", self.device_sn, e)
+            return
+        if not success:
+            _LOGGER.warning(
+                "Cover设置位置(合并补发)未送达 %s → %d%%（调用方已返回，无法回抛）",
+                self.device_sn, position_int,
+            )
+
+    async def async_will_remove_from_hass(self) -> None:
+        """实体移除：取消合并定时器并清空 pending（number 实体 v1.6.3 同款）"""
+        if self._coalesce_handle is not None:
+            self._coalesce_handle.cancel()
+            self._coalesce_handle = None
+        self._pending_position = None
+        await super().async_will_remove_from_hass()
 
 async def async_setup_entry(
     hass: HomeAssistant,

@@ -3,6 +3,24 @@
 所有版本变更记录在此文件中。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.7.21] - 2026-09-10
+
+HomeKit 真机回归批（用户真机暴露，先分析后动手）：机型百分比能力分流 + 位置命令合并。
+
+### Fixed
+
+- **机型能力分流——"假滑块"与"暂停丢失"同源根治**：v1.7.20 把 `SET_POSITION` 当**全局**能力声明，但百分比是逐机型能力（用户 2026-09-10 权威矩阵：5001 推拉窗 / 5003 低功耗窗帘 / 5005 内开内倒执手电机 / 5006 平推主机 / 5007 后装开窗电机 **支持**；**5002 平开窗暂不支持**，用户注明"以后有可能支持"）。两层后果：①5002 在 Apple Home 出现"拖了没反应"的假滑块（004 `w_travel` 打到无百分比硬件）；②形态由 `WindowCoveringBasic`（上游三段式：滑块 >70 开 / <30 关 / **中间停=暂停**）跳到 `Window`（纯位置透传）→ **暂停消失**。现按 `POSITION_CAPABLE_SN_PREFIXES`（SN 前四位 = 机型码）逐机型声明：支持机型 → `Window` + 真位置；5002 / 未知前缀 → 不声明该位 → 自动落回三态形态（**暂停回来**，且不再产生无效空口报文）；`current_cover_position` 对无百分比机型恒 None（不谎报位置）。**5002 未来支持百分比时：把 "5002" 加进该集合即可**，无其他改动。
+- **位置命令合并（机制二：首发立即 + 窗口内只发最终值）**：Apple 窗子磁贴拖动期**持续写** TargetPosition（用户 broker 实测 34→46→47，间隔约 250ms），旧实现逐条直发 004 → 一次拖动十几条报文全压 LoRa 空口（还需等网关逐条 ack）。现行为：距上次下发 ≥ `POSITION_COALESCE_SECONDS`(0.5s) 的首次调用**立即下发**（保住 v1.6.9 failfast：未送达仍同步抛 `HomeAssistantError`）；窗口内后续调用只记 pending 并重置定时器；静默 0.5s 后**补发最后一条**（该路径已无调用方可抛错，失败落 warning——机制二的契约边界，用户已拍板）。定时器生命周期照抄 number 实体 v1.6.3/v1.6.4/v1.6.10 三教训：实体移除即取消、hass 失联丢弃 pending、补发路径 TOCTOU 守卫；越界/非法值仍在**合并之前**即拒（v1.6.19 B-LOW11 口径）。
+
+### Tests
+
+- 新增 `tests/test_v1721_position_capability.py`（23 用例）：五个支持机型声明 `SET_POSITION` 且掩码=15；5002 与未知前缀（含空 SN、短 SN）掩码=11 且无该位；`current_cover_position` 能力分流（含 255 端点兜底只对支持机型生效）；5002 位置服务被实体层拒绝且**零下发**；合并语义全覆盖（首发立即 / 拖动序列只发首末 / 窗口外仍立即 / 失败不占合并窗口 / 补发失败只告警 / 移除取消 / hass 失联丢弃 pending / 非法值合并前即拒）。
+- 真栈 E2E H2 段扩为**双机型对照**（CI 硬门禁）：5007 → `SET_POSITION` + `device_class=window` + `current_position=50` + `position_capable=true`，并调 `cover.set_cover_position` 于真 broker 的 req 主题捕获 `w_travel=37` 的 004；5002 → 无位置位 + `position_capable=false` + 位置服务被 HA 拒绝（HTTP 4xx）+ **无 `w_travel` 报文泄漏到空口**。驱动改用真实机型码 SN（5007/5002）。
+
+### Docs
+
+- README「Apple Home（HomeKit Bridge）」补机型能力矩阵、5002 三态形态说明与命令合并行为。
+
 ## [1.7.20] - 2026-09-10
 
 Apple Home（HomeKit Bridge）"窗子"正确映射批：开窗器实体补齐位置能力面。旧实体在 HomeKit 桥落入 `WindowCoveringBasic`（开/关/停三态、无百分比），本版起进入真正的 `Window` accessory（位置滑块 + 开度回显）。
