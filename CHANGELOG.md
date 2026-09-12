@@ -3,6 +3,18 @@
 所有版本变更记录在此文件中。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.7.22] - 2026-09-12
+
+手机端滑块防误触批（用户报：位置/速度/力度三滑块距离过近，手动调节容易误触发）。
+
+### Fixed
+
+- **三滑块触控误触根治（纯 CSS，桌面外观零变化）**：原布局行距仅 7px、滑杆命中高度=可见轨道 6px、拇指珠 19px——三行热区在指尖下几乎重叠，手指蹭过相邻滑杆即改值，松手 `change` 就把 `set_position/set_speed/set_strength` 发上空口。新增 `@media (hover: none) and (pointer: coarse)` 触摸能力块（不按宽度断点判定，手机横屏/小平板同样生效）：①行距 7→18px 形成相邻滑杆安全带；②透明 padding 把命中区撑到 30px 高（`background-clip: content-box` 保持 6px 细轨外观与拇指珠居中），30px 命中 + 18px 行距 = 48px 轨距 ≥ Apple HIG 44px 最小触控目标；③拇指珠 19→26px（Firefox 15→22px）更好捏住起拖。"轻碰轨道跳值"的行为面已由 v1.7.21 位置命令合并与三滑块 change 提交（松手才发令）兜底，本批不动 JS。
+
+### Tests
+
+- 新增 `tests/test_mobile_slider_touch_v1722.py`：触摸块存在性与插入位序（640px 块后、reduce 块前，保住 test_starsky_v1627 的 reduce 段切片断言）；行距 ≥16px；height−2×padding 恰等于基类 6px（可见轨道不变粗的前提）；命中 ≥28px；双引擎拇指珠下限；桌面基线钉死（gap 7px / input 6px / thumb 19px 不得被污染）；JS 无新增 touch/pointer 事件劫持（本批纯 CSS 口径）。
+
 ## [1.7.21] - 2026-09-10
 
 HomeKit 真机回归批（用户真机暴露，先分析后动手）：机型百分比能力分流 + 位置命令合并。
