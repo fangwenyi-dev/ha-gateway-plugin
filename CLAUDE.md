@@ -3,12 +3,13 @@
 ## 核心规则
 
 ### 推送与验证流程
-**每次推送 GitHub 和 Gitee 后，必须检查 GitHub Actions CI 状态：**
+**2026-09-16 用户裁定：网关仓只推 GitHub，不再双推 Gitee**（Gitee 镜像与
+Release 冻结在 v1.7.24/41a1506；ci.yaml 的 gitee-release job 已移除留墓碑）。
+每次推送 GitHub 后，必须检查 GitHub Actions CI 状态：
 
 ```bash
-# 1. 推送代码
+# 1. 推送代码（只推 GitHub）
 git push origin main
-git push gitee main
 
 # 2. 等待 CI 启动
 Start-Sleep -Seconds 30
@@ -54,7 +55,9 @@ v1.6.0 的 "entity" 字面量回归曾骗过全部 38 个测试，教训记录�
 
 ---
 
-### Gitee 凭据（v1.6.3 定案：remote 不带 token）
+### Gitee 凭据（历史存档：2026-09-16 起本仓停推 Gitee，镜像冻结于 v1.7.24）
+（v1.6.3 定案：remote 不带 token。以下两条认证路径仅作历史操作记录保留，
+若用户裁定恢复镜像再启用。）
 ```bash
 # remote 保持干净 URL（.git/config 不落任何密钥）
 git remote set-url gitee https://gitee.com/fangwenyi-dev/ha-gateway-plugin.git
