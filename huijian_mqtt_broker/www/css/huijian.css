@@ -188,7 +188,12 @@ body {
    只准向下：-35° 爬升版已废弃，禁负角度。 */
 .meteor {
     position: absolute;
-    top: -12%;
+    /* 起点高度=var(--my)，默认 -12%（母本手机竖屏编排：1100px 斜行程
+       纵向分量≈0.57×1100≈631px，在 ~667px 高的手机屏恰好贯穿整屏）。
+       桌面视口更高，只留顶部起点会导致"流星只在上半屏"（用户点报），
+       故 v1.7.25 起逐颗编排：3 道起点下放到 12%~40% 中高度，斜轨迹
+       扫过下半屏；角度/行程/节奏/只准向下纪律不变。 */
+    top: var(--my, -12%);
     left: var(--mx, 50%);
     --mrot: 145deg;
     width: 2px;
@@ -214,14 +219,16 @@ body {
 }
 .meteor.mr { --mrot: 35deg; }   /* 斜右下 35°（左半屏起点的 3 道） */
 /* 负延迟＝进场即有流星在途（正延迟会让打开页面前 1~11s 一颗流星都
-   看不到——用户实测反馈"没看到流星"的根因；10~16s 全周期节奏不变） */
-.meteor-1 { --mx: 8%;  --mdur: 11s; --mdelay: -9s; }
-.meteor-2 { --mx: 26%; --mdur: 14s; --mdelay: -3s; }
-.meteor-3 { --mx: 44%; --mdur: 10s; --mdelay: -6s; }
-.meteor-4 { --mx: 61%; --mdur: 16s; --mdelay: -12s; }
-.meteor-5 { --mx: 77%; --mdur: 12s; --mdelay: -1s; }
-.meteor-6 { --mx: 90%; --mdur: 13s; --mdelay: -8s; }
-.meteor-7 { --mx: 35%; --mdur: 15s; --mdelay: -4s; }
+   看不到——用户实测反馈"没看到流星"的根因；10~16s 全周期节奏不变）。
+   --my 起点高度（v1.7.25 用户点报"流星只有上半屏有，中下部也该有进入"）：
+   4 道顶部 -12% + 3 道中高度 12%/26%/40%，斜轨迹扫过下半屏 */
+.meteor-1 { --mx: 8%;  --my: -12%; --mdur: 11s; --mdelay: -9s; }
+.meteor-2 { --mx: 26%; --my: 26%;  --mdur: 14s; --mdelay: -3s; }
+.meteor-3 { --mx: 44%; --my: -12%; --mdur: 10s; --mdelay: -6s; }
+.meteor-4 { --mx: 61%; --my: 40%;  --mdur: 16s; --mdelay: -12s; }
+.meteor-5 { --mx: 77%; --my: -12%; --mdur: 12s; --mdelay: -1s; }
+.meteor-6 { --mx: 90%; --my: 12%;  --mdur: 13s; --mdelay: -8s; }
+.meteor-7 { --mx: 35%; --my: -12%; --mdur: 15s; --mdelay: -4s; }
 /* v1.7.4 用户令流星三色——官网 createMeteor 配比 60% 白/25% 蓝/15% 琥珀
    （7 道分配：蓝 2/琥珀 1）；v1.7.24 随母本几何改点头光点+尾线同色
    （box-shadow 双晕 + drop-shadow 轮廓辉光口径不变） */

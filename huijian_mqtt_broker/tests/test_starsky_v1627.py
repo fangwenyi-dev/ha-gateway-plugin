@@ -93,6 +93,14 @@ class TestSkyElements:
             assert up not in seg, f"流星只准向下，禁爬升几何回潮: {up}"
         assert "--mrot: 145deg" in CSS and ".meteor.mr { --mrot: 35deg; }" in CSS, \
             "双档角度：默认 145° 斜左下 / .mr 35° 斜右下"
+        # v1.7.25 用户点报"流星只有上半屏有"——母本斜行程纵向分量≈631px 系按
+        # 手机竖屏算的，桌面视口必须有起点在中高度的道次扫过下半屏
+        assert "top: var(--my, -12%)" in CSS, "基类起点必须读 --my"
+        mys = [float(m) for m in re.findall(
+            r"\.meteor-\d \{[^}]*?--my: (-?[\d.]+)%", CSS)]
+        assert len(mys) == 7, f"逐颗 --my 起点必须显式: {mys}"
+        assert sum(1 for v in mys if v > 0) >= 3, \
+            f"至少 3 道中高度起点（下半屏覆盖）: {mys}"
         durs = [float(m) for m in re.findall(
             r"\.meteor-\d \{[^}]*?--mdur: ([\d.]+)s", CSS)]
         assert len(durs) == 7 and all(10.0 <= d <= 16.0 for d in durs), \
