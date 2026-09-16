@@ -179,21 +179,40 @@ body {
     0%, 100% { opacity: 0; }
     50%      { opacity: var(--peak, .9); }
 }
-/* 流星：7 颗，10~16s 全周期线性坠落，行程 1100px（标准：压缩部分周期＝5 倍速被否；
-   官网 700px 手机竖屏截断故加长），只准向下。尾焰用细渐变线，头部亮点。 */
+/* 流星：7 颗，10~16s 全周期线性，行程 1100px（官网 700px 手机竖屏截断故
+   加长，贯穿整屏）。几何=母本同款斜坠（用户 2026-09 点报"运行方向不对"
+   订正——旧实现 translateY(1100px)+rotate(18deg) 近乎垂直下坠、7 道同向，
+   丢了母本角度语义）：rotate(var(--mrot)) translateX(1100px)，默认
+   --mrot:145deg＝斜左下（起点右半屏 4 道）；.mr=35deg 斜右下（起点左半屏
+   3 道）。头=2px 光点带辉光、尾=133px 渐隐细线（透明→头侧增亮）。
+   只准向下：-35° 爬升版已废弃，禁负角度。 */
 .meteor {
     position: absolute;
     top: -12%;
     left: var(--mx, 50%);
+    --mrot: 145deg;
     width: 2px;
-    height: 120px;
-    background: linear-gradient(180deg, rgba(255, 255, 255, .0), rgba(224, 242, 254, .85) 70%, #fff);
-    border-radius: 999px;
+    height: 2px;
+    background: #fff;
+    border-radius: 50%;
+    box-shadow: 0 0 6px #fff, 0 0 12px rgba(255, 255, 255, .5);
     opacity: 0;
-    transform: rotate(18deg);
+    transform: rotate(var(--mrot)) translateX(0);
     animation: meteor-fall var(--mdur, 12s) linear var(--mdelay, 0s) infinite;
     will-change: transform, opacity;
 }
+.meteor::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    right: 0;
+    width: 133px;
+    height: 1px;
+    background: linear-gradient(to right, transparent, rgba(255, 255, 255, .4), rgba(255, 255, 255, .85));
+    transform: translateY(-50%);
+    border-radius: 1px;
+}
+.meteor.mr { --mrot: 35deg; }   /* 斜右下 35°（左半屏起点的 3 道） */
 /* 负延迟＝进场即有流星在途（正延迟会让打开页面前 1~11s 一颗流星都
    看不到——用户实测反馈"没看到流星"的根因；10~16s 全周期节奏不变） */
 .meteor-1 { --mx: 8%;  --mdur: 11s; --mdelay: -9s; }
@@ -204,28 +223,38 @@ body {
 .meteor-6 { --mx: 90%; --mdur: 13s; --mdelay: -8s; }
 .meteor-7 { --mx: 35%; --mdur: 15s; --mdelay: -4s; }
 /* v1.7.4 用户令流星三色——官网 createMeteor 配比 60% 白/25% 蓝/15% 琥珀
-   （7 道分配：蓝 2/琥珀 1），尾迹渐变头色 + 同色辉光（官网 box-shadow 口径） */
+   （7 道分配：蓝 2/琥珀 1）；v1.7.24 随母本几何改点头光点+尾线同色
+   （box-shadow 双晕 + drop-shadow 轮廓辉光口径不变） */
 .meteor.m-blue {
-    background: linear-gradient(180deg, rgba(56, 189, 248, 0), rgba(56, 189, 248, .5) 70%, #38bdf8);
+    background: #38bdf8;
+    box-shadow: 0 0 6px #38bdf8, 0 0 12px rgba(56, 189, 248, .5);
     filter: drop-shadow(0 0 6px rgba(56, 189, 248, .7));
 }
+.meteor.m-blue::before {
+    background: linear-gradient(to right, transparent, rgba(56, 189, 248, .35), #38bdf8);
+}
 .meteor.m-amber {
-    background: linear-gradient(180deg, rgba(251, 191, 36, 0), rgba(251, 191, 36, .5) 70%, #fbbf24);
+    background: #fbbf24;
+    box-shadow: 0 0 6px #fbbf24, 0 0 12px rgba(251, 191, 36, .45);
     filter: drop-shadow(0 0 6px rgba(251, 191, 36, .6));
 }
+.meteor.m-amber::before {
+    background: linear-gradient(to right, transparent, rgba(251, 191, 36, .35), #fbbf24);
+}
 @keyframes meteor-fall {
-    0%   { transform: translateY(0) rotate(18deg); opacity: 0; }
-    6%   { opacity: 1; }
-    70%  { opacity: 1; }
-    100% { transform: translateY(1100px) rotate(18deg); opacity: 0; }
+    0%   { transform: rotate(var(--mrot)) translateX(0); opacity: 0; }
+    5%   { opacity: 1; }
+    85%  { opacity: .7; }
+    100% { transform: rotate(var(--mrot)) translateX(1100px); opacity: 0; }
 }
 /* reduce 慢速变体（官网 meteor-fall-slow 同款几何节奏）：亮度峰值 .9 尾段
-   .5、行程收短到 850px，比全速温和但仍斜穿天幕 */
+   .5、行程收短到 850px，比全速温和但仍斜穿天幕；--mrot 元素级自定义属性
+   使 .mr 在 reduce 下同样保持 35° 右下方向 */
 @keyframes meteor-fall-slow {
-    0%   { transform: translateY(0) rotate(18deg); opacity: 0; }
+    0%   { transform: rotate(var(--mrot)) translateX(0); opacity: 0; }
     5%   { opacity: .9; }
     90%  { opacity: .5; }
-    100% { transform: translateY(850px) rotate(18deg); opacity: 0; }
+    100% { transform: rotate(var(--mrot)) translateX(850px); opacity: 0; }
 }
 
 /* =====================================================================

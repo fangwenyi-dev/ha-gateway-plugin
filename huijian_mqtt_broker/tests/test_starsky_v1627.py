@@ -76,11 +76,23 @@ class TestLayerArchitecture:
 
 
 class TestSkyElements:
-    def test_meteor_seven_downward_1100(self):
+    def test_meteor_seven_diagonal_down_1100(self):
+        """v1.7.24 用户点报"流星运行方向不对"——钉回母本斜坠几何：
+        rotate(var(--mrot)) translateX(1100px)。默认 145° 斜左下 4 道
+        （起点右半屏），.mr 35° 斜右下 3 道（起点左半屏）；只准向下
+        （-35° 爬升版废弃，禁负角度/负位移）。"""
         assert INDEX.count('<span class="meteor') == 7, "流星恰 7 颗（标准）"
+        assert INDEX.count(' mr"') == 3, ".mr 斜右下恰 3 道"
+        for n in ("1", "2", "7"):
+            assert re.search(rf'class="meteor meteor-{n}(?: m-\w+)? mr"', INDEX), \
+                f"meteor-{n}（左半屏起点）应 .mr 斜右下"
         seg = CSS[CSS.index("@keyframes meteor-fall"):][:700]
-        assert "translateY(1100px)" in seg, "行程须 1100px（官网 700px 竖屏截断）"
-        assert "translateY(-" not in seg, "流星只准向下"
+        assert "rotate(var(--mrot)) translateX(1100px)" in seg, \
+            "行程须 1100px 母本斜向延伸（官网 700px 手机竖屏截断）"
+        for up in ("translateY(-", "rotate(-", "translateX(-"):
+            assert up not in seg, f"流星只准向下，禁爬升几何回潮: {up}"
+        assert "--mrot: 145deg" in CSS and ".meteor.mr { --mrot: 35deg; }" in CSS, \
+            "双档角度：默认 145° 斜左下 / .mr 35° 斜右下"
         durs = [float(m) for m in re.findall(
             r"\.meteor-\d \{[^}]*?--mdur: ([\d.]+)s", CSS)]
         assert len(durs) == 7 and all(10.0 <= d <= 16.0 for d in durs), \
@@ -301,8 +313,9 @@ class TestEmptySlotsTransparent:
         assert "animation-iteration-count: infinite !important" in m
         assert "translateY(260px)" not in seg, "静态冻结口径已作废"
         kf = CSS[CSS.index("@keyframes meteor-fall-slow"):][:280]
-        assert "translateY(850px)" in kf and "opacity: .9" in kf and "opacity: .5" in kf, \
-            "slow 关键帧温和参数（峰 .9 尾 .5 程 850px）"
+        assert "rotate(var(--mrot)) translateX(850px)" in kf and "opacity: .9" in kf and "opacity: .5" in kf, \
+            "slow 关键帧温和参数（峰 .9 尾 .5 程 850px）且仍走母本斜向角"
+        assert "translateY(" not in kf, "垂直下坠旧几何已作废"
 
     def test_reduced_motion_stars_and_planets_keep_twinkling(self):
         """v1.6.30 用户令"星云中的星星应该可以动并闪烁"：官网星星是 canvas
