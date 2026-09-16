@@ -591,7 +591,11 @@ class TestProxyAndCI:
         assert ci.count("版本提取失败") >= 2, "I-1：VERSION 空值 fail-fast 丢失"
         assert "tests/e2e/*.sh" in ci, "I-2：e2e 脚本未入 bash -n 语法门"
         assert "fetch-depth: 20" in ci, "I-3：changelog 兜底 git log 深度不足"
-        assert "PREPARED:" in ci, "I-4：Gitee 正文未复用 prepare 产物"
+        # I-4 原钉点（Gitee job 以 PREPARED 复用 prepare 产物）随 gitee-release
+        # job 于 2026-09-16 用户裁定停推 Gitee 时整段下线——负向防复活：
+        assert "PREPARED:" not in ci, "Gitee job 已下线，PREPARED 引用不得残留"
+        assert "body: ${{ needs.prepare.outputs.changelog }}" in ci, \
+            "GitHub Release 正文仍须直取 prepare 产物（I-4 单一解析源不变）"
 
     def test_manifest_http_dependency(self):
         mf = json.loads(_read(PKG / "manifest.json"))

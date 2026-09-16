@@ -119,7 +119,7 @@ def test_webui_credential_status_wired():
     assert "WindowGatewaySecurityView" in api
 
 
-def test_ci_e2e_and_gitee_jobs():
+def test_ci_e2e_hardgate_and_gitee_retired():
     ci = (HERE.parent.parent / ".github" / "workflows" / "ci.yaml").read_text(
         encoding="utf-8")
     assert "bash huijian_mqtt_broker/tests/e2e/run_e2e.sh" in ci
@@ -141,10 +141,14 @@ def test_ci_e2e_and_gitee_jobs():
         "E2E 已连绿转正，挂绳不得复活（如需复活先证明真栈回归全绿）"
     assert "needs: [prepare, init, build, e2e]" in _job_seg("manifest"), \
         "manifest 必须 gate 在 e2e 之后（硬门禁拓扑）"
-    assert "Create Gitee Release (idempotent)" in ci
-    assert "target_commitish" in ci
-    # BOM 防线：token 必须 ASCII（.gitee_token 曾带 BOM 打崩 API）
-    assert "isascii" in ci
+    # 2026-09-16 用户裁定反转：网关仓停推 Gitee（镜像与 Release 冻结
+    # v1.7.24/41a1506），gitee-release job 整段下线。原正向钉桩
+    # （Create Gitee Release/target_commitish/isascii）转为负向防复活；
+    # 幂等脚本历史见 git log。
+    assert "gitee-release:" not in ci, "Gitee Release job 已按裁定下线，不得复活"
+    assert "Create Gitee Release" not in ci
+    assert "GITEE_TOKEN" not in ci, "Gitee secret 残留引用=半截复活"
+    assert "只推 GitHub" in ci, "ci.yaml 缺停推裁定墓碑"
 
 
 def test_e2e_script_key_steps():
