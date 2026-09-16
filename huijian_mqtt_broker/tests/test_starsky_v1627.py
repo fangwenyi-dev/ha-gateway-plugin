@@ -25,10 +25,13 @@ def _code(css: str) -> str:
 class TestDesignTokens:
     def test_standard_tokens_verbatim(self):
         code = re.sub(r"\s+", "", _code(CSS))
+        # 底色为 ea92e36c 方案A「深蓝夜空」定案（小程序 98ebc5b 实证，用户
+        # 2026-09 推广全仓）：#030712「过黑」→#071426、v1.0.42 #1d1750「过紫」
+        # 亦作废；surface 随动 #0a1a30。其余令牌仍逐值照抄标准 0d2200c5
         for tok in ("--primary:#0ea5e9", "--primary-dark:#0284c7",
                     "--primary-light:#38bdf8", "--accent:#06b6d4",
-                    "--secondary:#f59e0b", "--bg-main:#030712",
-                    "--surface:#0a0f1e", "--bg-card:rgba(255,255,255,.07)",
+                    "--secondary:#f59e0b", "--bg-main:#071426",
+                    "--surface:#0a1a30", "--bg-card:rgba(255,255,255,.07)",
                     "--bg-elevated:rgba(255,255,255,.10)",
                     "--card-border:rgba(255,255,255,.14)",
                     "--text-primary:#f8fafc", "--text-secondary:#94a3b8"):
@@ -68,7 +71,8 @@ class TestLayerArchitecture:
         assert "max-width" not in body, "body 限宽会截断星空（宽度已移到 .page）"
 
     def test_theme_color_matches_deep_space(self):
-        assert 'name="theme-color" content="#030712"' in INDEX
+        # ea92e36c 方案A：状态栏底色=夜空底 #071426（对应定案②导航色四处同步）
+        assert 'name="theme-color" content="#071426"' in INDEX
 
 
 class TestSkyElements:
@@ -86,20 +90,23 @@ class TestSkyElements:
         assert len(delays) == 7 and all(d < 0 for d in delays), \
             f"流星必须负相位进场（正延迟=打开页面头几秒无星可看，用户实测反馈）: {delays}"
 
-    def test_nebula_matches_official_master(self):
-        """星云＝官网母本 v0.0.1 (www/index.html L105-117) 的多团结构，
-        用户 2026-09-07 校准以官网为准（覆盖小程序单团旧适配）。
-        钉三团 + 三 keyframe 逐值，禁走样。"""
+    def test_nebula_matches_scheme_a_master(self):
+        """星云＝官网三团结构（45s/50s/60s aurora-move 独立漂移）；配色随
+        ea92e36c 方案A⑤——主星云（蓝团）核提亮 rgba(56,189,248,.10) + 靛 .05
+        中段 + 紫尾锥 .035（紫的第②通道）；青/金两团随「氛围退、主体进」退回
+        官网克制原值 .08/.07（v1.0.42 的 .12/.10 提浓作废，禁回潮）。"""
         assert INDEX.count('class="nebula"') == 1 and 'class="nebula3"' in INDEX
         code = _code(CSS)
-        # 蓝团 ::before 左上、青团 ::after 右下、金团 .nebula3 中上（官网值）
+        # 主星云 ::before 左上、青团 ::after 右下、金团 .nebula3 中上
         b = re.search(r"\.nebula::before \{([^}]*)\}", code).group(1)
         a = re.search(r"\.nebula::after \{([^}]*)\}", code).group(1)
         g = re.search(r"\.nebula3 \{([^}]*)\}", code).group(1)
-        assert "rgba(14, 165, 233, .10)" in b and "top: -30%" in b and "aurora-move1 45s" in b
+        assert ("rgba(56, 189, 248, .1) 0%" in b and "rgba(99, 102, 241, .05) 45%" in b
+                and "rgba(139, 92, 246, .035) 65%" in b
+                and "top: -30%" in b and "aurora-move1 45s" in b), f"方案A主星云核/尾锥: {b}"
         assert "rgba(6, 182, 212, .08)" in a and "bottom: -20%" in a and "aurora-move2 50s" in a
         assert "rgba(245, 158, 11, .07)" in g and "aurora-move3 60s" in g
-        # 三团 peak α 均 ≤.10（克制的光；官网原值）
+        # 三团 peak α 均 ≤.10（方案A后「氛围退」上限；再浓即回潮"白光"）
         for blk in (b, a, g):
             alphas = [float(x) for x in re.findall(r"rgba\([\d, ]+, (\.[\d]+)\)", blk)]
             assert alphas and max(alphas) <= 0.10, f"星云团宁淡勿浓: {alphas}"
@@ -314,12 +321,19 @@ class TestEmptySlotsTransparent:
         assert "nebula3" in seg and "animation-duration: 45s !important" in seg, \
             "v1.7.1 用户令星云漂移也纳入豁免（静止态不可辨）"
 
-    def test_sky_ambient_purple(self):
-        """v1.6.30 用户令背景按小程序标准加紫氛围：紫 (#8b5cf6/#6366f1)
-        只允许出现在 .star-bg 氛围底色层（星点/星云/按钮禁紫），底靛 .16、
-        右上靛紫 .09"""
+    def test_sky_ambient_scheme_a(self):
+        """ea92e36c 方案A「深蓝夜空」：夜空感靠底色自带蓝相（180° 深蓝渐变），
+        不靠大面积染紫——v1.0.42 三档大紫云（靛紫 .22/薰衣草 .16/底靛 .24）
+        随「过黑+过紫」被否，整条删除不回加；紫全站仅两通道（定案④）：
+        右下小角 α.06（氛围层）+ 星云尾锥 α.035（星云钉在 nebula 测试）。
+        星点/行星/按钮一律无紫口径不变。"""
         seg = re.search(r"\.star-bg \{.*?background:([^;]+);", CSS, re.S).group(1)
-        assert "rgba(139, 92, 246, .09)" in seg and "rgba(99, 102, 241, .16)" in seg
+        assert "linear-gradient(180deg, #071426 0%, #0a1a30 55%, #0c2138 100%)" in seg, "定案①深蓝渐变底"
+        assert "rgba(14, 165, 233, .14)" in seg, "左上蓝角云降档（.22→.14）"
+        assert "rgba(139, 92, 246, .06)" in seg, "紫通道①右下小角 α.06"
+        for dead in ("rgba(139, 92, 246, .22)", "rgba(167, 139, 250",
+                     "rgba(99, 102, 241, .24)", "rgba(6, 182, 212, .12)"):
+            assert dead not in seg, f"大面积染紫/靛路线回潮: {dead}"
         planet = re.search(r"\.planet \{[^}]*\}", CSS).group(0)
         assert "#8b5cf6" not in planet and "6366f1" not in planet, "紫仅限氛围层"
         assert "#8b5cf6" not in re.search(r"\.stars-far i[^}]*\}", CSS, re.S).group(0)
