@@ -1130,8 +1130,7 @@ class WindowControllerDeviceManager:
             target_entry = self.hass.config_entries.async_get_entry(target_entry_id)
             
             if device and target_entry:
-                # v1.7.28 弃用面迁移：entities 映射 → async_entries()（推导式保快照）
-                for entity_id, entity_entry in [(e.entity_id, e) for e in entity_registry.async_entries()]:
+                for entity_id, entity_entry in list(entity_registry.entities.items()):
                     if entity_entry.device_id == device.id:
                         if entity_entry.config_entry_id != target_entry_id:
                             # v1.6.3 收口：registry 写操作一律经 call_registry_method
@@ -1159,7 +1158,7 @@ class WindowControllerDeviceManager:
         try:
             from .utils import call_registry_method as _call_reg
             entity_registry = await self._get_entity_registry()
-            for entity_id, entity_entry in [(e.entity_id, e) for e in entity_registry.async_entries()]:
+            for entity_id, entity_entry in list(entity_registry.entities.items()):
                 if entity_entry.platform != DOMAIN or not entity_entry.unique_id:
                     continue
                 if (entity_entry.unique_id.startswith(f"{old_gateway_sn}_{device_sn}_")
@@ -1359,7 +1358,7 @@ class WindowControllerDeviceManager:
             
             # 转移该子设备的所有实体
             entity_ids = []
-            for entity_id, entity_entry in [(e.entity_id, e) for e in entity_registry.async_entries()]:
+            for entity_id, entity_entry in list(entity_registry.entities.items()):
                 if entity_entry.device_id == child_device.id:
                     entity_ids.append(entity_id)
             
@@ -1417,7 +1416,7 @@ class WindowControllerDeviceManager:
         # 删除旧网关前缀的实体（含删除按钮 {old_gw}_remove_{sn}），
         # 避免迁移后旧前缀与新前缀实体并存
         from .utils import call_registry_method as _call_reg
-        for entity_id, entity_entry in [(e.entity_id, e) for e in entity_registry.async_entries()]:
+        for entity_id, entity_entry in list(entity_registry.entities.items()):
             if entity_entry.platform != DOMAIN or not entity_entry.unique_id:
                 continue
             for device_sn in device_sns:
@@ -1430,7 +1429,7 @@ class WindowControllerDeviceManager:
         # 兜底：仍在注册表中且配置条目未指向新网关的实体，更新其关联
         # v1.6.3：list() 快照——循环体内有 await，事件循环让出期间注册表可能并发变更
         for platform in self.entity_recreate_platforms:
-            for entity_id, entity_entry in [(e.entity_id, e) for e in entity_registry.async_entries()]:
+            for entity_id, entity_entry in list(entity_registry.entities.items()):
                 if entity_entry.platform == DOMAIN and entity_entry.domain == platform:
                     for device_sn in device_sns:
                         # 边界匹配（device_sn 前后均有下划线），避免 SN 前缀重叠误关联

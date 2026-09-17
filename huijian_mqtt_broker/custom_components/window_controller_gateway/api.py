@@ -85,7 +85,7 @@ class WindowGatewayDevicesView(http.HomeAssistantView):
 
         # 按 device_id 聚合实体（一次遍历完成，避免为每个设备再扫全表）
         entities_by_device: dict = {}
-        for entity_entry in entity_registry.async_entries():  # v1.7.28 弃用面迁移
+        for entity_entry in entity_registry.entities.values():  # EntityRegistry 无 async_entries（E2E 实锤），且 entities 未被弃用
             did = entity_entry.device_id
             if not did:
                 continue

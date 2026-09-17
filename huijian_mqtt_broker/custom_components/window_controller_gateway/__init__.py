@@ -376,7 +376,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             entity_registry = er.async_get(hass)
             from .utils import call_registry_method as _call_reg
             restored_count = 0
-            for entity_entry in list(entity_registry.async_entries()):
+            for entity_entry in list(entity_registry.entities.values()):
                 if (entity_entry.platform == DOMAIN
                         and entity_entry.config_entry_id == entry.entry_id
                         and entity_entry.disabled_by is not None
@@ -707,7 +707,7 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
                 # 先删除该网关设备下的所有实体，避免留下孤儿实体
                 from .utils import call_registry_method as _call_reg
                 entity_registry = er.async_get(hass)
-                for entity_entry in list(entity_registry.async_entries()):
+                for entity_entry in list(entity_registry.entities.values()):
                     if entity_entry.device_id == gateway_device.id:
                         await _call_reg(entity_registry.async_remove, entity_entry.entity_id)
                 # 再删除网关设备条目本身
@@ -733,7 +733,7 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
             if gateway_device_id and via_id == gateway_device_id:
                 # 先删除该子设备下的实体（仅限属于被删除网关 entry 的实体），
                 # 再删除设备条目本身
-                for entity_entry in list(entity_registry.async_entries()):
+                for entity_entry in list(entity_registry.entities.values()):
                     if (entity_entry.device_id == device.id
                             and entity_entry.config_entry_id == entry.entry_id):
                         await _call_reg(entity_registry.async_remove, entity_entry.entity_id)

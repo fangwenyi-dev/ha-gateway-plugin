@@ -5,16 +5,16 @@
 
 ## [1.7.28] - 2026-09-17
 
-注册表弃用面清零 + 心跳武装无限化批（现场两条日志实锤）。
+注册表弃用面拆弹 + 心跳武装无限化批（现场两条日志 + CI E2E 实锤）。
 
 ### Fixed
 
-- **HA 注册表映射直读全量迁移**（helpers/frame 告警：`device_registry.devices` 弃用，HA 2027.9.0 停摆）：api.py（告警点名处 L99 + entities 遍历）、button.py（`entities.get`→`async_get`）、discovery.py、device_manager.py 七处（循环保留 list 快照语义，`entities.items()`→`[(e.entity_id, e) for e in async_entries()]`；`len(device_registry.devices)` 与遍历共用一次快照）、`__init__.py` 四处（卸载清理/禁用恢复路径）——一律改 `async_entries()`/`async_get()`。行为零变化（同为全量只读遍历，EntityRegistry/DeviceRegistry 的 async_entries 为多年稳定 API）。
-- **心跳监听器"120s 即弃"改无限期耐心武装**（现场实锤：升级首启窗口 `等待 MQTT 集成 120s 仍未就绪，心跳监听器未武装` 后耳朵永久失聪，直到手动 reload 条目/重启 HA）：等待循环每 120s 一轮、每轮一条节流 WARNING（提示检查 MQTT 集成能否连上 broker），条目卸载/reload 时自检退出（_bg_tasks 统一取消 + entry_id 双检），MQTT 一旦就绪立即补装订阅。
+- **设备注册表映射直读迁移**（helpers/frame 告警：`device_registry.devices` 弃用，HA 2027.9.0 停摆）：api.py（告警点名处）、device_manager.py（`len` 与遍历共用一次 `async_entries()` 快照）、`__init__.py`（卸载清理路径）——设备侧一律 `async_entries()`。**实体侧保持 `entities` 映射**：E2E 真栈实锤 EntityRegistry 根本没有 `async_entries()`（首版过度迁移被打回，已回退），且实体侧未被弃用；实体查找统一 `async_get()`。
+- **心跳监听器"120s 即弃"改无限期耐心武装**（现场实锤：升级首启窗口 `等待 MQTT 集成 120s 仍未就绪，心跳监听器未武装` 后耳朵永久失聪，直到手动 reload 条目/重启 HA）：等待循环每 120s 一轮、每轮一条节流 WARNING（提示检查 MQTT 集成能否连上 broker），MQTT 一旦就绪立即补装订阅；条目卸载/reload 时自检退出（_bg_tasks 统一取消 + entry_id 双检），无悬挂任务。
 
 ### Tests
 
-- 新增 `tests/test_v1728_registry_api.py`：全集成源码扫描注册表映射直读禁型（注释/墓碑豁免）、迁移确实发生的核心文件正钉、武装 while 循环/旧放弃文案反钉、无限等待必须保留卸载自检。全量 589 用例通过。
+- 新增 `tests/test_v1728_registry_api.py` 双守卫：全源扫描禁 `registry.devices` 直读 + 反钉臆造 API `entity_registry.async_entries`（注释/墓碑豁免）；设备侧真 API 正钉、武装 while 循环/旧放弃文案反钉、无限等待保留卸载自检。`test_audit_round5` 的 `_Reg` 桩补 `async_entries()` 对齐真 DeviceRegistry。全量 590 用例通过。
 
 ## [1.7.27] - 2026-09-17
 
