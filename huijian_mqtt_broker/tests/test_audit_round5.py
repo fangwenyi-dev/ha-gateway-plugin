@@ -319,11 +319,6 @@ class TestViaDeviceCompat:
             def __init__(self):
                 self.devices = devices
 
-            def async_entries(self):
-                # v1.7.28：真实 DeviceRegistry 的稳定 API（生产码已从
-                # .devices 映射直读迁移至此），桩与真注册表对齐。
-                return list(self.devices.values())
-
             def async_get_device(self, identifiers=None):
                 for d in devices.values():
                     if identifiers and identifiers <= d.identifiers:

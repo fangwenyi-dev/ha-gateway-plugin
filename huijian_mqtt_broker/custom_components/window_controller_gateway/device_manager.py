@@ -1465,9 +1465,9 @@ class WindowControllerDeviceManager:
         device_registry = await self._get_device_registry()
         gateway_devices = []
         
-        all_devices = list(device_registry.async_entries())  # v1.7.28：len/遍历共用一次快照
+        from .utils import iter_devices
+        all_devices = iter_devices(device_registry)  # v1.7.28：双形态兼容遍历
         _LOGGER.info("开始查找网关 %s 的设备，总设备数: %d", gateway_sn, len(all_devices))
-
         # v1.6.12（第五轮审计 #6，本簇影响最大的一处）：原按恒 None 的
         # getattr(device, <不存在的属性名>) 匹配 (DOMAIN, sn) 元组——该属性/值形态
         # 均不存在于 DeviceEntry，本函数永远返回空表，迁移快照、转移实体

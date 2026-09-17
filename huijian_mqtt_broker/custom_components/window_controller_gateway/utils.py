@@ -11,6 +11,25 @@ from .const import DOMAIN, PROTOCOL_HEAD, TOPIC_GATEWAY_REQ_FORMAT
 _LOGGER = logging.getLogger(__name__)
 
 
+def iter_devices(device_registry) -> list:
+    """设备注册表全量条目遍历（v1.7.28，双 HA 形态兼容）。
+
+    新 HA：`devices` 是可直接迭代出 DeviceEntry 的集合（frame 告警原话
+    "iterate it to get the device entries"），映射查找法 .values()/.items()/
+    .get() 已弃用（2027.9 停摆）；旧 HA：`devices` 仍是 Mapping，直接迭代
+    拿到的是 key 字符串。探测首元素类型自动回退，两种形态都拿到条目列表。
+    注意：DeviceRegistry 与 EntityRegistry 均无 async_entries()——CI E2E
+    两轮实锤，臆造 API 由 tests/test_v1728_registry_api.py 反钉。
+    """
+    col = device_registry.devices
+    items = list(col)
+    if items and isinstance(items[0], str):
+        # 旧 Mapping 形态：迭代得键，回退 .values()（此路径仅在旧 HA 触发，
+        # 旧版 .values() 合法无告警；新 HA 永不走到）
+        items = list(col.values())
+    return items
+
+
 def gateway_instance_uuid(hass: HomeAssistant) -> str:
     """服务端实例指纹：uuid5(NAMESPACE_DNS, config_dir)。
 

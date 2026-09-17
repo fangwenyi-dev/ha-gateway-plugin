@@ -1,28 +1,34 @@
-"""v1.7.28 HA 注册表 API 正确性守卫（2026-09-17 CI E2E 实锤双教训）。
+"""v1.7.28 HA 注册表 API 正确性守卫（2026-09-17 CI E2E 两轮实锤双教训）。
 
-教训一（弃用面）：helpers/frame 告警点名 `device_registry.devices` 映射直读
-（api.py 原 L99），HA 2027.9.0 停摆——设备侧必须走 async_entries()。
-教训二（E2E 首跑红）：EntityRegistry **根本没有 async_entries()**（真 HA
-AttributeError 实锤），entities 映射在实体侧未被弃用——本守卫同时反钉
-"entity_registry.async_entries" 这一臆造 API 回潮。本地 589 绿而真栈红，
-再次实证"替身/无覆盖不构成证据"（CLAUDE.md 守则）。
+教训一（弃用面）：helpers/frame 告警点名 `device_registry.devices` 的**映射
+查找法**（.values()/.items()/.get()，HA 2027.9.0 停摆）；告警原话给出正解
+"iterate it to get the device entries"——devices 已是可直接迭代条目的集合。
+教训二（E2E 连红两轮）：`async_entries()` 在 DeviceRegistry 与 EntityRegistry
+上**都不存在**（两轮真栈 AttributeError 实锤）——本守卫双向反钉臆造 API。
+统一出口=utils.iter_devices()（探测首元素类型，兼容新集合/旧 Mapping 双形态）；
+实体侧 entities 映射未被弃用，保持原样。本地 589 绿而真栈红，再证
+"本机全绿不构成证据"（CLAUDE.md 守则）。
 
 扫描口径：
-- 禁 `registry.devices`（覆盖 device_registry.devices / registry.devices 全部
-  直读形态；device_manager 自有 self.devices 缓存字典不含该子串，不误伤）。
-- 禁 `entity_registry.async_entries`（不存在的 API）。
-- 注释行（# 开头）豁免——历史说明/墓碑允许提及旧形态。
+- 禁 devices 映射查找法三型（.values(.items(.get(）——注释行豁免；
+  iter_devices 内部对旧形态的 .values() 回退写作 col.values()，不命中禁型。
+- 禁 registry.async_entries / entity_registry.async_entries（不存在的 API）。
 - 心跳武装必须无限期等待（while not await async_wait_mqtt_loaded），旧
   "120s 即弃"文案不得复活，且等待循环必须保留条目存活自检。
 """
 import pathlib
 import re
+from types import SimpleNamespace
 
 PKG = pathlib.Path(__file__).resolve().parents[1] / "custom_components" / "window_controller_gateway"
 
 FORBIDDEN = (
-    "registry.devices",              # 设备注册表映射直读（2027.9 停摆）
-    "entity_registry.async_entries", # 臆造 API：EntityRegistry 无此方法（E2E 实锤）
+    "registry.devices.values(",    # 设备注册表映射查找法（2027.9 停摆）。
+    "registry.devices.items(",     #   "registry.devices." 前缀同时命中 device_registry.
+    "registry.devices.get(",       #   ——与集成自有 self.devices/manager.devices
+                                   #   缓存字典（无 registry. 前缀）天然隔离，不误伤
+    "registry.async_entries",      # 臆造 API：DeviceRegistry 无此方法（E2E 实锤）
+    "entity_registry.async_entries",  # 臆造 API：EntityRegistry 无此方法（E2E 实锤）
 )
 
 
@@ -44,19 +50,34 @@ class TestRegistryApiCorrectness:
                         hits.append(f"{path.name}:{ln}: {stripped[:110]}")
         assert not hits, "注册表 API 违规回潮:\n" + "\n".join(hits)
 
-    def test_device_side_migrated_to_real_api(self):
-        """设备侧确实走 async_entries()（真存在的 DeviceRegistry API）。"""
+    def test_device_side_goes_through_iter_devices(self):
+        """设备侧遍历统一走 utils.iter_devices（双形态兼容单一出口）。"""
         api = (PKG / "api.py").read_text(encoding="utf-8")
-        assert "registry.async_entries()" in api, "api.py 设备遍历须走 async_entries"
+        assert "iter_devices(registry)" in api, "api.py 设备遍历须走 iter_devices"
         dm = (PKG / "device_manager.py").read_text(encoding="utf-8")
-        assert "device_registry.async_entries()" in dm
+        assert "iter_devices(device_registry)" in dm
         init = (PKG / "__init__.py").read_text(encoding="utf-8")
-        assert "device_registry.async_entries()" in init
+        assert "iter_devices(device_registry)" in init
 
-    def test_entity_side_uses_entities_mapping(self):
-        """实体侧保持 entities 映射（未被弃用），查找走 async_get（真存在）。"""
+    def test_iter_devices_dual_shape(self):
+        """iter_devices：旧 Mapping（迭代得 key 字符串→回退 .values()）与新
+        集合（直接迭代条目）两种形态都必须返回条目列表。"""
+        from custom_components.window_controller_gateway.utils import iter_devices
+
+        e1, e2 = object(), object()
+        legacy = SimpleNamespace(devices={"id1": e1, "id2": e2})  # Mapping 形态
+        assert iter_devices(legacy) == [e1, e2]
+        modern = SimpleNamespace(devices=[e1, e2])                 # 集合形态
+        assert iter_devices(modern) == [e1, e2]
+        assert iter_devices(SimpleNamespace(devices={})) == []
+        assert iter_devices(SimpleNamespace(devices=[])) == []
+
+    def test_entity_side_untouched(self):
+        """实体侧保持 entities 映射（E2E 实证未弃用、能跑）；查找用 async_get。"""
         btn = (PKG / "button.py").read_text(encoding="utf-8")
         assert "entity_registry.async_get(entity_id)" in btn
+        api = (PKG / "api.py").read_text(encoding="utf-8")
+        assert "entity_registry.entities.values()" in api
 
 
 class TestArmInfinitePatience:

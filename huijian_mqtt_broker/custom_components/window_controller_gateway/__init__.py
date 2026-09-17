@@ -27,7 +27,7 @@ from .const import (
 from .persist import load_persistent_data, save_persistent_data
 from .services import register_services
 from .api import async_setup_api
-from .utils import is_mqtt_loaded
+from .utils import is_mqtt_loaded, iter_devices
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -728,7 +728,7 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
         from .utils import get_via_device_id
         device_registry = dr.async_get(hass)
         entity_registry = er.async_get(hass)
-        for device in list(device_registry.async_entries()):
+        for device in iter_devices(device_registry):  # v1.7.28：双形态兼容遍历
             via_id = get_via_device_id(device)
             if gateway_device_id and via_id == gateway_device_id:
                 # 先删除该子设备下的实体（仅限属于被删除网关 entry 的实体），

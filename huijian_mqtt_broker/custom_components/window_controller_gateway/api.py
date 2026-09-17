@@ -16,6 +16,7 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 
 from .const import DOMAIN
+from .utils import iter_devices
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -96,7 +97,7 @@ class WindowGatewayDevicesView(http.HomeAssistantView):
             })
 
         all_devices = []
-        for device in registry.async_entries():  # v1.7.28 弃用面迁移（告警点名处）
+        for device in iter_devices(registry):  # v1.7.28：双形态兼容遍历（iter_devices 单一出口）
             # 兼容新旧 HA：config_entries (set) 取代旧版 config_entry_id (str)
             entry_ids = set()
             ce = getattr(device, "config_entries", None)
