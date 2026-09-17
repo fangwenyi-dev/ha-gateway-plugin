@@ -107,6 +107,27 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._pending_gateway_sn = None
         self._pending_gateway_name = None
 
+    async def async_step_repair(self, user_input=None):
+        """B（v1.7.29）：修复条目「MQTT 自动配置未完成」的一键重试。
+
+        重跑 bootstrap 引导；标记消失即落地（清修复条目并中止），
+        仍在则如实回显"尚未成功"，让用户结合日志/HA MQTT 条目状态处置。
+        """
+        from .mqtt_bootstrap import (ensure_mqtt_connection,
+                                     has_bootstrap_marker,
+                                     _clear_takeover_issue)
+        if user_input is not None:
+            try:
+                await ensure_mqtt_connection(self.hass)
+            except Exception:  # noqa: BLE001 — ConfigEntryNotReady 等统一按标记判定
+                pass
+            if not await has_bootstrap_marker(self.hass):
+                _clear_takeover_issue(self.hass)
+                return self.async_abort(reason="mqtt_bootstrap_fixed")
+            return self.async_show_form(
+                step_id="repair", errors={"base": "mqtt_bootstrap_still_pending"})
+        return self.async_show_form(step_id="repair")
+
     async def async_step_user(self, user_input: Optional[Dict[str, Any]] = None) -> FlowResult:
         """Handle user step
 

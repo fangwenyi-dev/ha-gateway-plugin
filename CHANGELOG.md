@@ -3,6 +3,20 @@
 所有版本变更记录在此文件中。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.7.29] - 2026-09-17
+
+MQTT 引导"持久自愈 + 可见修复 + Web UI 可见性"批（用户拍板 A+B+C，根治现场"mqtt not ready"长期滞留）。
+
+### Added
+
+- **A：bootstrap 持久自愈**（`mqtt_bootstrap.async_start_bootstrap_healer`）——旧行为只在慧尖条目 setup 瞬间跑一次 `ensure_mqtt_connection`，失败/错过窗口（官方 Mosquitto 后删、broker 晚起、表单不兼容）即静默等下次 reload/HA 重启。新行为：两分支 setup 均拉起后台任务（每 hass 单实例、幂等），引导标记存活期间每 300s 重试一轮；标记删除（落地）即清修复条目退出；慧尖条目全卸/宿主停机自动退出，不悬挂。`ConfigEntryNotReady`（内置 broker 未起）按"稍后再试"吞掉交下一轮；ensure 内部模块锁保证并发创建只发生一次。
+- **B：可见修复入口**——自愈轮次未落地时在「设置→系统→问题」挂 `mqtt_bootstrap_pending` 修复条目（warning、is_fix_flow），config_flow 新增 `async_step_repair` 一键重试（重跑引导，标记消失即 abort `mqtt_bootstrap_fixed` 并清条目，仍在则回显 `mqtt_bootstrap_still_pending`）；strings.json/zh-CN.json 双侧同步（issues 节 + repair 步骤 + 两个新文案键）。
+- **C：Web UI 第四状态项「HA MQTT 通道」**——服务状态板新增行：经 `/api/ha/` 代理查 HA Core 的 MQTT 集成条目（无条目=红/未就绪=黄/loaded=绿），悬停释义给出现场排障第一判据（前三项——broker 运行、集成安装、客户端计数——都看不见"HA 侧通道没打通"这个断点）；`.status-grid` 改 auto-fit 防第四项裂行。
+
+### Tests
+
+- 新增 `tests/test_v1729_bootstrap_selfheal.py`：healer 功能实测（标记两轮落地/异常轮续跑/无条目即退/单实例去重/ConfigEntryNotReady 吞）、两分支接线正钉、repair 流与文案键双侧对称、Web 第四项三件套（HTML id+label、JS 检测、CSS auto-fit）。全量 604 用例通过。
+
 ## [1.7.28] - 2026-09-17
 
 注册表弃用面拆弹 + 心跳武装无限化批（现场两条日志 + CI E2E 实锤）。

@@ -384,7 +384,7 @@ body {
 }
 
 /* ===== Status Grid ===== */
-.status-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; } /* v1.7.29：第 4 状态项（HA MQTT 通道）入列，auto-fit 防裂行 */
 .status-item {
     display: flex; flex-direction: row; align-items: center; gap: 8px;
     padding: 10px 14px; border-radius: var(--radius-sm); background: rgba(255, 255, 255, .04);

@@ -32,12 +32,17 @@
         "data": {
           "confirm": "仍然添加"
         }
+      },
+      "repair": {
+        "title": "重试 MQTT 自动配置",
+        "description": "慧尖正在按加载项引导标记自动配置 HA 的 MQTT 集成（内置 Broker 127.0.0.1:2022）。点此重试一轮；若仍失败，请检查慧尖加载项是否在运行，并查看 HA 日志中的 mqtt_bootstrap 行。"
       }
     },
     "error": {
       "invalid_sn_format": "序列号格式无效，必须至少10位字母数字",
       "mqtt_not_available": "MQTT 集成未启用，请先在 Home Assistant 中启用 MQTT",
       "broker_not_ready": "MQTT Broker 未就绪：已有 MQTT 配置条目，但客户端尚未连上。使用慧尖一体化加载项时请确认其处于运行状态（内置 Broker 端口 2022）；自行搭建 Broker 请检查其可达性与凭据。系统会自动重试连接，请稍等约一分钟后重试。",
+      "mqtt_bootstrap_still_pending": "仍未完成：内置 Broker 未运行、MQTT 条目被禁用或凭据被拒。请确认慧尖加载项处于运行状态后再次提交，或查看 HA 日志 mqtt_bootstrap 行。",
       "cannot_connect": "连接网关失败",
       "invalid_ws_token": "令牌需为 8-62 位，仅允许字母、数字、下划线与连字符（含空格/逗号会拆散子协议握手造成永久自锁）",
       "ws_port_reserved": "该端口被本加载项自身占用（2022=MQTT Broker / 8099=Web UI / 8123=Home Assistant / 1883=外部 broker 惯用口），请换其它端口",
@@ -50,7 +55,14 @@
       "updated_existing_gateway": "已更新现有网关配置，开始迁移设备",
       "ignored": "已忽略该网关",
       "invalid_sn_format": "网关SN格式无效（至少10位字母数字）",
-      "migration_not_supported": "迁移功能暂未启用，请手动删除旧网关后重新添加"
+      "migration_not_supported": "迁移功能暂未启用，请手动删除旧网关后重新添加",
+      "mqtt_bootstrap_fixed": "MQTT 自动配置已完成"
+    }
+  },
+  "issues": {
+    "mqtt_bootstrap_pending": {
+      "title": "慧尖 MQTT 自动配置未完成",
+      "description": "慧尖加载项已声明要用内置 Broker（127.0.0.1:2022）自动配置 HA 的 MQTT 集成，但尚未成功——LoRa 网关的上报到不了 HA。系统每 5 分钟自动重试；也可点此提交修复立即重试一轮。若反复失败：确认慧尖加载项处于运行状态，并查看 HA 日志中的 mqtt_bootstrap 行定位原因（常见：MQTT 条目被禁用、原 broker 仍被 Supervisor 托管、凭据被拒）。"
     }
   },
   "options": {

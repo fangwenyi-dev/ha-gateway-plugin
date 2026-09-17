@@ -34,6 +34,8 @@ from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import InvalidData
 from homeassistant.exceptions import ConfigEntryNotReady
 
+from .const import DOMAIN
+
 _LOGGER = logging.getLogger(__name__)
 
 BOOTSTRAP_FILENAME = "window_controller_gateway_mqtt_bootstrap.json"
@@ -453,3 +455,84 @@ async def ensure_mqtt_connection(hass: HomeAssistant) -> Optional[bool]:
         raise ConfigEntryNotReady(
             f"自动连接 MQTT 失败（{errors.get('base') or '未知原因'}），稍后自动重试"
         )
+
+
+# ==================== v1.7.29 A+B：持久自愈 + 可见修复入口 ====================
+
+BOOTSTRAP_RETRY_INTERVAL = 300.0
+TAKEOVER_ISSUE_ID = "mqtt_bootstrap_pending"
+
+
+def _report_takeover_issue(hass: HomeAssistant) -> None:
+    """B：把"引导未完成"升为 HA 修复条目（设置→系统→问题），带一键重试。
+
+    静默失败 → 可见可修；fix flow 由 config_flow.async_step_repair 承接。
+    issue registry 不可用（异常/老版本）只丢可见性，不影响自愈主循环。
+    """
+    try:
+        from homeassistant.helpers import issue_registry as ir
+        ir.async_create_issue(
+            hass, DOMAIN, TAKEOVER_ISSUE_ID,
+            is_fix_flow=True,
+            severity="warning",
+            translation_key=TAKEOVER_ISSUE_ID,
+        )
+    except Exception as err:  # noqa: BLE001
+        _LOGGER.debug("创建 MQTT 引导修复条目失败（可忽略）: %s", err)
+
+
+def _clear_takeover_issue(hass: HomeAssistant) -> None:
+    try:
+        from homeassistant.helpers import issue_registry as ir
+        ir.async_delete_issue(hass, DOMAIN, TAKEOVER_ISSUE_ID)
+    except Exception as err:  # noqa: BLE001
+        _LOGGER.debug("清除 MQTT 引导修复条目失败（可忽略）: %s", err)
+
+
+def async_start_bootstrap_healer(hass: HomeAssistant) -> None:
+    """A（用户 2026-09 拍板）：bootstrap 持久自愈。
+
+    旧行为：ensure_mqtt_connection 只在慧尖条目 setup 瞬间跑一次，失败或
+    错过窗口（官方 Mosquitto 后删、broker 晚起、表单不兼容）即静默等待
+    下次 reload/HA 重启——现场"MQTT not ready"长期滞留的根因。
+
+    新行为：条目 setup 时拉起本任务（每 hass 单实例、幂等，多条目并发调用
+    安全）：只要引导标记还在（自动配置未落地），每 300s 重试一轮 ensure；
+    标记删除（落地）即清修复条目退出；慧尖条目全卸/hass 停机也退出，不
+    悬挂。ensure 内部模块级锁保证并发创建只发生一次；ConfigEntryNotReady
+    （内置 broker 未起）按"稍后再试"语义吞掉，交给下一轮。
+    """
+    runtime = hass.data.setdefault(DOMAIN, {})
+    existing = runtime.get("_bootstrap_healer")
+    if existing is not None and not existing.done():
+        return
+
+    async def _healer():
+        try:
+            while True:
+                if getattr(hass, "is_stopping", False) or \
+                        not hass.config_entries.async_entries(DOMAIN):
+                    return  # 宿主停机 / 最后条目已卸载
+                if not await has_bootstrap_marker(hass):
+                    _clear_takeover_issue(hass)
+                    return  # 引导已落地（标记被删）
+                try:
+                    await ensure_mqtt_connection(hass)
+                except ConfigEntryNotReady:
+                    pass  # broker 未起等"稍后再试"，下一轮再来
+                except Exception as err:  # noqa: BLE001
+                    _LOGGER.warning(
+                        "MQTT 引导自愈轮次异常（%ds 后继续）: %s",
+                        int(BOOTSTRAP_RETRY_INTERVAL), err)
+                if not await has_bootstrap_marker(hass):
+                    _LOGGER.info("MQTT 引导自愈落地（标记已删除）")
+                    _clear_takeover_issue(hass)
+                    return
+                _report_takeover_issue(hass)
+                await asyncio.sleep(BOOTSTRAP_RETRY_INTERVAL)
+        finally:
+            if hass.data.get(DOMAIN) is not None:
+                hass.data[DOMAIN]["_bootstrap_healer"] = None
+
+    runtime["_bootstrap_healer"] = hass.async_create_task(
+        _healer(), name=f"{DOMAIN}_bootstrap_healer")

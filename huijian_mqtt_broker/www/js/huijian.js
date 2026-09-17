@@ -161,6 +161,39 @@
             } catch (e) {
                 setStatusDot('haMqttStatus', 'err', '无法读取');
             }
+            // 4. HA MQTT 通道 — HA Core 内 MQTT 集成条目就绪态（v1.7.29 用户拍板 C）。
+            //    前三项都看不见这个断点：broker 在跑、集成已装、客户端计数与 HA 侧
+            //    条目是否就绪无关（mqtt_not_ready 类现场事故的盲区）。
+            try {
+                const resp = await fetchT(INGRESS_BASE + 'api/ha/config/config_entries/entry', { cache: 'no-store' }, 8000);
+                if (!resp.ok) {
+                    setStatusDot('haMqttChannelStatus', 'err', 'HTTP ' + resp.status);
+                } else {
+                    const entries = await resp.json();
+                    const mqtt = (Array.isArray(entries) ? entries : [])
+                        .filter(e => e.domain === 'mqtt' && !e.disabled_by);
+                    let st, tip;
+                    if (!mqtt.length) {
+                        st = ['err', '无条目'];
+                        tip = 'HA 内没有 MQTT 集成条目——慧尖引导（v1.7.29 起每 5 分钟自动重试，'
+                            + '并在「设置→系统→问题」挂修复条目）尚未落地。可等自愈，'
+                            + '或手动添加 MQTT：127.0.0.1:2022 / ha_mqtt。';
+                    } else if (mqtt.some(e => e.state === 'loaded')) {
+                        st = ['ok', '就绪'];
+                        tip = 'HA Core 的 MQTT 集成已连接内置 Broker（127.0.0.1:2022），网关上报可进入 HA。';
+                    } else {
+                        st = ['warn', '未就绪'];
+                        tip = 'MQTT 条目存在但未加载完成（state=' + (mqtt[0].state || '?')
+                            + '）——多为 broker 未起/凭据被拒/Supervisor 托管回写；'
+                            + '慧尖每 5 分钟自愈重试，也可在「设置→系统→问题」提交修复。';
+                    }
+                    setStatusDot('haMqttChannelStatus', st[0], st[1]);
+                    const chanEl = document.getElementById('haMqttChannelStatus');
+                    if (chanEl) chanEl.title = tip;
+                }
+            } catch (e) {
+                setStatusDot('haMqttChannelStatus', 'err', '无法读取');
+            }
         }
 
         function setStatusDot(elementId, status, text) {

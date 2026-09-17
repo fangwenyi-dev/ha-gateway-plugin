@@ -172,6 +172,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 pass  # broker 稍后就绪（加载项启动竞态窗口），武装任务兜底
             except Exception as e:  # noqa: BLE001
                 _LOGGER.warning("等待模式 MQTT 引导异常（不阻塞，后台武装兜底）: %s", e)
+            # v1.7.29 A：bootstrap 持久自愈（每 hass 单实例幂等）——标记未
+            # 落地时每 300s 重试，失败升修复条目；不再"错过 setup 即静默等重启"
+            from .mqtt_bootstrap import async_start_bootstrap_healer
+            async_start_bootstrap_healer(hass)
 
             _subscribed_now = False
             if is_mqtt_loaded(hass):
@@ -282,8 +286,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         # 一体化插件：确保 MQTT 集成已建立连接（需要时按引导标记自动创建条目）。
         # 必须在创建 MQTT 处理器之前完成，否则订阅会因 MQTT 未就绪而失败。
-        from .mqtt_bootstrap import ensure_mqtt_connection
+        from .mqtt_bootstrap import ensure_mqtt_connection, async_start_bootstrap_healer
         await ensure_mqtt_connection(hass)
+        # v1.7.29 A：同上——引导未落地时后台周期自愈，可见修复条目兜底
+        async_start_bootstrap_healer(hass)
 
         # 创建设备管理器
         _LOGGER.debug("正在创建设备管理器...")
