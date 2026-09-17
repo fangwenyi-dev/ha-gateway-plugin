@@ -3,23 +3,44 @@
 ## 核心规则
 
 ### 推送与验证流程
-**2026-09-16 用户裁定：网关仓只推 GitHub，不再双推 Gitee**（Gitee 镜像与
-Release 冻结在 v1.7.24/41a1506；ci.yaml 的 gitee-release job 已移除留墓碑）。
-每次推送 GitHub 后，必须检查 GitHub Actions CI 状态：
+**2026-09-17 用户裁定：网关仓恢复双推 Gitee**（推翻 2026-09-16 的"只推 GitHub"）。
+停推的实际代价已实证：Gitee 镜像冻结在 v1.7.24/41a1506，而**已配置 Gitee
+仓库的 HA 实例，其 Supervisor 商店数据停在 `latest=1.7.24`**（真机
+192.168.1.91 实测：`update.hui_jian_lora_wang_guan_update state=off
+latest=1.7.24 installed=1.7.24`）→ 1.7.25 及以后对这批机器**永久不可见**，
+"有可用更新"提示静默失效。故此后每次发版必须：
 
 ```bash
-# 1. 推送代码（只推 GitHub）
+# 1. 推 GitHub
 git push origin main
 
-# 2. 等待 CI 启动
-Start-Sleep -Seconds 30
+# 2. 推 Gitee（main 必推；商店读的是仓库内 config.yaml 的 version，
+#    故 main 到位即可被发现）
+git push gitee main
 
-# 3. 检查 CI 状态
+# 3. 推本次 tag（两源都要有 tag：镜像/回退按 tag 定位，Release 正文亦挂 tag）
+git push origin v1.7.x
+git push gitee v1.7.x        # 若本地缺该 tag：先 git fetch origin tag v1.7.x --force
+
+# 4. 等待 CI 启动后检查状态（GitHub）
 gh run list --repo fangwenyi-dev/ha-gateway-plugin --limit 3
+#    gh 未认证时可用只读 REST（公开仓）：
+#    https://api.github.com/repos/fangwenyi-dev/ha-gateway-plugin/actions/runs?per_page=5
+#    以及镜像可拉性：GET https://ghcr.io/token?scope=repository:<org>/<arch-IMAGE_NAME>:pull&service=ghcr.io
+#    再 HEAD https://ghcr.io/v2/<org>/<arch-IMAGE_NAME>/manifests/<版本>
 
-# 4. 如果有失败，查看详情并修复
+# 5. 如果有失败，查看详情并修复
 gh run view <run-id> --repo fangwenyi-dev/ha-gateway-plugin --log-failed
 ```
+
+**仍未恢复的一件事**：`ci.yaml` 的 `gitee-release` job 仍是墓碑状态（已移除），
+所以 **Gitee 侧的 Release 对象不会自动创建**。两条后果要记住：
+- Supervisor 商店不受影响（它只读仓库内 `config.yaml`）；
+- 但慧尖 Web UI 的升级徽章走的是「GitHub + Gitee releases 双源并集取最大」
+  （`www/js/huijian.js` `fetchLatestRelease`），GitHub 一路失败/被限流时只剩
+  陈旧 Gitee 数据（实测 Gitee Release 首页最大 v1.7.15），会把"最新发布版"
+  误判成旧值而**静默不亮徽章**。改这条逻辑（Gitee 降级为显式回退 + 源不可见
+  要留痕）前，勿把徽章沉默当作"已是最新"。
 
 **CI 状态说明：**
 - `success` ✅ — 通过
@@ -55,16 +76,16 @@ v1.6.0 的 "entity" 字面量回归曾骗过全部 38 个测试，教训记录�
 
 ---
 
-### Gitee 凭据（历史存档：2026-09-16 起本仓停推 Gitee，镜像冻结于 v1.7.24）
-（v1.6.3 定案：remote 不带 token。以下两条认证路径仅作历史操作记录保留，
-若用户裁定恢复镜像再启用。）
+### Gitee 凭据（现行生效：2026-09-17 恢复双推；remote 仍不带 token）
 ```bash
 # remote 保持干净 URL（.git/config 不落任何密钥）
 git remote set-url gitee https://gitee.com/fangwenyi-dev/ha-gateway-plugin.git
 ```
-**两条已验证的认证路径（2026-08-28 实测，均无需 URL 内嵌 token）：**
-1. **Windows 侧推送**：Git Credential Manager 已存 gitee.com 条目
-   （host=gitee.com, username=oauth2），`git push gitee main` 直接走 GCM
+**两条已验证的认证路径（均无需 URL 内嵌 token）：**
+1. **Windows 侧推送（2026-09-17 再次实测可用）**：Git Credential Manager 已存
+   gitee.com 条目（host=gitee.com, username=oauth2），`git push gitee main`
+   直接走 GCM——本次恢复双推即经此路径成功（41a1506..dc1e7de）。设
+   `GIT_TERMINAL_PROMPT=0` 可确保不弹交互。
 2. **WSL/agent 侧推送**：一次性注入 token，不落盘到 remote 配置：
    ```bash
    TOK=$(cat /mnt/c/Users/fangwenyi/.gitee_token | tr -d '\r\n')
@@ -73,6 +94,9 @@ git remote set-url gitee https://gitee.com/fangwenyi-dev/ha-gateway-plugin.git
 GitHub 同理走 `gh auth token` 注入一次性 URL（WSL 无 GCM 交互）。
 禁止再把 token 写回 `git remote set-url`——历史做法会让明文 token 长期驻留
 `.git/config`，任何读取该文件的工具/日志/备份都可能带出。
+`git push gitee --tags` 对已存在 tag 会逐条报 `! [rejected] ... (already exists)`
+并整体 exit=1——这不是失败，新 tag 照样推上去了；要精确推指定 tag 用
+`git push gitee refs/tags/v1.7.x`（本地缺该 tag 时先 `git fetch origin tag v1.7.x --force`）。
 
 ---
 
