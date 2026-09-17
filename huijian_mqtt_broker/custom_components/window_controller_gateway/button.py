@@ -269,7 +269,7 @@ async def _fix_entity_categories(hass, gateway_sn, device_sn):
         entity_id = await _aget_eid(hass, "button", unique_id)
         if entity_id:
             from .utils import call_registry_method as _call_reg
-            entity_entry = entity_registry.entities.get(entity_id)
+            entity_entry = entity_registry.async_get(entity_id)
             if entity_entry and entity_entry.entity_category != EntityCategory.CONFIG:
                 await _call_reg(entity_registry.async_update_entity, entity_id, entity_category=EntityCategory.CONFIG)
                 _LOGGER.info("修正配置按钮 entity_category → CONFIG: %s", entity_id)

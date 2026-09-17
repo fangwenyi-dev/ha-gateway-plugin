@@ -200,12 +200,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 async def _arm_heartbeat_when_mqtt_ready():
                     from homeassistant.components import mqtt as mqtt_comp
                     from .utils import async_wait_mqtt_loaded
-                    if not await async_wait_mqtt_loaded(hass, timeout=120.0):
+                    # v1.7.28（现场实锤"等待 MQTT 集成 120s 仍未就绪，心跳
+                    # 监听器未武装"）：旧实现一轮 120s 即弃——加载项重启/首配
+                    # 窗口里 MQTT 恢复常晚于 120s，耳朵从此永久失聪直到条目
+                    # reload/HA 重启。改为无限期耐心武装（每 120s 一条节流留痕）；
+                    # 任务在 _bg_tasks，卸载/reload 统一取消，data_now 双检兜底。
+                    _waited = 0
+                    while not await async_wait_mqtt_loaded(hass, timeout=120.0):
+                        _waited += 120
+                        if hass.data.get(DOMAIN, {}).get(entry.entry_id) is None:
+                            return  # 条目已卸载/重载，放弃武装
                         _LOGGER.warning(
-                            "等待 MQTT 集成 120s 仍未就绪，心跳监听器未武装"
-                            "（网关需在集成页手动添加 SN，MQTT 恢复后重载条目即可）"
-                        )
-                        return
+                            "MQTT 集成仍未就绪（累计 %ds），心跳武装持续等待——"
+                            "请检查 MQTT 集成能否连上 broker（慧尖内置为 2022）",
+                            _waited)
                     data_now = hass.data.get(DOMAIN, {}).get(entry.entry_id)
                     if data_now is None:
                         return  # 条目已卸载/重载，放弃武装
@@ -368,7 +376,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             entity_registry = er.async_get(hass)
             from .utils import call_registry_method as _call_reg
             restored_count = 0
-            for entity_entry in list(entity_registry.entities.values()):
+            for entity_entry in list(entity_registry.async_entries()):
                 if (entity_entry.platform == DOMAIN
                         and entity_entry.config_entry_id == entry.entry_id
                         and entity_entry.disabled_by is not None
@@ -699,7 +707,7 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
                 # 先删除该网关设备下的所有实体，避免留下孤儿实体
                 from .utils import call_registry_method as _call_reg
                 entity_registry = er.async_get(hass)
-                for entity_entry in list(entity_registry.entities.values()):
+                for entity_entry in list(entity_registry.async_entries()):
                     if entity_entry.device_id == gateway_device.id:
                         await _call_reg(entity_registry.async_remove, entity_entry.entity_id)
                 # 再删除网关设备条目本身
@@ -720,12 +728,12 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
         from .utils import get_via_device_id
         device_registry = dr.async_get(hass)
         entity_registry = er.async_get(hass)
-        for device in list(device_registry.devices.values()):
+        for device in list(device_registry.async_entries()):
             via_id = get_via_device_id(device)
             if gateway_device_id and via_id == gateway_device_id:
                 # 先删除该子设备下的实体（仅限属于被删除网关 entry 的实体），
                 # 再删除设备条目本身
-                for entity_entry in list(entity_registry.entities.values()):
+                for entity_entry in list(entity_registry.async_entries()):
                     if (entity_entry.device_id == device.id
                             and entity_entry.config_entry_id == entry.entry_id):
                         await _call_reg(entity_registry.async_remove, entity_entry.entity_id)

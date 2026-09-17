@@ -3,6 +3,19 @@
 所有版本变更记录在此文件中。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.7.28] - 2026-09-17
+
+注册表弃用面清零 + 心跳武装无限化批（现场两条日志实锤）。
+
+### Fixed
+
+- **HA 注册表映射直读全量迁移**（helpers/frame 告警：`device_registry.devices` 弃用，HA 2027.9.0 停摆）：api.py（告警点名处 L99 + entities 遍历）、button.py（`entities.get`→`async_get`）、discovery.py、device_manager.py 七处（循环保留 list 快照语义，`entities.items()`→`[(e.entity_id, e) for e in async_entries()]`；`len(device_registry.devices)` 与遍历共用一次快照）、`__init__.py` 四处（卸载清理/禁用恢复路径）——一律改 `async_entries()`/`async_get()`。行为零变化（同为全量只读遍历，EntityRegistry/DeviceRegistry 的 async_entries 为多年稳定 API）。
+- **心跳监听器"120s 即弃"改无限期耐心武装**（现场实锤：升级首启窗口 `等待 MQTT 集成 120s 仍未就绪，心跳监听器未武装` 后耳朵永久失聪，直到手动 reload 条目/重启 HA）：等待循环每 120s 一轮、每轮一条节流 WARNING（提示检查 MQTT 集成能否连上 broker），条目卸载/reload 时自检退出（_bg_tasks 统一取消 + entry_id 双检），MQTT 一旦就绪立即补装订阅。
+
+### Tests
+
+- 新增 `tests/test_v1728_registry_api.py`：全集成源码扫描注册表映射直读禁型（注释/墓碑豁免）、迁移确实发生的核心文件正钉、武装 while 循环/旧放弃文案反钉、无限等待必须保留卸载自检。全量 589 用例通过。
+
 ## [1.7.27] - 2026-09-17
 
 耳朵代答格式定稿批（用户现场实锤：固件要求 001 应答必带 uuid，格式 `{"head":"$SH","ctype":"001","id":<回带>,"sn":<网关SN>,"data":{"errcode":0,"uuid":"<实例指纹>"}}`）。

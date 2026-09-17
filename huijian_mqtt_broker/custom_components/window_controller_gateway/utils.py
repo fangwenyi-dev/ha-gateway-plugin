@@ -224,7 +224,7 @@ async def call_registry_method(method, *args, **kwargs):
     收口约定（v1.6.3）：所有 registry **写操作**（async_get_or_create / async_remove /
     async_remove_device / async_update_device / async_update_entity /
     async_get_entity_id 等）一律经本函数调用，不允许直调；纯**只读查询**
-    （device_registry.async_get、async_get_device、entity_registry.entities.get 等）
+    （device_registry.async_get、async_get_device、entity_registry.async_get 等）
     在所有已知版本中均为同步 @callback，可直调，无需经过本函数。
     """
     result = method(*args, **kwargs)

@@ -85,7 +85,7 @@ class WindowGatewayDevicesView(http.HomeAssistantView):
 
         # 按 device_id 聚合实体（一次遍历完成，避免为每个设备再扫全表）
         entities_by_device: dict = {}
-        for entity_entry in entity_registry.entities.values():
+        for entity_entry in entity_registry.async_entries():  # v1.7.28 弃用面迁移
             did = entity_entry.device_id
             if not did:
                 continue
@@ -96,7 +96,7 @@ class WindowGatewayDevicesView(http.HomeAssistantView):
             })
 
         all_devices = []
-        for device in registry.devices.values():
+        for device in registry.async_entries():  # v1.7.28 弃用面迁移（告警点名处）
             # 兼容新旧 HA：config_entries (set) 取代旧版 config_entry_id (str)
             entry_ids = set()
             ce = getattr(device, "config_entries", None)
