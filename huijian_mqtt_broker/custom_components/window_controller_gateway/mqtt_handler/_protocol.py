@@ -149,6 +149,20 @@ class _ProtocolMixin:
                                     break
                             
                             if not already_configured:
+                                # v1.7.26 用户裁定 A：未配置网关首报 001 代答
+                                # （与心跳监听器同门 should_ear_ack_001）——
+                                # 多网关场景下第二台的首报由此分支兜住，固件
+                                # 5s 重试风暴即停；uuid 应答仍归转正后的
+                                # 正式 handler（ack 契约规则 1 不变）。
+                                from ..utils import (should_ear_ack_001,
+                                                     async_ack_gateway_001)
+                                if should_ear_ack_001(ctype, data):
+                                    # 本回调是同步函数（与下方发现触发同款
+                                    # _schedule_async_task 派发），不可 await
+                                    self._schedule_async_task(
+                                        async_ack_gateway_001(
+                                            self.hass, response_sn,
+                                            payload.get("id", 0)))
                                 # v1.6.26（第八轮审计 A-1）：v1.6.25 拆包回归——
                                 # 旧单文件里 `from .discovery` 解析到集成根的
                                 # discovery.py；下沉进 mqtt_handler/ 包后同一

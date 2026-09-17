@@ -1,12 +1,58 @@
 """工具模块 - 存放通用辅助函数"""
 import asyncio
+import json
 import logging
 from typing import Dict, Any, Optional, Tuple
 from homeassistant.core import HomeAssistant
 
-from .const import DOMAIN
+from .const import DOMAIN, PROTOCOL_HEAD, TOPIC_GATEWAY_REQ_FORMAT
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def should_ear_ack_001(ctype: Any, data: Any) -> bool:
+    """耳朵级代答门（v1.7.26 用户裁定 A）：仅"未配置网关的 001 绑定请求"可代答。
+
+    与 2026-09-02 五条 ack 方向契约同门：data 带 errcode 的 001 是网关对我方
+    报文的回复，绝不再答；002/005 等其余上报在耳朵层不代答（绑定请求语义仅 001）。
+    """
+    return (ctype == "001" and isinstance(data, dict) and "errcode" not in data)
+
+
+async def async_ack_gateway_001(hass: HomeAssistant, gateway_sn: str,
+                                 msg_id: Any) -> bool:
+    """向未绑定网关的 001 绑定请求代答同型 ack（发 gateway/{sn}/req）。
+
+    背景（用户 2026-09-17 裁定 A）：固件首配期每 5s 重发 001，直到收到应答；
+    旧链条里应答只在"条目转正→reload→正式 handler 订阅"之后才发出，转正链
+    任一环节断裂即成无限重试风暴。耳朵（心跳监听器/_protocol 他网关分支）
+    听到未配置网关的 001 时当场代答，风暴即停。
+
+    格式：{"head":"$SH","ctype":"001","id":<回带>,"sn":<网关SN>,
+    "data":{"errcode":0}}——不带 uuid；uuid 仍由转正后的正式 handler 按
+    规则 1 补发（固件对两次应答幂等，与 002 应答同型 echo 口径）。
+    返回发布是否成功（失败由调用方留痕，不抛出——代答永不反噬发现主流程）。
+    """
+    from homeassistant.components import mqtt
+    payload = {
+        "head": PROTOCOL_HEAD,
+        "ctype": "001",
+        "id": msg_id,
+        "sn": gateway_sn,
+        "data": {"errcode": 0},
+    }
+    try:
+        await mqtt.async_publish(
+            hass,
+            TOPIC_GATEWAY_REQ_FORMAT.format(gateway_sn=gateway_sn),
+            json.dumps(payload),
+            1,
+            False,
+        )
+        return True
+    except Exception as e:  # noqa: BLE001
+        _LOGGER.warning("耳朵代答 001 发布失败（不阻塞发现）: %s", e)
+        return False
 
 
 def is_mqtt_loaded(hass: HomeAssistant) -> bool:
