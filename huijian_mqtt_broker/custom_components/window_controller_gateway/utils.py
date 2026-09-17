@@ -2,12 +2,23 @@
 import asyncio
 import json
 import logging
+import uuid
 from typing import Dict, Any, Optional, Tuple
 from homeassistant.core import HomeAssistant
 
 from .const import DOMAIN, PROTOCOL_HEAD, TOPIC_GATEWAY_REQ_FORMAT
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def gateway_instance_uuid(hass: HomeAssistant) -> str:
+    """服务端实例指纹：uuid5(NAMESPACE_DNS, config_dir)。
+
+    与 mqtt_handler._lifecycle 同式（该处已改为调用本函数）——确定性、跨
+    重启/跨 handler 稳定，保证 v1.7.27 起耳朵 001 代答的 uuid 与转正后
+    正式 handler 的应答逐字一致，固件无需处理两个指纹。
+    """
+    return str(uuid.uuid5(uuid.NAMESPACE_DNS, hass.config.config_dir))
 
 
 def should_ear_ack_001(ctype: Any, data: Any) -> bool:
@@ -28,9 +39,11 @@ async def async_ack_gateway_001(hass: HomeAssistant, gateway_sn: str,
     任一环节断裂即成无限重试风暴。耳朵（心跳监听器/_protocol 他网关分支）
     听到未配置网关的 001 时当场代答，风暴即停。
 
-    格式：{"head":"$SH","ctype":"001","id":<回带>,"sn":<网关SN>,
-    "data":{"errcode":0}}——不带 uuid；uuid 仍由转正后的正式 handler 按
-    规则 1 补发（固件对两次应答幂等，与 002 应答同型 echo 口径）。
+    格式（v1.7.27 用户现场定稿，与正式 handler 应答完全同形）：
+    {"head":"$SH","ctype":"001","id":<回带>,"sn":<网关SN>,
+    "data":{"errcode":0,"uuid":<实例指纹>}}——uuid 由 gateway_instance_uuid
+    确定性计算，与转正后正式 handler 发的逐字一致（固件要求应答必带 uuid，
+    2026-09-17 用户实锤格式）。
     返回发布是否成功（失败由调用方留痕，不抛出——代答永不反噬发现主流程）。
     """
     from homeassistant.components import mqtt
@@ -39,7 +52,7 @@ async def async_ack_gateway_001(hass: HomeAssistant, gateway_sn: str,
         "ctype": "001",
         "id": msg_id,
         "sn": gateway_sn,
-        "data": {"errcode": 0},
+        "data": {"errcode": 0, "uuid": gateway_instance_uuid(hass)},
     }
     try:
         await mqtt.async_publish(

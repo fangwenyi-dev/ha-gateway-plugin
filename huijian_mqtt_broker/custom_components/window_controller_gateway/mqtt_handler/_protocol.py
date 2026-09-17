@@ -149,11 +149,11 @@ class _ProtocolMixin:
                                     break
                             
                             if not already_configured:
-                                # v1.7.26 用户裁定 A：未配置网关首报 001 代答
-                                # （与心跳监听器同门 should_ear_ack_001）——
-                                # 多网关场景下第二台的首报由此分支兜住，固件
-                                # 5s 重试风暴即停；uuid 应答仍归转正后的
-                                # 正式 handler（ack 契约规则 1 不变）。
+                                # v1.7.26 用户裁定 A / v1.7.27 格式定稿：
+                                # 未配置网关首报 001 代答（与心跳监听器同门
+                                # should_ear_ack_001）——多网关场景下第二台
+                                # 的首报由此分支兜住；代答含 uuid（与正式
+                                # handler 同值，固件只见一个指纹）。
                                 from ..utils import (should_ear_ack_001,
                                                      async_ack_gateway_001)
                                 if should_ear_ack_001(ctype, data):

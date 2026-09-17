@@ -142,10 +142,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         if e.data.get(CONF_GATEWAY_SN, "").lower() == response_sn.lower():
                             return
 
-                    # v1.7.26 用户裁定 A：未配置网关首报 001 耳朵级代答——
-                    # 固件每 5s 重发 001 直到收到应答，旧链条在条目转正前无人
-                    # 应答，转正链一断即无限重试风暴。同型 echo 不带 uuid；
-                    # uuid 仍由转正后的正式 handler 按 ack 契约规则 1 补发。
+                    # v1.7.26 用户裁定 A / v1.7.27 格式定稿：未配置网关首报
+                    # 001 耳朵级代答——固件每 5s 重发直到收到应答，旧链条在
+                    # 条目转正前无人应答，转正链一断即无限重试风暴。代答与
+                    # 正式 handler 应答完全同形（含 uuid，uuid5(config_dir)
+                    # 确定性同值），固件只见一个指纹。
                     from .utils import should_ear_ack_001, async_ack_gateway_001
                     if should_ear_ack_001(payload.get("ctype"), payload.get("data")):
                         if await async_ack_gateway_001(

@@ -3,6 +3,19 @@
 所有版本变更记录在此文件中。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.7.27] - 2026-09-17
+
+耳朵代答格式定稿批（用户现场实锤：固件要求 001 应答必带 uuid，格式 `{"head":"$SH","ctype":"001","id":<回带>,"sn":<网关SN>,"data":{"errcode":0,"uuid":"<实例指纹>"}}`）。
+
+### Changed
+
+- **v1.7.26 耳朵代答补齐 uuid**：代应答与正式 handler 应答**完全同形**——`data` 含 `{errcode:0, uuid}`；uuid 由新函数 `utils.gateway_instance_uuid(hass)` 确定性计算（`uuid5(NAMESPACE_DNS, config_dir)`，与转正后正式 handler 的应答逐字一致，固件全程只见一个服务端指纹）。
+- **指纹公式收敛单一真源**：`_lifecycle.__init__` 的 `instance_uuid` 改为调用 `gateway_instance_uuid(hass)`（值零变化，回归安全），删除本地 uuid5 字面量与死导入。
+
+### Tests
+
+- `test_v1726_ear_ack.py` 升级 v1.7.27 定稿：代答报文逐字含 uuid（用户实锤格式）、耳朵 uuid == `gateway_instance_uuid` == uuid5(config_dir) 确定性断言、`_lifecycle` 不再自带 uuid5 字面量反钉；全量 585 用例通过。
+
 ## [1.7.26] - 2026-09-17
 
 耳朵级 001 代答批（用户裁定 A）。客户现场实锤：新网关首配期每 5s 重发 001 绑定请求，而旧链条中 HA 的应答只在「条目转正 → reload → 正式 handler 订阅」之后才发出——转正链任一环节断裂（如 HA MQTT 与网关不同侧）即成无限重试风暴，首配永不完成。

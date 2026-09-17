@@ -6,11 +6,10 @@ v1.6.25 拆包：代码自 mqtt_handler.py 单文件**逐字原样搬移**，禁
 import logging
 import asyncio
 import random
-import uuid
 import time
 from typing import Optional
 from homeassistant.core import HomeAssistant
-from ..utils import is_mqtt_loaded
+from ..utils import is_mqtt_loaded, gateway_instance_uuid
 from ..const import (
     DOMAIN,
     CONF_AUTO_DISCOVERY,
@@ -54,7 +53,9 @@ class _LifecycleMixin:
         # 巡检发现变化即重建订阅（见 _ensure_mqtt_subscription）
         self._mqtt_client_id = None
         self._msg_lock = asyncio.Lock()  # 异步消息去重锁
-        self.instance_uuid = str(uuid.uuid5(uuid.NAMESPACE_DNS, hass.config.config_dir))
+        # v1.7.27：公式上收 utils.gateway_instance_uuid 单一真源——耳朵 001
+        # 代答与正式 handler 应答共用同一确定性 uuid（值逐字不变，回归安全）
+        self.instance_uuid = gateway_instance_uuid(hass)
         # P1 修复：将配对超时句柄统一存储在 mqtt_handler 上，
         # 使服务调用和按钮按下共享同一个超时管理，避免重复超时回调。
         self.pairing_timeout_handle = None

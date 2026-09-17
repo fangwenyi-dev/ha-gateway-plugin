@@ -1,26 +1,31 @@
-"""v1.7.26 耳朵级 001 代答（用户裁定 A）钉桩。
+"""v1.7.26 耳朵级 001 代答（用户裁定 A）+ v1.7.27 格式定稿钉桩。
 
 背景：固件首配期每 5s 重发 001 直到收到应答；旧链条中应答只在"条目转正 →
 reload → 正式 handler 订阅"后发出，转正链断裂即无限重试风暴（客户现场实锤：
 gateway 1001215011a3 首报 001 无人应答）。现耳朵（心跳监听器 + _protocol 他
-网关分支）听到未配置网关的 001 绑定请求当场同型代答 {errcode:0}（不带 uuid，
-uuid 仍归转正后的正式 handler——ack 契约规则 1 不变）。
+网关分支）听到未配置网关的 001 绑定请求当场同型代答。
+
+v1.7.27 定稿（用户 2026-09-17 实锤格式）：代答与正式 handler 应答**完全同形**
+——data 必含 uuid（uuid5(NAMESPACE_DNS, config_dir) 确定性同值，公式上收
+utils.gateway_instance_uuid 单一真源），固件只见一个指纹。
 
 守门面（静默失效面，CLAUDE.md 教训）：
 - 谓词必须只放"001 且 data 无 errcode"——data 带 errcode 的 001 是网关对我方
   报文的回复，再答即成回环（契约规则 1）；002/005 不在耳朵层代答。
-- 代答报文逐字：head/ctype/id 回带/sn 回带/data.errcode=0，且**不得含 uuid**。
+- 代答报文逐字：head/ctype/id 回带/sn 回带/data={errcode:0, uuid:指纹}。
 - 两处接线位置：心跳监听器必须在"已配置 return"之后（已绑定网关由正式
   handler 应答，防双答）；_protocol 必须在 not already_configured 分支内。
 """
 import json
+import uuid as uuid_mod
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 import homeassistant.components.mqtt as fake_mqtt
 from custom_components.window_controller_gateway.utils import (
-    should_ear_ack_001, async_ack_gateway_001)
+    should_ear_ack_001, async_ack_gateway_001, gateway_instance_uuid)
 
 HERE = Path(__file__).resolve().parent
 PKG = HERE.parent / "custom_components" / "window_controller_gateway"
@@ -48,8 +53,9 @@ class TestGate:
 
 # ============ helper：报文逐字与发布参数 ============
 class _Hass:
-    def __init__(self):
+    def __init__(self, config_dir="."):
         self.data = {}
+        self.config = SimpleNamespace(config_dir=config_dir)
 
 
 class _Pub:
@@ -68,15 +74,33 @@ class TestAckHelper:
     async def test_payload_verbatim(self, monkeypatch):
         pub = _Pub()
         monkeypatch.setattr(fake_mqtt, "async_publish", pub)
-        ok = await async_ack_gateway_001(_Hass(), GW, 118)
+        hass = _Hass()
+        ok = await async_ack_gateway_001(hass, GW, 15)
         assert ok is True
         topic, payload, qos, retain = pub.calls[0]
         assert topic == f"gateway/{GW}/req", "代答必须发到该 SN 的 req 主题"
-        assert payload == {"head": "$SH", "ctype": "001", "id": 118,
-                           "sn": GW, "data": {"errcode": 0}}, \
-            "同型 echo：id/sn 回带，仅 errcode——uuid 归正式 handler"
-        assert "uuid" not in payload["data"]
+        assert payload == {"head": "$SH", "ctype": "001", "id": 15,
+                           "sn": GW, "data": {
+                               "errcode": 0,
+                               "uuid": str(uuid_mod.uuid5(
+                                   uuid_mod.NAMESPACE_DNS, "."))}}, \
+            "v1.7.27 定稿：与用户实锤格式逐字一致（必带 uuid，与正式 handler 同值）"
         assert qos == 1 and retain is False
+
+    @pytest.mark.asyncio
+    async def test_uuid_deterministic_across_ear_and_handler(self, monkeypatch):
+        """耳朵代答 uuid == 正式 handler instance_uuid（单一真源公式）。"""
+        pub = _Pub()
+        monkeypatch.setattr(fake_mqtt, "async_publish", pub)
+        hass = _Hass(config_dir="/config")
+        await async_ack_gateway_001(hass, GW, 1)
+        ear_uuid = pub.calls[0][1]["data"]["uuid"]
+        assert ear_uuid == gateway_instance_uuid(hass)
+        assert ear_uuid == str(uuid_mod.uuid5(uuid_mod.NAMESPACE_DNS, "/config"))
+        # 公式单一真源：_lifecycle 不再自带 uuid5 字面量
+        src = (PKG / "mqtt_handler" / "_lifecycle.py").read_text(encoding="utf-8")
+        assert "gateway_instance_uuid(hass)" in src
+        assert "uuid.uuid5" not in src, "指纹公式必须收敛到 utils 单一真源"
 
     @pytest.mark.asyncio
     async def test_publish_failure_returns_false_no_raise(self, monkeypatch):
