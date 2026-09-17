@@ -2,6 +2,7 @@
 import asyncio
 import json
 import logging
+import time
 import uuid
 from typing import Dict, Any, Optional, Tuple
 from homeassistant.core import HomeAssistant
@@ -85,6 +86,117 @@ async def async_ack_gateway_001(hass: HomeAssistant, gateway_sn: str,
     except Exception as e:  # noqa: BLE001
         _LOGGER.warning("耳朵代答 001 发布失败（不阻塞发现）: %s", e)
         return False
+
+
+# ==================== v1.7.30 ②③：代答单点仲裁 + 转正留痕看守 ====================
+#
+# 台架实锤（2026-09-17 真栈 A/B，档案 5aebbb63）：两处耳朵对同一条 001 各自
+# 独立代答——每个已配置条目的 _protocol 他网关分支都是应答者，外加每条等待
+# 条目的心跳监听器——实测 1 请求 → 2~3 条同 uuid 应答（倍数=应答者数）。
+# 报文无害但属噪声，且"固件对重复 ack 幂等"只是文档主张、未真机实证。
+# 正解：以 (sn, id) 为键的进程内认领仲裁——第一个耳朵发布，其余抑制；
+# 固件重试换新 id 仍可得一次应答（止血语义不变），重发同 id 超 TTL 后补答
+#（丢包保险）。TTL 30s 远大于并发应答者间 ~40ms 的实测散布，收紧到
+# 重复风暴消失即可。
+
+EAR_ACK_CLAIM_TTL = 30.0
+EAR_ACK_CLAIM_MAX = 256
+EAR_PROMOTION_WATCH_SECONDS = 30.0
+EAR_PROMOTION_WATCH_LOG_TTL = 600.0
+
+
+def ear_ack_claim(hass: HomeAssistant, gateway_sn: str, msg_id: Any) -> bool:
+    """代答认领（v1.7.30 ②）：同一 (SN, id) 在 TTL 内只放行一个应答者。
+
+    返回 True=本调用获得发布权；False=另一耳朵已答/在答，必须抑制。
+    HA 单事件循环内全部调用点在循环线程执行（同步回调/已派发协程），
+    无需加锁；容量闸防畸形流量下 dict 无界增长。
+    """
+    runtime = hass.data.setdefault(DOMAIN, {})
+    claims = runtime.setdefault("_ear_ack_claims", {})
+    now = time.monotonic()
+    for stale in [k for k, ts in claims.items() if now - ts > EAR_ACK_CLAIM_TTL]:
+        claims.pop(stale, None)
+    key = (str(gateway_sn).lower(), str(msg_id))
+    if key in claims:
+        return False
+    claims[key] = now
+    if len(claims) > EAR_ACK_CLAIM_MAX:
+        claims.pop(min(claims, key=claims.get), None)
+    return True
+
+
+def _watch_ear_promotion(hass: HomeAssistant, gateway_sn: str) -> None:
+    """代答成功后的转正看守（v1.7.30 ③）：30s 未转正且无待确认卡片 → WARNING。
+
+    旧症状"固件停发 001 但设备列表永不出现"只有 INFO 留痕——现场 WARNING+
+    级日志采集根本看不见（0917 取证铁律：归因行必须 WARNING），故障被代答
+    的"成功表象"抹掉。看守区分两种停发：
+    - discovery 卡片已挂起等用户确认（第二台网关的正常形态）→ 不打扰；
+    - 代答后既无条目也无卡片（发现/转正链静默断）→ loud 告警指排障方向。
+    每 SN 10 分钟窗口只起一个看守、最多留一条痕（防每 5s 重试刷屏）。
+    """
+    runtime = hass.data.setdefault(DOMAIN, {})
+    watched = runtime.setdefault("_ear_promotion_watched", {})
+    now = time.monotonic()
+    for stale in [k for k, ts in watched.items() if now - ts > EAR_PROMOTION_WATCH_LOG_TTL]:
+        watched.pop(stale, None)
+    key = str(gateway_sn).lower()
+    if key in watched:
+        return
+    watched[key] = now
+
+    async def _check():
+        from .const import CONF_GATEWAY_SN
+        try:
+            await asyncio.sleep(EAR_PROMOTION_WATCH_SECONDS)
+            if getattr(hass, "is_stopping", False):
+                return
+            for entry in hass.config_entries.async_entries(DOMAIN):
+                if str((getattr(entry, "data", None) or {}).get(
+                        CONF_GATEWAY_SN, "")).lower() == key:
+                    return  # 已转正——正常，静默退场
+            try:
+                for flow in hass.config_entries.flow.async_progress():
+                    ctx = flow.get("context") or {}
+                    if (flow.get("handler") == DOMAIN
+                            and str(ctx.get("unique_id") or "").lower() == key):
+                        return  # 发现卡片挂起待确认——正常形态，不误报
+            except Exception:  # noqa: BLE001 — flow 查询失败按"无卡片"从严处理
+                pass
+            _LOGGER.warning(
+                "网关 %s 获耳朵代答 001 后 %ds 未转为配置条目、且无待确认发现卡片"
+                "——绑定停在发现/转正链（检查 设置→设备与服务 的发现卡与「HA MQTT "
+                "通道」就绪态），本留痕每网关 10 分钟去重",
+                gateway_sn, int(EAR_PROMOTION_WATCH_SECONDS),
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 — 看守绝不反噬代答主流程
+            _LOGGER.debug("网关 %s 转正看守异常（忽略）", gateway_sn, exc_info=True)
+
+    tasks = runtime.setdefault("_ear_watch_tasks", set())
+    task = hass.async_create_task(_check(), name=f"{DOMAIN}_ear_promotion_watch_{key}")
+    tasks.add(task)
+    task.add_done_callback(tasks.discard)
+
+
+async def async_ear_ack_001_arbitrated(hass: HomeAssistant, gateway_sn: str,
+                                       msg_id: Any) -> bool:
+    """两处耳朵的统一代答入口（v1.7.30）：认领 → 发布 → 转正看守。
+
+    返回 True 仅当本调用实际发布了代答；被仲裁抑制与发布失败都返回 False。
+    调用方不得再直接 await async_ack_gateway_001（守卫反钉），否则 N+1
+    重复应答面复活。
+    """
+    if not ear_ack_claim(hass, gateway_sn, msg_id):
+        _LOGGER.debug("001 代答被仲裁抑制（另一耳朵已答）: sn=%s id=%s",
+                      gateway_sn, msg_id)
+        return False
+    ok = await async_ack_gateway_001(hass, gateway_sn, msg_id)
+    if ok:
+        _watch_ear_promotion(hass, gateway_sn)
+    return ok
 
 
 def is_mqtt_loaded(hass: HomeAssistant) -> bool:

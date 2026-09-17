@@ -114,11 +114,16 @@ class TestWiring:
     def test_heartbeat_listener_acks_after_configured_check(self):
         src = (PKG / "__init__.py").read_text(encoding="utf-8")
         i_ret = src.index('if e.data.get(CONF_GATEWAY_SN, "").lower() == response_sn.lower():')
-        i_ack = src.index("should_ear_ack_001(payload.get(\"ctype\"), payload.get(\"data\"))")
+        # v1.7.30 审计收编：本耳补 data 归一（旧两耳不对称——001 带 data:null
+        # 时 _protocol 耳照答、本耳拒答；干净主机只有本耳，该形态风暴不止血）
+        assert 'payload.get("data")' in src[i_ret:], "本耳必须先取原始 data 归一"
+        assert "if not isinstance(_ear_data, dict):" in src[i_ret:]
+        i_ack = src.index('should_ear_ack_001(payload.get("ctype"), _ear_data)')
         i_log = src.index("心跳监听器发现新网关")
         assert i_ret < i_ack < i_log, \
             "代答必须在『已配置 return』之后（防与正式 handler 双答）且触发发现前"
-        assert "async_ack_gateway_001" in src[i_ack:i_log]
+        assert "async_ear_ack_001_arbitrated" in src[i_ack:i_log], \
+            "v1.7.30 ②：本耳必须走仲裁统一入口"
 
     def test_protocol_other_sn_branch_acks_inside_not_configured(self):
         src = (PKG / "mqtt_handler" / "_protocol.py").read_text(encoding="utf-8")
@@ -127,6 +132,16 @@ class TestWiring:
         i_disc = src.index("from ..discovery import async_discover_gateway")
         assert i_branch < i_ack < i_disc, \
             "代答必须圈在 not already_configured 分支内（已配置他网关由其自身 handler 应答）"
+        assert "async_ear_ack_001_arbitrated" in src[i_ack:i_disc], \
+            "v1.7.30 ②：本耳必须走仲裁统一入口"
+
+    def test_wiring_sites_never_publish_raw(self):
+        """v1.7.30 ②反钉：两处耳朵不得绕过仲裁直接调 async_ack_gateway_001——
+        绕过一行就让"1 请求 2~3 答"的实锤噪声面复活（仲裁只在入口生效）。"""
+        for path in (PKG / "__init__.py", PKG / "mqtt_handler" / "_protocol.py"):
+            src = path.read_text(encoding="utf-8")
+            assert "async_ack_gateway_001" not in src, \
+                f"{path.name} 必须只经 async_ear_ack_001_arbitrated 发布代答"
 
     def test_handler_path_untouched(self):
         """转正后的 001 应答语义（含 uuid）归 _handle_ctype_001——本批不得触碰。"""

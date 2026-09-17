@@ -142,14 +142,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         if e.data.get(CONF_GATEWAY_SN, "").lower() == response_sn.lower():
                             return
 
-                    # v1.7.26 用户裁定 A / v1.7.27 格式定稿：未配置网关首报
-                    # 001 耳朵级代答——固件每 5s 重发直到收到应答，旧链条在
-                    # 条目转正前无人应答，转正链一断即无限重试风暴。代答与
-                    # 正式 handler 应答完全同形（含 uuid，uuid5(config_dir)
-                    # 确定性同值），固件只见一个指纹。
-                    from .utils import should_ear_ack_001, async_ack_gateway_001
-                    if should_ear_ack_001(payload.get("ctype"), payload.get("data")):
-                        if await async_ack_gateway_001(
+                    # v1.7.26 用户裁定 A / v1.7.27 格式定稿 / v1.7.30 仲裁收口：
+                    # 未配置网关首报 001 耳朵级代答——固件每 5s 重发直到收到应答，
+                    # 旧链条在条目转正前无人应答，转正链一断即无限重试风暴。代答
+                    # 与正式 handler 应答完全同形（含 uuid）。v1.7.30 ②：改走统一
+                    # 仲裁入口（台架实锤 1 请求 2~3 答，倍数=应答者数），并补齐
+                    # data 归一（v1.7.30 审计收编：001 带 data:null 时 _protocol
+                    # 耳归一后照答、本耳谓词见非 dict 拒答——干净主机只有本耳，
+                    # 该形态下风暴不止血）。
+                    from .utils import (should_ear_ack_001,
+                                        async_ear_ack_001_arbitrated)
+                    _ear_data = payload.get("data")
+                    if not isinstance(_ear_data, dict):
+                        _ear_data = {}
+                    if should_ear_ack_001(payload.get("ctype"), _ear_data):
+                        if await async_ear_ack_001_arbitrated(
                                 hass, response_sn, payload.get("id", 0)):
                             _LOGGER.info("耳朵已代答 001 绑定应答（未配置网关）: %s",
                                          response_sn)
@@ -172,8 +179,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 pass  # broker 稍后就绪（加载项启动竞态窗口），武装任务兜底
             except Exception as e:  # noqa: BLE001
                 _LOGGER.warning("等待模式 MQTT 引导异常（不阻塞，后台武装兜底）: %s", e)
-            # v1.7.29 A：bootstrap 持久自愈（每 hass 单实例幂等）——标记未
-            # 落地时每 300s 重试，失败升修复条目；不再"错过 setup 即静默等重启"
+            # v1.7.29 A / v1.7.30 ④：bootstrap 持久自愈（每 hass 单实例幂等）
+            # ——标记未落地时重试 ensure（v1.7.30 起 300s 指数退避封顶 1h），
+            # 失败升修复条目；不再"错过 setup 即静默等重启"
             from .mqtt_bootstrap import async_start_bootstrap_healer
             async_start_bootstrap_healer(hass)
 

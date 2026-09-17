@@ -175,8 +175,9 @@
                     let st, tip;
                     if (!mqtt.length) {
                         st = ['err', '无条目'];
-                        tip = 'HA 内没有 MQTT 集成条目——慧尖引导（v1.7.29 起每 5 分钟自动重试，'
-                            + '并在「设置→系统→问题」挂修复条目）尚未落地。可等自愈，'
+                        tip = 'HA 内没有 MQTT 集成条目——慧尖引导自动重试尚未落地'
+                            + '（间隔 5 分钟起指数递增、封顶 1 小时，并在「设置→系统→问题」'
+                            + '挂修复条目）。可等自愈，'
                             + '或手动添加 MQTT：127.0.0.1:2022 / ha_mqtt。';
                     } else if (mqtt.some(e => e.state === 'loaded')) {
                         st = ['ok', '就绪'];
@@ -185,7 +186,8 @@
                         st = ['warn', '未就绪'];
                         tip = 'MQTT 条目存在但未加载完成（state=' + (mqtt[0].state || '?')
                             + '）——多为 broker 未起/凭据被拒/Supervisor 托管回写；'
-                            + '慧尖每 5 分钟自愈重试，也可在「设置→系统→问题」提交修复。';
+                            + '慧尖自愈重试（间隔 5 分钟起指数递增、封顶 1 小时），'
+                            + '也可在「设置→系统→问题」提交修复。';
                     }
                     setStatusDot('haMqttChannelStatus', st[0], st[1]);
                     const chanEl = document.getElementById('haMqttChannelStatus');

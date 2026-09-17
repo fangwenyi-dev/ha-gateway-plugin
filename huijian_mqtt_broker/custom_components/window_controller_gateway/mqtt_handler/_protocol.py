@@ -149,18 +149,20 @@ class _ProtocolMixin:
                                     break
                             
                             if not already_configured:
-                                # v1.7.26 用户裁定 A / v1.7.27 格式定稿：
-                                # 未配置网关首报 001 代答（与心跳监听器同门
-                                # should_ear_ack_001）——多网关场景下第二台
-                                # 的首报由此分支兜住；代答含 uuid（与正式
-                                # handler 同值，固件只见一个指纹）。
+                                # v1.7.26 用户裁定 A / v1.7.27 格式定稿 /
+                                # v1.7.30 仲裁收口：未配置网关首报 001 代答
+                                # （与心跳监听器同门 should_ear_ack_001）——
+                                # 多网关场景下第二台的首报由此分支兜住；本回调
+                                # 是同步函数（与下方发现触发同款
+                                # _schedule_async_task 派发），不可 await。
+                                # v1.7.30 ②：台架实锤每个已配置条目分支都是
+                                # 应答者（1 请求 2~3 答）——统一走仲裁入口，
+                                # 同一 (sn,id) 只有第一耳真正发布。
                                 from ..utils import (should_ear_ack_001,
-                                                     async_ack_gateway_001)
+                                                     async_ear_ack_001_arbitrated)
                                 if should_ear_ack_001(ctype, data):
-                                    # 本回调是同步函数（与下方发现触发同款
-                                    # _schedule_async_task 派发），不可 await
                                     self._schedule_async_task(
-                                        async_ack_gateway_001(
+                                        async_ear_ack_001_arbitrated(
                                             self.hass, response_sn,
                                             payload.get("id", 0)))
                                 # v1.6.26（第八轮审计 A-1）：v1.6.25 拆包回归——

@@ -460,7 +460,20 @@ async def ensure_mqtt_connection(hass: HomeAssistant) -> Optional[bool]:
 # ==================== v1.7.29 A+B：持久自愈 + 可见修复入口 ====================
 
 BOOTSTRAP_RETRY_INTERVAL = 300.0
+# v1.7.30 ④：指数退避上限。台架实锤（双臂对照）v1.7.29 的 healer 每 300s
+# 恒频重跑 ensure——该形态只到"警告+保留标记"，但同一节拍在"条目与标记不
+# 匹配 / source=hassio"形态会驱动删建 Supervisor 托管 MQTT 条目并发接管
+# 通知。恒频把这一破坏面的重试节奏写死在 5 分钟；改为 300s×2^(n-1) 指数
+# 退避、封顶 1h——引导未落地仍永久低频巡查（自愈目的不弃），但不再对
+# 用户条目高频施加 takeover 压力，首次触顶一次性 WARNING 收口症状。
+BOOTSTRAP_RETRY_MAX_INTERVAL = 3600.0
 TAKEOVER_ISSUE_ID = "mqtt_bootstrap_pending"
+
+
+def _retry_delay(rounds: int) -> float:
+    """第 rounds 轮（1 起）失败后到下一轮的间隔：指数退避、封顶。"""
+    return min(BOOTSTRAP_RETRY_INTERVAL * (2 ** (rounds - 1)),
+               BOOTSTRAP_RETRY_MAX_INTERVAL)
 
 
 def _report_takeover_issue(hass: HomeAssistant) -> None:
@@ -497,10 +510,12 @@ def async_start_bootstrap_healer(hass: HomeAssistant) -> None:
     下次 reload/HA 重启——现场"MQTT not ready"长期滞留的根因。
 
     新行为：条目 setup 时拉起本任务（每 hass 单实例、幂等，多条目并发调用
-    安全）：只要引导标记还在（自动配置未落地），每 300s 重试一轮 ensure；
-    标记删除（落地）即清修复条目退出；慧尖条目全卸/hass 停机也退出，不
-    悬挂。ensure 内部模块级锁保证并发创建只发生一次；ConfigEntryNotReady
-    （内置 broker 未起）按"稍后再试"语义吞掉，交给下一轮。
+    安全）：只要引导标记还在（自动配置未落地）就重试 ensure——v1.7.29 恒频
+    300s，v1.7.30 ④ 改指数退避（300s 起、×2、封顶 1h，首次触顶一条
+    WARNING），未落地不放弃、破坏面不再高频施压；标记删除（落地）即清修复
+    条目退出；慧尖条目全卸/hass 停机也退出，不悬挂。ensure 内部模块级锁保证
+    并发创建只发生一次；ConfigEntryNotReady（内置 broker 未起）按"稍后再试"
+    语义吞掉，交给下一轮。
     """
     runtime = hass.data.setdefault(DOMAIN, {})
     existing = runtime.get("_bootstrap_healer")
@@ -508,6 +523,9 @@ def async_start_bootstrap_healer(hass: HomeAssistant) -> None:
         return
 
     async def _healer():
+        rounds = 0          # 连续未落地轮数（v1.7.30 ④ 退避基准；任务级局部，
+                            # healer 重拉起即复位——重启/重 setup 算新周期）
+        capped_warned = False
         try:
             while True:
                 if getattr(hass, "is_stopping", False) or \
@@ -516,6 +534,17 @@ def async_start_bootstrap_healer(hass: HomeAssistant) -> None:
                 if not await has_bootstrap_marker(hass):
                     _clear_takeover_issue(hass)
                     return  # 引导已落地（标记被删）
+                rounds += 1
+                delay = _retry_delay(rounds)
+                if delay >= BOOTSTRAP_RETRY_MAX_INTERVAL and not capped_warned:
+                    capped_warned = True
+                    _LOGGER.warning(
+                        "MQTT 引导自愈连续 %d 轮未落地，重试间隔已指数退避封顶 %ds——"
+                        "此后低频巡查不再逐轮刷日志；若内置 Broker 明明可达却始终不"
+                        "落地，请到 设置→系统→修复入口（mqtt_bootstrap_pending）或"
+                        "查慧尖加载项日志定根因，勿静默等待",
+                        rounds, int(BOOTSTRAP_RETRY_MAX_INTERVAL),
+                    )
                 try:
                     await ensure_mqtt_connection(hass)
                 except ConfigEntryNotReady:
@@ -523,13 +552,13 @@ def async_start_bootstrap_healer(hass: HomeAssistant) -> None:
                 except Exception as err:  # noqa: BLE001
                     _LOGGER.warning(
                         "MQTT 引导自愈轮次异常（%ds 后继续）: %s",
-                        int(BOOTSTRAP_RETRY_INTERVAL), err)
+                        int(delay), err)
                 if not await has_bootstrap_marker(hass):
                     _LOGGER.info("MQTT 引导自愈落地（标记已删除）")
                     _clear_takeover_issue(hass)
                     return
                 _report_takeover_issue(hass)
-                await asyncio.sleep(BOOTSTRAP_RETRY_INTERVAL)
+                await asyncio.sleep(delay)
         finally:
             if hass.data.get(DOMAIN) is not None:
                 hass.data[DOMAIN]["_bootstrap_healer"] = None

@@ -62,7 +62,7 @@
   "issues": {
     "mqtt_bootstrap_pending": {
       "title": "慧尖 MQTT 自动配置未完成",
-      "description": "慧尖加载项已声明要用内置 Broker（127.0.0.1:2022）自动配置 HA 的 MQTT 集成，但尚未成功——LoRa 网关的上报到不了 HA。系统每 5 分钟自动重试；也可点此提交修复立即重试一轮。若反复失败：确认慧尖加载项处于运行状态，并查看 HA 日志中的 mqtt_bootstrap 行定位原因（常见：MQTT 条目被禁用、原 broker 仍被 Supervisor 托管、凭据被拒）。"
+      "description": "慧尖加载项已声明要用内置 Broker（127.0.0.1:2022）自动配置 HA 的 MQTT 集成，但尚未成功——LoRa 网关的上报到不了 HA。系统自动重试（间隔 5 分钟起指数递增、封顶 1 小时）；也可点此提交修复立即重试一轮。若反复失败：确认慧尖加载项处于运行状态，并查看 HA 日志中的 mqtt_bootstrap 行定位原因（常见：MQTT 条目被禁用、原 broker 仍被 Supervisor 托管、凭据被拒）。"
     }
   },
   "options": {
