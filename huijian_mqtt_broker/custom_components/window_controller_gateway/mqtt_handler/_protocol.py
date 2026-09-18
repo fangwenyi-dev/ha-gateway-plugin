@@ -142,13 +142,26 @@ class _ProtocolMixin:
                             return
                         try:
                             # 快速检查：如果该网关已在配置条目中，跳过发现触发
-                            already_configured = False
-                            for entry in self.hass.config_entries.async_entries(DOMAIN):
-                                if entry.data.get(CONF_GATEWAY_SN, "").lower() == response_sn.lower():
-                                    already_configured = True
-                                    break
+                            # v1.7.31（A-3）：与心跳耳共用 entry_state_for_sn
+                            # 三态门（BUG-5 统一口径）——旧默认调用把**禁用
+                            # 条目**也算已配置：被禁用的另一台网关 001 在本
+                            # 耳同样零止血、零留痕。disabled 态照答止血、
+                            # 跳过发现卡、节流留痕。
+                            from ..utils import (entry_state_for_sn,
+                                                 log_throttled)
+                            _st = entry_state_for_sn(self.hass, response_sn)
+                            if _st == "configured":
+                                return
+                            if _st == "disabled":
+                                log_throttled(
+                                    self.hass, "_hb_disabled_logged",
+                                    response_sn.lower(), 600.0, _LOGGER.warning,
+                                    "网关 %s 的条目处于禁用状态但仍上报——本耳继续"
+                                    "代答 001 止血但不弹发现卡；恢复使用请到 "
+                                    "设置→设备与服务 启用。每 SN 10 分钟去重",
+                                    response_sn)
                             
-                            if not already_configured:
+                            if _st != "configured":
                                 # v1.7.26 用户裁定 A / v1.7.27 格式定稿 /
                                 # v1.7.30 仲裁收口：未配置网关首报 001 代答
                                 # （与心跳监听器同门 should_ear_ack_001）——
@@ -165,6 +178,10 @@ class _ProtocolMixin:
                                         async_ear_ack_001_arbitrated(
                                             self.hass, response_sn,
                                             payload.get("id", 0)))
+                                if _st == "disabled":
+                                    # A-3：禁用网关止血代答已派发——发现卡
+                                    # 对"用户主动禁用"是打扰，到此为止。
+                                    return
                                 # v1.6.26（第八轮审计 A-1）：v1.6.25 拆包回归——
                                 # 旧单文件里 `from .discovery` 解析到集成根的
                                 # discovery.py；下沉进 mqtt_handler/ 包后同一

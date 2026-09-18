@@ -75,6 +75,12 @@ class _LifecycleMixin:
         # （回复晚于本地删除时误判为绑定、设备复活），id 匹配可完全消除。
         # {command_id: "bind" / "unbind"}，收到回复即清理，不会累积。
         self._bind_ops = {}
+        # v1.7.31（A-6）：_schedule_async_task 派发任务的统一句柄登记。
+        # 旧实现丢弃 create_task 返回值——cleanup 后在途消息处理协程继续
+        # 对已清空的 device_manager（devices.clear）做 add/ update，违反
+        # device_manager P1 定案"cleanup 后不得访问已清理状态"。done 即
+        # 自摘除，集合规模=在途任务数有界。
+        self._dispatch_tasks: set = set()
 
     def _record_bind_op(self, command_id: int, direction: str, device_sn: Optional[str] = None) -> None:
         """记录 003 绑定/解绑命令方向（按命令 id 匹配回复）
@@ -138,7 +144,8 @@ class _LifecycleMixin:
                 in_event_loop = False
 
             if in_event_loop:
-                self.hass.async_create_task(coro)
+                # v1.7.31（A-6）：返回值不再丢弃——cleanup 需可收口
+                self._register_dispatch(self.hass.async_create_task(coro))
             else:
                 future = asyncio.run_coroutine_threadsafe(coro, loop)
 
@@ -150,9 +157,18 @@ class _LifecycleMixin:
                         _LOGGER.error("异步任务执行失败: %s", e, exc_info=True)
 
                 future.add_done_callback(_log_exception)
+                self._register_dispatch(future)
         except RuntimeError as e:
             _LOGGER.error("调度异步任务失败: %s", e)
             coro.close()
+
+    def _register_dispatch(self, fut) -> None:
+        """登记派发句柄并挂自摘除回调（v1.7.31 A-6）。"""
+        tasks = getattr(self, "_dispatch_tasks", None)
+        if tasks is None:  # 测试代用对象未走 __init__ 时降级为不登记
+            return
+        tasks.add(fut)
+        fut.add_done_callback(tasks.discard)
 
     async def setup(self):
         """设置MQTT处理器"""
@@ -336,7 +352,18 @@ class _LifecycleMixin:
         # await 都是让出点，重连任务可能在任意让出点恢复并重建后台任务；
         # 置位后 _schedule_reconnect/重连循环/检查任务重建全部拒绝。
         self._closing = True
-        # 取消配对超时句柄
+        # v1.7.31（A-6）：先收口在途派发任务——消息处理协程（002 批处理/
+        # 003 绑定/代答派发）不得活到 cleanup 之后去写已清空的 device_manager
+        # /注册表（同族 P1 定案；_closing 门旧版只罩住重连路径）。
+        # 当前任务自身若在被派发集中（罕见自引用）跳过自我等待防死锁。
+        _cur = asyncio.current_task()
+        _pending = [f for f in list(getattr(self, "_dispatch_tasks", ()))
+                    if f is not _cur]
+        for _f in _pending:
+            _f.cancel()
+        if _pending:
+            await asyncio.gather(*_pending, return_exceptions=True)
+        # 配对超时句柄
         if self.pairing_timeout_handle:
             try:
                 self.pairing_timeout_handle.cancel()

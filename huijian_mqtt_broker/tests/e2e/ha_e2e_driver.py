@@ -362,6 +362,24 @@ if not ok:
     die(f"WS {WS_PORT} 未监听——默认开语义被破坏")
 step("I", "WS 端口监听 ✓")
 
+# v1.7.31（B-2 真栈门禁）：带合法子协议令牌但**非 WS 升级**的 GET 必须收到
+# 显式 4xx 状态行。回归到"return 未 prepared 的 ws"形态时，aiohttp
+# finish_response 二次 prepare 抛 HTTPBadRequest 逃逸成 Unhandled ERROR、
+# 连接无状态行即被掐（0918 台架栈实锤）——这里以裸 socket 读原始响应验证。
+req = (b"GET /ws HTTP/1.1\r\nHost: 127.0.0.1:%d\r\n"
+       b"Sec-WebSocket-Protocol: hIZ56jhQ-wzA3ENiP2xGzo55PXsewUWM\r\n"
+       b"Connection: keep-alive\r\n\r\n") % WS_PORT
+try:
+    with socket.create_connection(("127.0.0.1", WS_PORT), timeout=5) as sk:
+        sk.sendall(req)
+        resp = sk.recv(256)
+    head = resp.split(b"\r\n", 1)[0].decode(errors="replace")
+    if not head.startswith("HTTP/1.1 4"):
+        die(f"B-2 回归：GET(带令牌,非升级) 响应 {head!r}——应为 4xx 显式回复")
+    step("I", f"非升级 GET 显式 {head.split()[1]} 回复 ✓（B-2 守护）")
+except OSError as e:
+    die(f"B-2 探测连接失败：{e}")
+
 # ---------- J. soak ----------
 step("J", "500 条 002 上报吞吐与稳定性 soak")
 t0 = time.time()

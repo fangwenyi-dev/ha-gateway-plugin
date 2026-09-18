@@ -125,8 +125,11 @@
             } catch (e) {
                 setStatusDot('mqttStatus', 'err', '无法连接');
             }
-            // 2. 网关集成检测 — 插件本地事实（run.sh 安装集成后写入 integration.json），
-            //    不经 /api/ha/ 代理调 HA Core API（Core 会拒绝插件 token，报 401）
+            // 2. 网关集成检测 — 插件本地事实（run.sh 安装集成后写入 integration.json）。
+            //    v1.7.31（D-3 注释订正）：旧注释"Core 会拒绝插件 token 报 401 故不
+            //    经 /api/ha/"是 v1.6.3 时代陈旧叙事——本函数第 4 项与 haApi() 都在
+            //    经 /api/ha/ 代理调 Core（nginx 注入 token）。用本地事实的真实理由：
+            //    不依赖 HA 运行（HA 未起/重启窗口也能装、查集成落盘状态）。
             try {
                 const resp = await fetchT(INGRESS_BASE + 'api/integration', { cache: 'no-store' }, 8000);
                 if (!resp.ok) {
@@ -165,7 +168,7 @@
             //    前三项都看不见这个断点：broker 在跑、集成已装、客户端计数与 HA 侧
             //    条目是否就绪无关（mqtt_not_ready 类现场事故的盲区）。
             try {
-                const resp = await fetchT(INGRESS_BASE + 'api/ha/config/config_entries/entry', { cache: 'no-store' }, 8000);
+                const resp = await fetchT(INGRESS_BASE + 'api/ha/config/config_entries/entry?domain=mqtt', { cache: 'no-store' }, 8000);
                 if (!resp.ok) {
                     setStatusDot('haMqttChannelStatus', 'err', 'HTTP ' + resp.status);
                 } else {
@@ -388,6 +391,11 @@
                     let html = '';
                     for (const dev of subDevices) html += renderDevice(dev, entryId, []);
                     deviceListEl.innerHTML = html;
+                    // v1.7.31（D-2）：降级重建后同样走单实体异步补拉——旧版
+                    // 瓷砖冻结在"状态: 加载中"最长 30s（同 catch 网关徽标却有
+                    // 降级处理，设备侧是漏网半边）。loadDeviceState 内部对
+                    // 缺失实体有兜底，空 states 安全。
+                    for (const dev of subDevices) loadDeviceState(dev, []);
                 }
             } catch (e) {
                 deviceListEl.innerHTML = '<p class="err-text">加载设备失败: ' + escapeHtml(e.message) + '</p>';
@@ -522,7 +530,7 @@
             let html = '<div class="device-item" id="dev-' + safeDevId + '">' +
                 '<div class="device-top">' +
                 '<div class="device-info"><div class="device-name dev-name">' +
-                '<span class="dev-dot ' + (isOnline ? 'dot-online' : 'dot-offline') + '" id="dev-dot-' + safeDevId + '"></span>' +
+                '<span class="dev-dot ' + (onlineEntity ? (isOnline ? 'dot-online' : 'dot-offline') : 'dot-unknown') + '" id="dev-dot-' + safeDevId + '"></span>' +
                 safeName + '</div>' +
                 '<div class="device-sn">SN: ' + safeSn + '</div>' +
                 '<div class="device-status" id="dev-state-' + safeDevId + '">状态: 加载中' + (batteryText ? ' | 电压: ' + batteryText : '') + '</div></div>' +
@@ -586,8 +594,18 @@
                 if (dot) {
                     if (onlineEntity) {
                         dot.className = 'dev-dot ' + (onlineEntity.state === 'on' ? 'dot-online' : 'dot-offline');
-                    } else if (coverEntity) {
-                        dot.className = 'dev-dot ' + (coverEntity.state === 'unavailable' ? 'dot-offline' : 'dot-online');
+                    } else {
+                        // v1.7.31（D-1）：旧 else-if 用 cover unavailable 判设备离线
+                        // ——cover 被 v1.7.20 定案钉死 available=True 且子设备本就没有
+                        // online 实体（全集成唯一 online 传感器挂在网关上），该判据恒
+                        // 假绿：设备断电失联仍亮绿点+陈旧状态，与 M-2 假绿灯纠偏同族。
+                        // 改走业务真值源：status 传感器上报驱动、超时效转 unknown
+                        // （sensor.py v1.6.12 陈旧判定）——无新鲜上报一律灰点未知。
+                        const statusEntity = findEntityState(dev, 'sensor', 'status', states);
+                        const fresh = !!statusEntity && !!statusEntity.state &&
+                            statusEntity.state !== 'unknown' &&
+                            statusEntity.state !== 'unavailable';
+                        dot.className = 'dev-dot ' + (fresh ? 'dot-online' : 'dot-unknown');
                     }
                 }
                 // 电池电压: sensor.*battery*
@@ -885,7 +903,11 @@
                 }
             } catch (e) { /* GitHub 限流/异常，Gitee 仍可独立工作 */ }
             try {
-                const giteeResp = await fetchT(INGRESS_BASE + 'api/gitee/repos/fangwenyi-dev/ha-gateway-plugin/releases?per_page=100', { cache: 'no-store' }, 20000);
+                // v1.7.31（现场批次）：Gitee API 默认按创建**升序**返回——release
+                // 数超过 per_page 后，第一页只有最旧 100 条（0918 实锤：首页最大
+                // v1.7.15，人工补齐的 v1.7.25~30 全在窗外），徽章 Gitee 面永远
+                // 看不到新版。direction=desc 让最新进第一页（实测首页即 v1.7.30）。
+                const giteeResp = await fetchT(INGRESS_BASE + 'api/gitee/repos/fangwenyi-dev/ha-gateway-plugin/releases?per_page=100&direction=desc', { cache: 'no-store' }, 20000);
                 if (giteeResp.ok) {
                     const d = await giteeResp.json();
                     if (Array.isArray(d)) all.push(...d);

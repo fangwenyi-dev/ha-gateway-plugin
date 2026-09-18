@@ -9,7 +9,8 @@ import uuid
 from typing import Dict, Any, Optional, Tuple
 from homeassistant.core import HomeAssistant
 
-from .const import DOMAIN, PROTOCOL_HEAD, TOPIC_GATEWAY_REQ_FORMAT
+from .const import (DOMAIN, PROTOCOL_HEAD, TOPIC_GATEWAY_REQ_FORMAT,
+                    CONF_GATEWAY_SN, GLOBAL_IGNORED_GATEWAYS)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -50,6 +51,59 @@ def should_ear_ack_001(ctype: Any, data: Any) -> bool:
     报文的回复，绝不再答；002/005 等其余上报在耳朵层不代答（绑定请求语义仅 001）。
     """
     return (ctype == "001" and isinstance(data, dict) and "errcode" not in data)
+
+
+def entry_state_for_sn(hass: HomeAssistant, gateway_sn: Any) -> str:
+    """「已配置」判定三态门（v1.7.31 A-3，现场+真源实锤）。
+
+    真源核验（HA 2026.1.3 源码 inspect）：``async_entries()`` 默认
+    ``include_disabled=True``——禁用条目照样返回。旧三处"已配置"门
+    （心跳监听器/_protocol 他网关分支/discovery）默认调用 ⇒ 用户**禁用**的
+    网关上电后 001 既不代答也不被发现、零留痕，固件每 5s 重发永不停血。
+    BUG-5（mqtt_bootstrap.py:204）已对 MQTT 条目定过同款语义："禁用条目不算
+    有效配置"——本函数把该口径收为单一真源（自过滤 disabled_by，不依赖
+    跨版本参数旗标，manifest 2024.12 下限安全）。
+
+    返回：
+    - "configured"：存在未禁用条目命中该 SN → 耳朵静默让位正式 handler
+    - "disabled" ：仅禁用条目命中 → 代答止血但**不弹发现卡**（尊重禁用决策），
+                    由调用方打节流 WARNING 留痕
+    - "none"     ：未配置 → 正常代答+发现链
+    """
+    disabled_hit = False
+    try:
+        entries = hass.config_entries.async_entries(DOMAIN)
+    except Exception:  # noqa: BLE001 — 判定面炸穿按 none（不阻断止血主语义）
+        return "none"
+    target = str(gateway_sn or "").lower()
+    for e in entries:
+        sn = (getattr(e, "data", None) or {}).get(CONF_GATEWAY_SN) or ""
+        if str(sn).lower() != target:
+            continue
+        if getattr(e, "disabled_by", None):
+            disabled_hit = True
+        else:
+            return "configured"
+    return "disabled" if disabled_hit else "none"
+
+
+def log_throttled(hass: HomeAssistant, bucket: str, key: str, ttl: float,
+                  log_fn, msg: str, *args, **kwargs) -> None:
+    """按 key 节流的日志闸（v1.7.31 A-3/A-4）。
+
+    TTL 窗内同 key 只放行一条——5s 上报风暴下"必响的留痕"不得刷屏（0917
+    取证铁律要求 WARNING+ 可见与不刷屏的平衡点，同 _ear_promotion_watched
+    去重窗哲学）。dict 过期即清，容量随活跃 key 数有界。
+    """
+    runtime = hass.data.setdefault(DOMAIN, {})
+    seen = runtime.setdefault(bucket, {})
+    now = time.monotonic()
+    for stale in [k for k, ts in seen.items() if now - ts > ttl]:
+        seen.pop(stale, None)
+    if key in seen:
+        return
+    seen[key] = now
+    log_fn(msg, *args, **kwargs)
 
 
 async def async_ack_gateway_001(hass: HomeAssistant, gateway_sn: str,
@@ -166,6 +220,14 @@ def _watch_ear_promotion(hass: HomeAssistant, gateway_sn: str) -> None:
                         return  # 发现卡片挂起待确认——正常形态，不误报
             except Exception:  # noqa: BLE001 — flow 查询失败按"无卡片"从严处理
                 pass
+            # v1.7.31（A-5 复写实锤后修）：用户已忽略＝第三种正常终态——
+            # ignore 会 abort flow（卡片不再可见），被忽略网关每个上电周期
+            # 照常发 001、照常获代答，30s 后必然打出"请检查发现卡"的误导
+            # 告警。与"卡片挂起"同权静默退场（GLOBAL_IGNORED_GATEWAYS 与
+            # discovery dict 同一 set 对象，persist 承载）。
+            ignored = runtime.get(GLOBAL_IGNORED_GATEWAYS) or set()
+            if key in {str(g).lower() for g in ignored}:
+                return  # 用户已忽略——正常终态，不打扰
             _LOGGER.warning(
                 "网关 %s 获耳朵代答 001 后 %ds 未转为配置条目、且无待确认发现卡片"
                 "——绑定停在发现/转正链（检查 设置→设备与服务 的发现卡与「HA MQTT "

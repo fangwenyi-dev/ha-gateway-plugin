@@ -64,6 +64,7 @@ from .const import (
     DEFAULT_WS_GATEWAY_TOKEN,
     DEVICE_TO_GATEWAY_MAPPING,
     DOMAIN,
+    CONF_GATEWAY_SN,
     GATEWAY_READY_DELAY,
     WS_GATEWAY_ONLINE_STALE_SECONDS,
     WS_GATEWAY_PATH,
@@ -516,8 +517,23 @@ class WsGatewayServer:
         data2 = self._find_entry(gw_sn)
         manager2 = data2["device_manager"] if data2 else None
         if manager2 is None:
-            # 条目已整体卸载/删除：设备随条目消失，结果等价于删除成功
-            _LOGGER.info("WS unbind: 条目 %s 已卸载，本地删除随条目完成", gw_sn)
+            # v1.7.31（B-1）：区分"真删除"与"reload 途中"两种 None——
+            # reload 让出窗口命中旧分支时，条目重建后新 manager 按**残留
+            # 映射**回填设备（remove_device 未执行→未登记手动删除名单），
+            # 幽灵复活+小程序已收假成功 ack，恰是 F1/A-MED2 注释自认的
+            # 现实分支却只回滚了一半语义。条目仍在列表=reload 进行中，
+            # 如实 ack False；条目已从列表消失=删除随条目收口，ack True。
+            still_configured = any(
+                str((getattr(e, "data", None) or {}).get(CONF_GATEWAY_SN) or "")
+                .lower() == gw_sn.lower()
+                for e in self.hass.config_entries.async_entries(DOMAIN))
+            if still_configured:
+                _LOGGER.warning("WS unbind: 条目 %s 正处 reload，本地删除未落——"
+                                "请稍后重试解绑（设备暂在列表中属如实状态）", gw_sn)
+                return {"type": "unbind_ack", "ok": False,
+                        "msg": "entry reloading, retry later"}
+            # 条目已整体删除：设备随条目消失，结果等价于删除成功
+            _LOGGER.info("WS unbind: 条目 %s 已删除，本地删除随条目完成", gw_sn)
             return {"type": "unbind_ack", "ok": True}
         try:
             await manager2.remove_device(dev_sn)
@@ -673,7 +689,13 @@ class WsGatewayServer:
         except Exception as e:  # noqa: BLE001
             _LOGGER.warning("WS 握手完成失败: %s", e)
             self._pending_handshakes -= 1
-            return ws
+            # v1.7.31（B-2，真栈栈实锤）：旧版 return ws——未 prepared 的
+            # WebSocketResponse 交给 aiohttp finish_response 会**无条件再
+            # prepare**（web_protocol.py:713）→ _handshake 再抛 HTTPBadRequest
+            # 以 "Unhandled exception" ERROR 逃逸、客户端收不到任何状态行
+            # （0918 台架 verbatim 复现）。显式 400 回复，第三种结局与 401/503
+            # 同规。
+            return web.Response(status=400, text="bad websocket request")
         except BaseException:
             self._pending_handshakes -= 1
             raise
@@ -695,7 +717,16 @@ class WsGatewayServer:
 
     async def _session(self, ws: web.WebSocketResponse) -> None:
         """读取循环：固件 recv_wait_timeout=300s 同款空闲超时（小程序
-        60s get_gateways 心跳足以保活）。"""
+        60s get_gateways 心跳足以保活）。
+
+        v1.7.31（B-3 台架实锤后口径订正）：超时复位只认**业务 TEXT 帧**——
+        aiohttp 在协议层吞掉 PING/PONG（web_ws.py autoping 内循环，receive()
+        永不返回 ping/pong 帧），纯 RFC6455-PING 保活的第三方客户端会在
+        300s 被踢（台架 0918 对照实测：ping 组 300s 整断开、text 组 340s+
+        存活）。固件 recv_wait_timeout 是 socket 任意帧复位，此处为已知的
+        语义偏差，接入非小程序客户端前须知；小程序侧 60s get_gateways 是
+        唯一被联审的保活通道。
+        """
         while not ws.closed:
             try:
                 msg = await asyncio.wait_for(
@@ -730,8 +761,10 @@ class WsGatewayServer:
                         )
                     except Exception:  # noqa: BLE001
                         return
-            # BINARY/PING/PONG：固件非文本帧消费丢弃（PING 由 aiohttp 自动 PONG），
-            # 循环自然继续
+            # BINARY/PING/PONG：固件非文本帧消费丢弃。注意（v1.7.31 B-3）：
+            # PING 的 PONG 由 aiohttp 协议层自动完成、**不经过本循环**，
+            # 不重置上方 300s 空闲计时——只有 TEXT 业务帧保活（详见
+            # _session docstring）。
 
 
 # ==================== 生命周期入口（__init__.py 调用） ====================
@@ -762,6 +795,20 @@ def ws_gateway_wanted(hass: HomeAssistant) -> Optional[Tuple[int, str]]:
             port = DEFAULT_WS_GATEWAY_PORT
         token = options.get(CONF_WS_GATEWAY_TOKEN, DEFAULT_WS_GATEWAY_TOKEN)
         if not isinstance(token, str):
+            token = DEFAULT_WS_GATEWAY_TOKEN
+        elif token and (not token_charset_ok(token)
+                        or len(token) >= WS_TOKEN_MAX_LEN):
+            # v1.7.31（B-4，与 port 侧 BUG-7 同威胁模型补全）：子协议头按
+            # ",\s" 拆分候选——含空白/逗号的令牌是不可满足握手（对任何客户端
+            # 恒 401 永久自锁，0918 机制实锤），且会写进 101 响应头成非法
+            # HTTP 值；≥63 为固件判式上限。表单层与 set_token 层均已拦，
+            # Storage 手改/迁移残留不走表单 ⇒ 运行时同样回退默认+告警。
+            # 空串=不认证是 D-1 合法形态，不在回退之列。
+            _LOGGER.warning(
+                "WS 网关令牌含 RFC6455 子协议不安全字符或超长（不可满足握手"
+                "=全部客户端永久 401），已回退默认令牌——若小程序侧存有"
+                "自定义令牌，请两侧重新同步或修正 storage",
+            )
             token = DEFAULT_WS_GATEWAY_TOKEN
         return port, token
     return None

@@ -432,6 +432,17 @@ class WindowControllerDeviceManager:
             force: 是否强制添加（跳过设备存在检查）
             is_manual_pairing: 是否手动配对添加（手动配对时跳过手动删除列表检查）
         """
+        # v1.7.31（C-2）：条目存活门**前置**到一切副作用之前。旧检查在
+        # 缓存/映射写入与 persist 落盘之后（只在注册表创建前拦）——cleanup
+        # 后的在途上报协程仍会为已删除条目重写 DEVICE_TO_GATEWAY_MAPPING
+        # 并落盘（幽灵复活燃料），注册表孤儿面也只剩 await 让出点竞态窗。
+        # 条目已不存在 ⇒ 本 manager 属退役实例，所有写入均无意义，整体拒绝。
+        if self.hass.config_entries.async_get_entry(self.entry.entry_id) is None:
+            _LOGGER.warning(
+                "add_device 拒绝：条目 %s 已不存在（退役 manager 收到迟到"
+                "上报，设备 %s 不再写入映射/注册表）",
+                self.entry.entry_id, device_sn)
+            return None
         # 检查设备是否是网关设备
         # 根据用户提供的信息：所有网关的SN前4位都是1001，所有窗控器的SN前3位都是500
         if device_sn.startswith("1001"):

@@ -3,6 +3,46 @@
 所有版本变更记录在此文件中。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.7.31] - 2026-09-18
+
+真机 1.7.30 测试 + 五路并行审计收口批：现场抓出 2 枚静态审计漏网缺陷（停机 ERROR、`via_device` 弃用面），审计判死项一次全修，全部经真栈 A/B 实证。
+
+### Fixed
+
+- **每次 HA 停机刷 ERROR（真机 0918 实锤，台架 A/B 双臂复现→归零）**：`EVENT_HOMEASSISTANT_STOP` 的一次性监听器在总线派发时已被消费摘除，停机回调又自调条目卸载、对已消失的监听器再次退订 → HA core 每次停机每条目打一条 "Unable to remove unknown job listener" ERROR。回调自卸载前先摘句柄；reload（非停机）路径的正常退订保留反钉。
+- **`via_device` 弃用参数迁移（2027.8 停摆面，现网 2026.9 每次启动一条 WARNING）**：v1.7.28 清注册表弃用面时只清了 `devices`/`entities` 直读，漏了 `async_get_or_create(via_device=(DOMAIN,sn))` **写参数**6 处。manifest 声明支持 HA 2024.12 起全区间，而台架真签名核验 2026.1.3 **尚无** `via_device_id` 形参——无条件改新参会在旧版 TypeError 打死设备注册。新增 `utils.via_device_kwargs` 双形态出口（inspect 签名探测+缓存：新 HA 传 `via_device_id=<父设备id>`，旧 HA 保留原形态）；AST 守卫禁一切 `via_device=` 调用实参、迁移点计数正钉。
+- **MQTT 引导修复条目从未真正出现过（真签名实锤）**：创建修复卡片误用不存在的参数名 `is_fix_flow`（真实形参 `is_fixable`），每次调用 TypeError 被吞成一行 DEBUG——v1.7.29 的「设置→系统→问题」修复入口与一键重试整面不可用，healer 告警文案还把用户指向不存在的入口。改正参数并让吞异常路径升 WARNING；conftest 新增按真 HA 2026.1.3 `inspect.signature` 逐字复制的 `issue_registry` 假件（禁止 **kwargs 吞参形态），守卫当场抓获同类签名漂移。
+- **禁用条目不再算「已配置」（BUG-5 统一口径，真源核验 `async_entries` 默认含 disabled）**：用户禁用的慧尖网关条目上电后，001 绑定请求既不被耳朵代答也不被发现、零日志——固件每 5s 重发永不停血。新增三态门 `utils.entry_state_for_sn`：禁用条目命中→继续代答止血、**不弹发现卡**（尊重禁用决策）、节流 WARNING 指路「启用条目」；bootstrap 自愈的退出判定同步修正（条目全禁用即退出，不再被骗成永续巡查）。
+- **心跳监听器兜底异常从 DEBUG 升 WARNING（按异常形态 10 分钟节流，带堆栈）**：代答/发现/注册表任一环节异常此前默认级别零可见，发现链静默断裂无迹可寻——与 v1.7.30「归因行必须 WARNING」取证纪律对齐。
+- **「已忽略」网关不再触发误导告警**：转正看守只豁免「条目转正」「发现卡挂起」两态，忽略会中止发现流——被忽略网关每个上电周期必得一条"请检查发现卡"WARNING。补第三态豁免（静默退场），复现测试转正。
+- **bootstrap 自愈长睡切片**：指数退避封顶 1 小时的单发 sleep 对停机信号无感（真源实证各停机阶段有全局超时保护，不会真挂 1 小时，但每停一次烧光一条阶段超时预算）；改 30s 片+片界复检出口，最大退出延迟 30s，退避节奏总量不变。
+- **WS 网关对非升级请求显式 400（真栈栈实锤）**：带合法子协议令牌但无 `Upgrade: websocket` 的请求（健康检查/端口探活常形）在握手失败分支返回未 prepared 的响应对象，aiohttp 完成层二次 prepare 抛 `HTTPBadRequest` 逃逸成 "Unhandled exception" ERROR、连接无状态行即断。改显式 `400 bad websocket request`；E2E driver 以裸 socket 断言响应状态行（真栈门禁）。
+- **WS 解绑区分「reload 途中」与「条目已删除」**：解绑命令下发后 1s 等待窗内条目可能正被 reload，旧实现把「解析不到设备管理器」一律当「已随条目删除」回 `ok:true`——reload 完成后新管理器按残留映射回填设备，幽灵复活+小程序收到假成功。现仅条目确已从列表消失才回真；reload 形态如实回 `ok:false, entry reloading`。
+- **WS 令牌运行时防线（与端口 BUG-7 同威胁模型补全）**：Storage 手改/跨版本残留可写入含空白/逗号或超长的令牌——子协议头按 `,`/空白拆分使该令牌成为不可满足握手（全部客户端永久 401 自锁，机制实锤），且会写进 101 响应头成非法值。表单层与 set_token 层原有校验之外，运行时同样回退默认+告警；空串=不认证是合法形态不受影响。
+- **退役 manager 的迟到上报整体拒绝**：`add_device` 条目存活门前置到一切副作用之前——旧检查在内存/映射写入与持久化落盘之后，cleanup 后的在途协程仍会为已删除条目重写设备映射并落盘（幽灵复活燃料）。
+- **MQTT 派发任务统一收口**：消息处理派发面（002 批处理/003 绑定/耳朵代答协程）句柄登记，`cleanup()` 逐个取消并 await——条目卸载后在途任务不得再触碰已清空的设备管理器/注册表。
+- **更新检查徽章的 Gitee 源排序盲区**：Gitee releases API 默认按创建**升序**返回，徽章只取第一页 100 条——release 总数增长后最新若干版全部落在窗外（0918 实测首页最大 v1.7.15），GitHub 被限流时徽章静默不亮或指向旧版。Gitee URL 显式 `direction=desc`（实测首页即见最新）。
+- **Web UI 设备卡在线圆点改业务真值源**：子设备本就没有 online 实体（全集成唯一在线传感器挂在网关上），旧降级判据「cover unavailable」因 cover 恒 available 永不触发——设备断电失联仍显绿点+陈旧状态。改读 `{gw}_{sn}_status` 状态传感器（上报驱动+超时效转 unknown）：无新鲜上报显**灰色未知**点（新增 `.dot-unknown` 样式），宁显未知不造假绿灯。
+- Web UI 杂项：`/states` 拉取失败的降级重建后立即逐设备异步补拉（旧版瓷砖冻结"加载中"最长 30s）；「HA MQTT 通道」查询加 `?domain=mqtt` 过滤；状态板第 2 项陈旧注释订正。
+
+### Added
+
+- E2E driver：WS 非升级 GET 的 4xx 真栈断言（CI 硬门禁内）。
+- `run_local.sh`（本地台架）configuration 补 `logger: default: info`——INFO 归因行现场可见（此前仅 WARNING+，排查耳朵/看守行为需改日志配置）。
+
+### Tests
+
+- 新增 `tests/test_v1731_field_fixes.py` 34 用例：F-A 行为双臂（STOP 臂 0 退订/reload 臂必 1 退订）、`via_device_kwargs` 新旧 HA 三形态+AST 守卫+6 点计数、issue_registry 真签名守卫、三态门全形态、healer 切片睡眠（停机打断/全长睡反钉）、节流助手、ignored 豁免复现、unbind reload/删除双甄别、令牌运行态闸、add_device 前置门、派发任务 cleanup 收口、C-3 常量单一真源、前端 5 钉（desc/domain 过滤/dot-unknown/降级回填/假判据反钉）。
+- `tests/test_v1726_ear_ack.py` 接线钉升级三态门形态（代答位置/仲裁入口/disabled 留痕与短路全断言）；`test_audit_round5` 死属性扫描豁免合法 dict 键形态；`test_audit_round8` 假件补 `async_get_entry`。
+- 全量 655 用例通过；台架真栈：ArmA(1.7.30) 复现停机 ERROR=1 → ArmB(1.7.31)=0，旧 HA 2026.1.3 兼容臂 driver A–J 全绿。
+
+### Known Limitations（明确非目标）
+
+- 「耳朵随 MQTT client 换代失聪」的静态审计推断经真栈实验**未复现**（reload 后耳朵仍在响应），本轮不改该面，留观察项。
+- WS 空闲超时以业务 TEXT 帧复位（纯 RFC6455-PING 保活不重置计时，300s 被踢——台架双侧实证）；与固件 socket 层任意帧复位存在已知语义偏差，小程序 60s 业务心跳是唯一联审保活通道，已在代码注释钉死口径。
+- 004 控制报文 `data` 中 `position/speed/strength` 原始键残留属协议洁净度问题，固件按 attribute/value 解释实测无害；清理涉及通用透传机制全调用面回归，本批不动。
+- OptionsFlow 构造传参的上游弃用（2025.9 口径）在现网 2026.8 尚未产生告警，登记为前瞻项。
+
 ## [1.7.30] - 2026-09-17
 
 001 首配 A/B 真栈收口批（真 HA + 真 broker 台架双臂实测，止血/重复应答/转正/自愈节奏四问定论）：三项实证缺陷一次关闭。

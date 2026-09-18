@@ -126,7 +126,12 @@ COMMAND_SET_STRENGTH: Final = "set_strength"        # 开窗力度（rwp_winact_
 
 # ==================== 实体相关 ====================
 ENTITY_GATEWAY_PREFIX: Final = "gateway_"
-ENTITY_PAIRING_BUTTON_SUFFIX: Final = "_pair"
+# v1.7.31（C-3）：值从死漂移的 "_pair" 订正为实态 "_pairing" 并接入真实
+# 构造点（gateway.py）成单一真源——旧值零消费者且与实现不符，未来按常量
+# 写清理必静默 miss（同族 _online 与实现逐字一致，证明本意即单一真源）。
+# ⚠️ 此值参与 unique_id 生成：改动=实体迁移事故，两侧现由测试锁死
+#    "输出逐字不变"（test_v1731_field_fixes）。
+ENTITY_PAIRING_BUTTON_SUFFIX: Final = "_pairing"
 ENTITY_ONLINE_SENSOR_SUFFIX: Final = "_online"
 
 # ==================== 时间相关（秒） ====================

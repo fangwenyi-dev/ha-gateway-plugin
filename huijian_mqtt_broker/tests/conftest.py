@@ -162,6 +162,37 @@ ha_helpers_config_validation.positive_int = lambda v: v
 ha_helpers_config_validation.boolean = lambda v: v
 
 
+# ---- helpers.issue_registry（v1.7.31 C-1 教训件）----
+# 参数名集合 = 真 HA 2026.1.3 `inspect.signature(async_create_issue)` 实测
+# 逐字复制（现场 TypeError 消息 "Did you mean 'is_fixable'?" + 官方 repairs
+# 文档双源核验）。**禁止**退化为 **kwargs 吞参假件——C-1 臆造 is_fix_flow
+# 骗过全测试的根因正是假 HA 树里根本没有本模块。
+ha_helpers_issue = _pkg("homeassistant.helpers.issue_registry")
+ha_helpers.issue_registry = ha_helpers_issue
+
+
+def _ir_create_issue(hass, domain, issue_id, *, breaks_in_ha_version=None,
+                     data=None, discovery_key=None, issue_domain=None,
+                     is_fixable, is_persistent=False, learn_more_url=None,
+                     severity=None, translation_key=None,
+                     translation_placeholders=None):
+    """真签名复制品；记录实参供守卫断言（is_fixable 为必填 keyword-only）。"""
+    ISSUES_CREATED.append({
+        "domain": domain, "issue_id": issue_id, "is_fixable": is_fixable,
+        "severity": severity, "translation_key": translation_key,
+    })
+
+
+ISSUES_CREATED = []
+ISSUES_DELETED = []
+ha_helpers_issue.async_create_issue = _ir_create_issue
+ha_helpers_issue.async_delete_issue = (
+    lambda hass, domain, issue_id: ISSUES_DELETED.append((domain, issue_id)))
+# 记录簿必须挂在假模块自身（测试经 ir.ISSUES_CREATED 访问同一 list 对象）
+ha_helpers_issue.ISSUES_CREATED = ISSUES_CREATED
+ha_helpers_issue.ISSUES_DELETED = ISSUES_DELETED
+
+
 # ---- components ----
 ha_components_http.HomeAssistantView = type("HomeAssistantView", (), {})
 ha_components_mqtt.async_connected = lambda hass: True

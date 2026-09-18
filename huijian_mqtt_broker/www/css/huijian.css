@@ -528,6 +528,9 @@ input[type="range"]:focus-visible { outline: 2px solid var(--primary-light); }
 .dev-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex-shrink: 0; position: relative; }
 .dot-online { background: var(--green); box-shadow: 0 0 8px rgba(52, 211, 153, .7); }
 .dot-offline { background: var(--red); box-shadow: 0 0 8px rgba(248, 113, 113, .6); }
+/* v1.7.31（D-1）：无新鲜上报＝未知灰点（子设备 online 实体不存在、cover
+   恒 available，旧版只能假绿；假绿灯与 M-2 纠偏同族，宁显未知不造假象） */
+.dot-unknown { background: #64748b; }
 
 /* ===== Badge ===== */
 .badge {

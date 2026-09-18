@@ -18,6 +18,8 @@ from .const import (
     MODEL,
     GATEWAY_READY_DELAY,
     GATEWAY_PAIRING_TIMEOUT,
+    ENTITY_ONLINE_SENSOR_SUFFIX,
+    ENTITY_PAIRING_BUTTON_SUFFIX,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -47,7 +49,8 @@ class GatewayOnlineSensor(BinarySensorEntity):
         self._entry_id = entry_id
         self._attr_name = "在线"
         # unique_id基于网关SN，确保同一网关只有一个在线状态传感器
-        self._attr_unique_id = f"{gateway_sn}_online"
+        # v1.7.31（C-3）：后缀走 const 单一真源（输出逐字不变，无实体迁移）
+        self._attr_unique_id = f"{gateway_sn}{ENTITY_ONLINE_SENSOR_SUFFIX}"
         self._attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
         self._attr_is_on = False
         # 添加图标
@@ -141,7 +144,8 @@ class GatewayPairingButton(ButtonEntity):
         self._entry_id = entry_id
         self._attr_name = "配对"
         # unique_id基于网关SN，确保同一网关只有一个配对按钮
-        self._attr_unique_id = f"{gateway_sn}_pairing"
+        # v1.7.31（C-3）：后缀走 const 单一真源（输出逐字不变，无实体迁移）
+        self._attr_unique_id = f"{gateway_sn}{ENTITY_PAIRING_BUTTON_SUFFIX}"
         # 添加图标
         self._attr_icon = "mdi:plus-circle"
         # 确保按钮始终可用，不随网关在线状态变灰

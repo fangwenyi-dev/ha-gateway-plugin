@@ -1,34 +1,32 @@
-"""v1.7.31 现场实锤修复批（1.7.30 真机测试抓出、五路静态审计漏网的两条）。
+"""v1.7.31 修复批守卫（0918 真机测试 + 五路审计全部实锤项）。
 
-F-A（__init__.py）：``async_listen_once`` 的 STOP 一次性监听器在事件派发时
-    已被总线消费摘除；``_make_shutdown_handler`` 随后自调 ``async_unload_entry``，
-    unload 步骤 1 对 ``_stop_unsub`` 再 unsub → HA core 打
-    "Unable to remove unknown job listener" ERROR——现场每次停机每条目必现
-    （0918 现场两条 ERROR = 1203/123f 两条目）。修复 = handler 自调 unload 前
-    先 pop 掉已被消费的句柄；reload（非 STOP）路径不受影响、仍须正常退订
-    （反钉防"顺手把 unsub 全删"）。
-
-F-B（device_manager.py ×6）：``async_get_or_create`` 的 ``via_device=(DOMAIN, sn)``
-    写参数面被 HA 2026.9 现场实锤弃用（每次启动一条
-    "use via_device_id instead … stop working in 2027.8.0"）——v1.7.28 迁移批
-    清了 devices/entities 直读面、守卫 pattern 不覆盖入参名，此为漏网面。
-    修复 = 经 utils.resolve_via_device_id 解析父设备注册表 id 传 via_device_id；
-    AST 守卫禁一切调用实参 ``via_device=``（docstring 提及不算），计数正钉
-    6 处迁移点在位。
+现场抓双修：F-A（STOP one-time 监听器双重移除，台架 A/B 实锤）、
+F-B（via_device 写参面弃用漏迁 → utils.via_device_kwargs 双形态出口，
+真签名核验旧 HA 2026.1.3 无 via_device_id 形参——探测分形非拍脑袋）。
+审计判死批：C-1（create_issue 真签名 is_fixable，臆造参 TypeError 实锤）、
+A-1（healer 切片睡眠）、A-3（三态门 entry_state_for_sn，BUG-5 统一口径）、
+A-4（心跳兜底 WARNING+节流）、A-5（ignored 看守豁免，复现转正）、
+A-6（派发任务 cleanup 收口）、B-1（unbind reload/删除甄别）、
+B-4（运行态令牌 charset 闸）、C-2（add_device 条目存活前置门）、
+C-3（_pairing 常量单一真源）、D-1/2/3/4（前端真值源/降级回填/注释/域过滤）、
+Gitee 徽章 direction=desc 排序窗口盲区。各条目的"判死证据"见 commit 正文。
 """
 import ast
 import asyncio
+import logging
 from pathlib import Path
 from types import SimpleNamespace
 
 import custom_components.window_controller_gateway as pkg
-from custom_components.window_controller_gateway.const import DOMAIN
+from custom_components.window_controller_gateway.const import (
+    DOMAIN, DEVICE_TO_GATEWAY_MAPPING)
 import custom_components.window_controller_gateway.device_manager as dm
 from custom_components.window_controller_gateway.utils import (
     resolve_via_device_id)
 
 _HERE = Path(__file__).resolve()
 _PKG_DIR = _HERE.parents[1] / "custom_components" / "window_controller_gateway"
+_WWW_DIR = _HERE.parents[1] / "www"
 
 
 # ==================== F-A：STOP 监听器双重移除 ====================
@@ -227,3 +225,383 @@ class TestNoDeprecatedViaDeviceCall:
         n = src.count("**via_device_kwargs(device_registry, ")
         assert n == 6, \
             f"via_device_kwargs 迁移点须恰为 6（实得 {n}）：注册×3/更新×1/迁移×2"
+
+
+# ==================== C-1：issue_registry 真签名调用 ====================
+
+class TestIssueRegistryTrueSignature:
+    def test_report_takeover_issue_passes_real_signature(self, caplog):
+        """conftest 复制品=2026.1.3 真签名逐字（is_fixable 必填 keyword-only）。
+        臆造 is_fix_flow 会在复制品上直接 TypeError——本测当场抓获。"""
+        import homeassistant.helpers.issue_registry as ir
+        import custom_components.window_controller_gateway.mqtt_bootstrap as mb
+        ir.ISSUES_CREATED.clear()
+        ir.ISSUES_DELETED.clear()
+        caplog.set_level(logging.DEBUG)
+        mb._report_takeover_issue(SimpleNamespace())
+        assert len(ir.ISSUES_CREATED) == 1, \
+            "C-1 回归：真签名调用必须真实出卡（旧 is_fix_flow 必 TypeError 被吞）"
+        made = ir.ISSUES_CREATED[0]
+        assert made["is_fixable"] is True
+        assert made["issue_id"] == "mqtt_bootstrap_pending"
+        assert made["domain"] == "window_controller_gateway"
+        assert not [r for r in caplog.records
+                    if "修复条目失败" in r.getMessage()], "不得再走 except 吞没路径"
+
+    def test_clear_takeover_issue_signature(self):
+        import homeassistant.helpers.issue_registry as ir
+        import custom_components.window_controller_gateway.mqtt_bootstrap as mb
+        ir.ISSUES_DELETED.clear()
+        mb._clear_takeover_issue(SimpleNamespace())
+        assert ("window_controller_gateway", "mqtt_bootstrap_pending") \
+            in ir.ISSUES_DELETED
+
+
+# ==================== A-3：三态门 ====================
+
+class TestEntryStateForSn:
+    @staticmethod
+    def _hass(entries):
+        return SimpleNamespace(config_entries=SimpleNamespace(
+            async_entries=lambda d: entries))
+
+    def _entry(self, sn, disabled=None):
+        return SimpleNamespace(data={"gateway_sn": sn}, disabled_by=disabled)
+
+    def test_three_states(self):
+        from custom_components.window_controller_gateway.utils import (
+            entry_state_for_sn as f)
+        assert f(self._hass([self._entry("ABC123456")]), "abc123456") \
+            == "configured"
+        assert f(self._hass([self._entry("ABC123456", "user")]), "abc123456") \
+            == "disabled", "禁用条目不得再算已配置（BUG-5 统一口径）"
+        assert f(self._hass([]), "nope123456") == "none"
+        # 混存：同 SN 有 loaded 条目即 configured（禁用条目不遮蔽启用者）
+        assert f(self._hass([self._entry("X123456789", "user"),
+                             self._entry("X123456789")]), "x123456789") \
+            == "configured"
+
+    def test_boom_falls_to_none(self):
+        from custom_components.window_controller_gateway.utils import (
+            entry_state_for_sn)
+        class _Bad:
+            def async_entries(self, d):
+                raise RuntimeError("炸")
+        assert entry_state_for_sn(SimpleNamespace(config_entries=_Bad()), "s") \
+            == "none", "判定面故障不得阻断止血代答"
+
+    def test_healer_exit_gate_uses_enabled_count(self):
+        src = (_PKG_DIR / "mqtt_bootstrap.py").read_text(encoding="utf-8")
+        assert "_enabled_huijian_entry_count(hass) == 0" in src, \
+            "A-3：healer 出口不得再被禁用条目骗成永续巡查"
+        assert "not hass.config_entries.async_entries(DOMAIN)" not in src, \
+            "旧默认调用（含 disabled）反钉"
+
+    def test_no_raw_async_entries_gates_remain(self):
+        """A-3 收口：耳朵/协议的 SN 归属判定一律经三态门。"""
+        for name in ("__init__.py", "mqtt_handler/_protocol.py"):
+            src = (_PKG_DIR / name).read_text(encoding="utf-8")
+            assert "entry_state_for_sn" in src, f"{name} 必须走三态门"
+
+
+# ==================== A-1：healer 切片睡眠 ====================
+
+class TestHealerInterruptibleSleep:
+    def test_stopping_mid_sleep_exits(self, monkeypatch):
+        import custom_components.window_controller_gateway.mqtt_bootstrap as mb
+        monkeypatch.setattr(mb, "HEALER_SLEEP_CHUNK", 0.05)
+        flags = {"stopping": False}
+        hass = SimpleNamespace(
+            is_stopping=False,
+            config_entries=SimpleNamespace(
+                async_entries=lambda d: [SimpleNamespace(entry_id="E1")]),
+        )
+
+        async def watch():
+            await asyncio.sleep(0.12)
+            flags["stopping"] = True
+            hass.is_stopping = True
+
+        async def main():
+            w = asyncio.ensure_future(watch())
+            # delay=100s：切片下应在 is_stopping 翻位后 ≤1 片内返回 False
+            r = await mb._interruptible_sleep(hass, 100.0)
+            await w
+            return r
+        assert asyncio.run(main()) is False, \
+            "A-1：切片复检必须让停机在 CHUNK 内打断长睡"
+
+    def test_full_sleep_returns_true(self, monkeypatch):
+        import custom_components.window_controller_gateway.mqtt_bootstrap as mb
+        monkeypatch.setattr(mb, "HEALER_SLEEP_CHUNK", 0.02)
+        hass = SimpleNamespace(
+            is_stopping=False,
+            config_entries=SimpleNamespace(
+                async_entries=lambda d: [SimpleNamespace(entry_id="E1")]),
+        )
+        assert asyncio.run(mb._interruptible_sleep(hass, 0.06)) is True
+
+    def test_healer_no_single_long_sleep(self):
+        src = (_PKG_DIR / "mqtt_bootstrap.py").read_text(encoding="utf-8")
+        healer_seg = src[src.index("async def _healer"):]
+        healer_seg = healer_seg.split("runtime[", 1)[0]
+        assert "await asyncio.sleep(delay)" not in healer_seg, \
+            "单发长睡回潮=停机预算重烧"
+        assert "_interruptible_sleep(hass, delay)" in healer_seg
+
+
+# ==================== A-4/A-5：留痕与豁免 ====================
+
+class TestLogThrottled:
+    def test_first_pass_dedup_expiry(self):
+        from custom_components.window_controller_gateway.utils import (
+            log_throttled)
+        import time as _t
+        hass = SimpleNamespace(data={})
+        got = []
+        fn = lambda m, *a, **k: got.append(m)  # noqa: E731
+        log_throttled(hass, "bkt", "k1", 600.0, fn, "第一条")
+        log_throttled(hass, "bkt", "k1", 600.0, fn, "被抑制")
+        log_throttled(hass, "bkt", "k2", 600.0, fn, "另一 key")
+        assert got == ["第一条", "另一 key"]
+        # 过期放行：手动把时间戳拨旧
+        hass.data[DOMAIN]["bkt"]["k1"] = _t.monotonic() - 700
+        log_throttled(hass, "bkt", "k1", 600.0, fn, "过期后重来")
+        assert got[-1] == "过期后重来"
+
+    def test_heartbeat_fallback_never_debug(self):
+        src = (_PKG_DIR / "__init__.py").read_text(encoding="utf-8")
+        assert '_LOGGER.debug("心跳监听器处理消息出错' not in src, \
+            "A-4 回归：兜底回落 DEBUG=发现链断裂零可见（0917 取证铁律）"
+        assert '_hb_err_logged' in src and "exc_info=True" in src
+
+    def test_promotion_watch_ignores_ignored_gateway(self):
+        """A-5 复现转正：ignored 态与"卡片挂起"同权静默退场。"""
+        import custom_components.window_controller_gateway.utils as u
+        from custom_components.window_controller_gateway.const import (
+            GLOBAL_IGNORED_GATEWAYS)
+        sn = "10012250123f"
+        ignored = {sn}
+        hass = SimpleNamespace(
+            data={DOMAIN: {GLOBAL_IGNORED_GATEWAYS: ignored,
+                           "discovery": {"ignored_gateways": ignored}}},
+            config_entries=SimpleNamespace(
+                async_entries=lambda d: [],
+                flow=SimpleNamespace(async_progress=lambda: [])),
+            async_create_task=lambda coro, name=None: asyncio.ensure_future(coro),
+        )
+        records = []
+
+        class _Cap(logging.Handler):
+            def emit(self, rec):
+                records.append(rec.getMessage())
+
+        lg = logging.getLogger(u.__name__)
+        lg.addHandler(_Cap())
+        old = u.EAR_PROMOTION_WATCH_SECONDS
+        u.EAR_PROMOTION_WATCH_SECONDS = 0.05
+        try:
+            async def main():
+                u._watch_ear_promotion(hass, sn)
+                await asyncio.sleep(0.4)
+            asyncio.run(main())
+        finally:
+            u.EAR_PROMOTION_WATCH_SECONDS = old
+            lg.removeHandler(lg.handlers[-1])
+        warns = [m for m in records if "未转为配置条目" in m]
+        assert not warns, \
+            f"A-5 回归：用户已忽略的网关不得打误导告警，实得 {warns}"
+
+
+# ==================== B-1：unbind reload/删除甄别 ====================
+
+class TestUnbindReloadDiscrimination:
+    @staticmethod
+    def _mk(monkeypatch, gw, dev, entries_after):
+        import custom_components.window_controller_gateway.ws_gateway as wsg
+        monkeypatch.setattr(wsg, "GATEWAY_READY_DELAY", 0.0)
+
+        class _CE:
+            def async_entries(self, d=None):
+                return entries_after()
+        hass = SimpleNamespace(data={DOMAIN: {}}, config_entries=_CE())
+        server = wsg.WsGatewayServer(hass, host="127.0.0.1", port=9998, token="t")
+
+        class _H:
+            connected = True
+            gateway_sn = gw
+            async def unbind_device(self, sn):
+                return None
+        class _DM:
+            devices = {dev: {}}
+        hass.data[DOMAIN] = {"e1": {
+            "gateway_sn": gw, "_setup_complete": True,
+            "mqtt_handler": _H(), "device_manager": _DM()}}
+        orig_find = server._find_entry
+        n = {"i": 0}
+        def find(s):
+            n["i"] += 1
+            return orig_find(s) if n["i"] == 1 else None  # sleep 后翻脸
+        server._find_entry = find
+        return server
+
+    def test_reload_window_returns_honest_false(self, monkeypatch):
+        gw, dev = "10012250123f", "50063420020A"
+        server = self._mk(monkeypatch, gw, dev, lambda: [
+            SimpleNamespace(entry_id="e1", data={"gateway_sn": gw})])
+        res = asyncio.run(server._cmd_unbind({"gwSn": gw, "devSn": dev}))
+        assert res["ok"] is False and "reload" in res.get("msg", ""), \
+            "reload 途中不得假成功 ack（B-1 幽灵设备链起点）"
+
+    def test_deleted_entry_still_true(self, monkeypatch):
+        gw, dev = "10012250123f", "50063420020A"
+        server = self._mk(monkeypatch, gw, dev, lambda: [])
+        res = asyncio.run(server._cmd_unbind({"gwSn": gw, "devSn": dev}))
+        assert res["ok"] is True, "条目真删除=删除随条目收口，保持原语义"
+
+
+# ==================== B-4：运行态令牌 charset 闸 ====================
+
+class TestRuntimeTokenGate:
+    @staticmethod
+    def _hass(options):
+        return SimpleNamespace(config_entries=SimpleNamespace(
+            async_entries=lambda d: [SimpleNamespace(entry_id="e1",
+                                                     options=options)]))
+
+    def test_dirty_token_falls_back(self):
+        from custom_components.window_controller_gateway.ws_gateway import (
+            ws_gateway_wanted)
+        from custom_components.window_controller_gateway.const import (
+            CONF_WS_GATEWAY_ENABLED, CONF_WS_GATEWAY_TOKEN,
+            DEFAULT_WS_GATEWAY_TOKEN)
+        w = ws_gateway_wanted(self._hass({
+            CONF_WS_GATEWAY_ENABLED: True,
+            CONF_WS_GATEWAY_TOKEN: "has space"}))
+        assert w[1] == DEFAULT_WS_GATEWAY_TOKEN, \
+            "含空白令牌=不可满足握手永久 401，运行时必须回退"
+        w = ws_gateway_wanted(self._hass({
+            CONF_WS_GATEWAY_ENABLED: True,
+            CONF_WS_GATEWAY_TOKEN: "a" * 80}))
+        assert w[1] == DEFAULT_WS_GATEWAY_TOKEN, "超长令牌（固件判式上限）同样回退"
+
+    def test_empty_token_legal_stays(self):
+        from custom_components.window_controller_gateway.ws_gateway import (
+            ws_gateway_wanted)
+        from custom_components.window_controller_gateway.const import (
+            CONF_WS_GATEWAY_ENABLED, CONF_WS_GATEWAY_TOKEN)
+        w = ws_gateway_wanted(self._hass({
+            CONF_WS_GATEWAY_ENABLED: True, CONF_WS_GATEWAY_TOKEN: ""}))
+        assert w[1] == "", "空串=不认证是 D-1 合法形态，不得回退"
+
+
+# ==================== C-2：add_device 条目存活前置门 ====================
+
+class TestAddDeviceEntryGate:
+    def test_retired_manager_rejected(self):
+        from custom_components.window_controller_gateway.device_manager import (
+            WindowControllerDeviceManager)
+        hass = SimpleNamespace(
+            data={DOMAIN: {}},
+            config=SimpleNamespace(config_dir="."),
+            config_entries=SimpleNamespace(
+                async_get_entry=lambda eid: None,
+                async_entries=lambda d: []),
+        )
+        entry = SimpleNamespace(entry_id="e-dead",
+                                data={c_key(): "100129999900"})
+        dm = WindowControllerDeviceManager(hass, entry)
+        assert asyncio.run(dm.add_device("50022E010603", "迟到设备")) is None
+        assert dm.devices == {}, "条目已消失仍写缓存=幽灵燃料"
+        assert "50022E010603" not in hass.data[DOMAIN].get(
+            DEVICE_TO_GATEWAY_MAPPING, {}), "映射更不得写（persist 复活源）"
+
+
+def c_key():
+    from custom_components.window_controller_gateway.const import (
+        CONF_GATEWAY_SN)
+    return CONF_GATEWAY_SN
+
+
+# ==================== A-6：cleanup 收口派发任务 ====================
+
+class TestDispatchTaskCleanup:
+    def test_cleanup_cancels_inflight(self):
+        from custom_components.window_controller_gateway.mqtt_handler \
+            import _lifecycle as lc
+
+        async def main():
+            loop = asyncio.get_running_loop()
+            self = SimpleNamespace(
+                hass=SimpleNamespace(
+                    loop=loop,
+                    async_create_task=lambda c, **k: asyncio.ensure_future(c)),
+                gateway_sn="GW", _closing=False, _dispatch_tasks=set(),
+                pairing_timeout_handle=None, _bind_ops={}, _check_task=None,
+                _reconnect_task=None, _unsub_rsp=None, _status_callbacks={},
+            )
+            import types as _t
+            self._register_dispatch = _t.MethodType(
+                lc._LifecycleMixin._register_dispatch, self)
+            self._schedule_async_task = _t.MethodType(
+                lc._LifecycleMixin._schedule_async_task, self)
+            self.cleanup = _t.MethodType(lc._LifecycleMixin.cleanup, self)
+            inflight = []
+
+            async def slow():
+                await asyncio.sleep(30)
+
+            for _ in range(2):
+                before = len(self._dispatch_tasks)
+                self._schedule_async_task(slow())
+                assert len(self._dispatch_tasks) == before + 1, \
+                    "派发句柄必须登记（A-6 核心）"
+                inflight.append(list(self._dispatch_tasks)[-1])
+            await asyncio.sleep(0)  # 起跑
+            await self.cleanup()
+            assert all(t.cancelled() for t in inflight), \
+                "cleanup 后在途派发任务不得存活到访问已清空状态"
+            assert self._dispatch_tasks == set()
+        asyncio.run(main())
+
+
+# ==================== C-3 + D 前端钉 ====================
+
+class TestConstAndWebuiPins:
+    def test_pairing_suffix_single_source(self):
+        import custom_components.window_controller_gateway.const as c
+        assert c.ENTITY_PAIRING_BUTTON_SUFFIX == "_pairing", \
+            "C-3：值订正为实态 _pairing（输出逐字不变，无实体迁移）"
+        gsrc = (_PKG_DIR / "gateway.py").read_text(encoding="utf-8")
+        assert "ENTITY_PAIRING_BUTTON_SUFFIX}" in gsrc, "构造点必须引常量"
+        assert 'f"{gateway_sn}_pairing"' not in gsrc
+        assert 'f"{gateway_sn}_online"' not in gsrc, "同族 online 一并收口"
+
+    def test_gitee_desc_fix(self):
+        js = (_WWW_DIR / "js" / "huijian.js").read_text(
+            encoding="utf-8")
+        assert "releases?per_page=100&direction=desc" in js, \
+            "Gitee API 升序盲区回归钉：徽章必须显式 desc 取最新页"
+
+    def test_mqtt_channel_domain_filter(self):
+        js = (_WWW_DIR / "js" / "huijian.js").read_text(
+            encoding="utf-8")
+        assert "config/config_entries/entry?domain=mqtt" in js
+
+    def test_dev_dot_unknown_states(self):
+        js = (_WWW_DIR / "js" / "huijian.js").read_text(
+            encoding="utf-8")
+        css = (_WWW_DIR / "css" / "huijian.css").read_text(
+            encoding="utf-8")
+        assert ".dot-unknown" in css, "D-1：未知灰点样式在位"
+        assert js.count("dot-unknown") >= 2, "初态+刷新态两处未知点"
+        assert "findEntityState(dev, 'sensor', 'status', states)" in js, \
+            "D-1：圆点真值源=status 传感器（上报驱动+时效）"
+        assert "coverEntity.state === 'unavailable'" not in js, \
+            "D-1 反钉：cover 钉死 available，unavailable 假判据不得回潮"
+
+    def test_degraded_rebuild_loads_state(self):
+        js = (_WWW_DIR / "js" / "huijian.js").read_text(
+            encoding="utf-8")
+        assert "loadDeviceState(dev, []);" in js, \
+            "D-2：/states 失败降级分支必须补异步单实体回填"

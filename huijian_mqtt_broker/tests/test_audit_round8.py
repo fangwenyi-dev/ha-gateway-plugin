@@ -46,6 +46,11 @@ class _Entries:
     def async_entries(self, domain=None):
         return self._entries
 
+    def async_get_entry(self, entry_id):
+        # v1.7.31 C-2 前置门兼容：测试代用条目恒"存活"（拒绝路径由
+        # test_v1731_field_fixes 专项覆盖）
+        return SimpleNamespace(entry_id=entry_id)
+
 
 class _Hass:
     """带 config_entries 与运行中 loop 的假 hass（A-1 分支必需面）。"""
@@ -373,6 +378,10 @@ class _DMHass:
         self.data = {}
         self.config = SimpleNamespace(config_dir=".")
         self.coros = []
+        # v1.7.31（C-2 前置门）：add_device 首行查条目存活——测试代用条目
+        # 恒存活（拒绝路径由 test_v1731_field_fixes 专项双臂覆盖）
+        self.config_entries = SimpleNamespace(
+            async_get_entry=lambda eid: SimpleNamespace(entry_id=eid))
 
     def async_create_task(self, coro, **kwargs):
         # 持久化写盘协程在测试里直接丢弃（无 IO），任务面语义不在此钉

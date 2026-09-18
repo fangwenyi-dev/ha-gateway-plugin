@@ -476,6 +476,28 @@ def _retry_delay(rounds: int) -> float:
                BOOTSTRAP_RETRY_MAX_INTERVAL)
 
 
+HEALER_SLEEP_CHUNK = 30.0
+
+
+async def _interruptible_sleep(hass: HomeAssistant, delay: float) -> bool:
+    """切片长睡（v1.7.31 A-1）：每片结束复检停机/条目出口。
+
+    返回 False=应即刻退出 healer。真源实证：HA async_stop 各阶段以
+    async_timeout 包裹 block_till_done——单发 3600s 睡不会挂死关机，但每停
+    一次必烧光一条全局超时预算（同阶段其他在途任务被连带提前取消 + 一条
+    超时 WARNING）。切片后最大退出延迟=CHUNK，退避节奏总量分毫不差。
+    """
+    remaining = delay
+    while remaining > 0:
+        step = min(HEALER_SLEEP_CHUNK, remaining)
+        await asyncio.sleep(step)
+        remaining -= step
+        if getattr(hass, "is_stopping", False) or \
+                _enabled_huijian_entry_count(hass) == 0:
+            return False
+    return True
+
+
 def _report_takeover_issue(hass: HomeAssistant) -> None:
     """B：把"引导未完成"升为 HA 修复条目（设置→系统→问题），带一键重试。
 
@@ -486,12 +508,21 @@ def _report_takeover_issue(hass: HomeAssistant) -> None:
         from homeassistant.helpers import issue_registry as ir
         ir.async_create_issue(
             hass, DOMAIN, TAKEOVER_ISSUE_ID,
-            is_fix_flow=True,
+            # v1.7.31（C-1 真签名实锤）：真实形参是 is_fixable——2026.1.3
+            # inspect 双臂验证 unexpected keyword 'is_fix_flow' + 官方
+            # repairs 文档同口径。旧臆造名使本函数**每次都 TypeError 被下面
+            # except 吞成 DEBUG**：修复条目自 v1.7.29 起从未出过卡，
+            # async_step_repair 整面不可达，healer 告警文案把用户指向
+            # 一个不存在的入口。签名复制品守卫见
+            # tests/conftest.py:issue_registry + test_v1731。
+            is_fixable=True,
             severity="warning",
             translation_key=TAKEOVER_ISSUE_ID,
         )
     except Exception as err:  # noqa: BLE001
-        _LOGGER.debug("创建 MQTT 引导修复条目失败（可忽略）: %s", err)
+        # v1.7.31（C-1）：吞异常降为 DEBUG 是"永不出卡"躲过全部测试的帮凶
+        # ——registry 可用性问题必须可见。
+        _LOGGER.warning("创建 MQTT 引导修复条目失败（丢可见性，不影响自愈）: %s", err)
 
 
 def _clear_takeover_issue(hass: HomeAssistant) -> None:
@@ -499,7 +530,22 @@ def _clear_takeover_issue(hass: HomeAssistant) -> None:
         from homeassistant.helpers import issue_registry as ir
         ir.async_delete_issue(hass, DOMAIN, TAKEOVER_ISSUE_ID)
     except Exception as err:  # noqa: BLE001
-        _LOGGER.debug("清除 MQTT 引导修复条目失败（可忽略）: %s", err)
+        # v1.7.31（C-1 同族）：清除失败=修复卡片滞留不消失，必须可见
+        _LOGGER.warning("清除 MQTT 引导修复条目失败（卡片可能滞留）: %s", err)
+
+
+def _enabled_huijian_entry_count(hass: HomeAssistant) -> int:
+    """未禁用的慧尖条目数（v1.7.31 A-3，BUG-5 统一口径）。
+
+    旧 healer"条目全卸即退出"用默认 async_entries()——禁用条目把它骗住：
+    用户禁用慧尖条目后 healer 永续巡查，与"不悬挂"设计意图相悖。
+    取数面炸穿按 1（宁多活一轮，不误杀自愈）。
+    """
+    try:
+        return sum(1 for e in hass.config_entries.async_entries(DOMAIN)
+                   if not getattr(e, "disabled_by", None))
+    except Exception:  # noqa: BLE001
+        return 1
 
 
 def async_start_bootstrap_healer(hass: HomeAssistant) -> None:
@@ -529,8 +575,9 @@ def async_start_bootstrap_healer(hass: HomeAssistant) -> None:
         try:
             while True:
                 if getattr(hass, "is_stopping", False) or \
-                        not hass.config_entries.async_entries(DOMAIN):
-                    return  # 宿主停机 / 最后条目已卸载
+                        _enabled_huijian_entry_count(hass) == 0:
+                    return  # 宿主停机 / 启用条目已清空（v1.7.31 A-3：
+                            # 禁用不再把 healer 骗成永续巡查——BUG-5 同口径）
                 if not await has_bootstrap_marker(hass):
                     _clear_takeover_issue(hass)
                     return  # 引导已落地（标记被删）
@@ -558,7 +605,14 @@ def async_start_bootstrap_healer(hass: HomeAssistant) -> None:
                     _clear_takeover_issue(hass)
                     return
                 _report_takeover_issue(hass)
-                await asyncio.sleep(delay)
+                # v1.7.31（A-1）：单发 sleep(封顶 3600s) 改切片——one-shot
+                # 长睡对停机信号无感，会把 async_stop 各阶段的 block_till_done
+                # 预算顶到超时（真源实证 async_stop 确有 async_timeout 保护，
+                # 不会真挂 1h，但每停一次烧一条阶段超时 WARNING、healer 最终
+                # 被强杀——违背本任务"停机也退出，不悬挂"的 docstring 自述）。
+                # 30s 片：停机最多迟 30s 自然退出，退避节奏总量不变。
+                if not await _interruptible_sleep(hass, delay):
+                    return
         finally:
             if hass.data.get(DOMAIN) is not None:
                 hass.data[DOMAIN]["_bootstrap_healer"] = None

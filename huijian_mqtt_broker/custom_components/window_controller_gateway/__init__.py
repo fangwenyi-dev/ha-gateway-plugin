@@ -137,10 +137,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     if not re.match(r"^[a-zA-Z0-9]{10,}$", response_sn):
                         return
 
-                    # 检查是否已配置
-                    for e in hass.config_entries.async_entries(DOMAIN):
-                        if e.data.get(CONF_GATEWAY_SN, "").lower() == response_sn.lower():
-                            return
+                    # 检查是否已配置（v1.7.31 A-3 三态门：禁用条目不算已配置
+                    # ——BUG-5 统一口径。仅禁用条目命中时仍代答止血，但不弹
+                    # 发现卡、留节流痕；正式"已配置"才整体静默让位 handler）
+                    from .utils import entry_state_for_sn, log_throttled
+                    _st = entry_state_for_sn(hass, response_sn)
+                    if _st == "configured":
+                        return
+                    if _st == "disabled":
+                        log_throttled(
+                            hass, "_hb_disabled_logged", response_sn.lower(), 600.0,
+                            _LOGGER.warning,
+                            "网关 %s 的条目处于禁用状态但仍上报——继续代答 001 止血"
+                            "（风暴不停在禁用侧无解），但不弹发现卡（尊重禁用决策）；"
+                            "如需恢复使用请到 设置→设备与服务 启用该条目。每 SN 10 分钟去重",
+                            response_sn)
 
                     # v1.7.26 用户裁定 A / v1.7.27 格式定稿 / v1.7.30 仲裁收口：
                     # 未配置网关首报 001 耳朵级代答——固件每 5s 重发直到收到应答，
@@ -161,11 +172,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                             _LOGGER.info("耳朵已代答 001 绑定应答（未配置网关）: %s",
                                          response_sn)
 
+                    if _st == "disabled":
+                        return  # 代答已做；发现卡对禁用网关是打扰（A-3 裁定）
                     gateway_name = f"慧尖网关 {response_sn[-4:]}"
                     _LOGGER.info("心跳监听器发现新网关: %s (SN: %s)", gateway_name, response_sn)
                     await async_discover_gateway(hass, response_sn, gateway_name)
                 except Exception as e:
-                    _LOGGER.debug("心跳监听器处理消息出错: %s", e)
+                    # v1.7.31（A-4）：兜底从 DEBUG 升 WARNING+节流——0917 取证
+                    # 铁律"归因行必须 WARNING"，DEBUG 形态下代答/发现/注册表
+                    # 任一异常默认级别零可见，发现链断裂无迹可寻（v1.7.30 ③
+                    # 自己立的规矩，本监听器是全链唯一残留 DEBUG 的面）。
+                    # 节流防 5s 风暴刷屏；exc_info 留栈定位根因。
+                    from .utils import log_throttled
+                    log_throttled(
+                        hass, "_hb_err_logged", repr(e)[:200], 600.0,
+                        _LOGGER.warning,
+                        "心跳监听器处理消息出错（每形态 10 分钟去重，发现链可能"
+                        "静默断裂——持续出现请查 MQTT 通道与网关上报格式）: %s",
+                        e, exc_info=True)
 
             # v1.7.11：awaiting 条目自身也要驱动 MQTT bootstrap——客户可能
             # 从未走过 config_flow（快速发现代理建的正是这种零交互等待条目），
