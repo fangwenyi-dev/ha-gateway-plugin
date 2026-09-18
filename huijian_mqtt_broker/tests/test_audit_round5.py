@@ -341,7 +341,9 @@ class TestViaDeviceCompat:
         或字符串字面量读取（v1.6.0 "entity" 字面量同族教训——假 mock 骗过全部
         测试的根因是代码读真机不存在的属性）。tokenize 扫描：注释/文档串豁免，
         只看代码 token；`via_device=` 入参（async_get_or_create 合法形参）不在
-        匹配模式内。
+        匹配模式内。v1.7.31 追加豁免：紧随 `:` 的 `"via_device"` 是 dict 键
+        （utils.via_device_kwargs 旧 HA 双形态出口），非 getattr 死属性读取——
+        后者后随 token 为 `,`/`)`，仍然禁。
         """
         integration_dir = HERE.parent / "custom_components" / "window_controller_gateway"
         bad = []
@@ -361,6 +363,11 @@ class TestViaDeviceCompat:
                             literal = literal[len(q):-len(q)]
                             break
                     if literal in forbidden_names:
+                        nxt = toks[i + 1] if i + 1 < len(toks) else None
+                        is_dict_key = (nxt is not None and nxt.type == tokenize.OP
+                                       and nxt.string == ":")
+                        if is_dict_key and literal == "via_device":
+                            continue  # via_device_kwargs 双形态出参（合法入参名）
                         bad.append(f"{py.name}:{t.start.line}: {t.string}")
         assert bad == [], f"死属性读回潮（用 utils.get_via_device_id / get_device_config_entry_ids）: {bad}"
 

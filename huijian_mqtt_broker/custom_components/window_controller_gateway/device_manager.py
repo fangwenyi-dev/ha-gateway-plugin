@@ -282,7 +282,8 @@ class WindowControllerDeviceManager:
             
             # 快速创建设备注册（返回值不需要：注册表按 identifiers 幂等）
             # v1.6.3 收口：registry 写操作一律经 call_registry_method（约定见 utils.py）
-            from .utils import call_registry_method as _call_reg
+            # v1.7.31（现场实锤 F-B）：via_device 入参弃用改 via_device_id
+            from .utils import call_registry_method as _call_reg, via_device_kwargs
             await _call_reg(
                 device_registry.async_get_or_create,
                 config_entry_id=self.entry.entry_id,
@@ -290,7 +291,7 @@ class WindowControllerDeviceManager:
                 name=device_name,
                 manufacturer=MANUFACTURER,
                 model="开窗器",
-                via_device=(DOMAIN, self.gateway_sn)
+                **via_device_kwargs(device_registry, self.gateway_sn)
             )
             
             _LOGGER.debug("异步注册设备完成: %s", device_sn)
@@ -567,7 +568,8 @@ class WindowControllerDeviceManager:
                         # 直接使用async_get_or_create方法重新创建设备关联
                         # 这种方式可以确保设备被正确关联到新的配置条目和网关
                         # v1.6.3 收口：registry 写操作一律经 call_registry_method
-                        from .utils import call_registry_method as _call_reg
+                        # v1.7.31（现场实锤 F-B）：via_device 入参弃用改 via_device_id
+                        from .utils import call_registry_method as _call_reg, via_device_kwargs
                         updated_device = await _call_reg(
                             device_registry.async_get_or_create,
                             config_entry_id=self.entry.entry_id,
@@ -575,7 +577,7 @@ class WindowControllerDeviceManager:
                             name=device_name_with_sn,
                             manufacturer=MANUFACTURER,
                             model=self._get_device_model(device_type),
-                            via_device=(DOMAIN, self.gateway_sn)
+                            **via_device_kwargs(device_registry, self.gateway_sn)
                         )
                         
                         # 验证设备关联是否正确更新
@@ -667,7 +669,8 @@ class WindowControllerDeviceManager:
                 return device_sn
             
             # v1.6.3 收口：registry 写操作一律经 call_registry_method
-            from .utils import call_registry_method as _call_reg
+            # v1.7.31（现场实锤 F-B）：via_device 入参弃用改 via_device_id
+            from .utils import call_registry_method as _call_reg, via_device_kwargs
             device = await _call_reg(
                 device_registry.async_get_or_create,
                 config_entry_id=self.entry.entry_id,
@@ -675,7 +678,7 @@ class WindowControllerDeviceManager:
                 name=device_name_with_sn,
                 manufacturer=MANUFACTURER,
                 model=self._get_device_model(device_type),
-                via_device=(DOMAIN, self.gateway_sn)
+                **via_device_kwargs(device_registry, self.gateway_sn)
             )
         except Exception as e:
             _LOGGER.error("创建设备注册失败: %s", e)
@@ -1104,7 +1107,8 @@ class WindowControllerDeviceManager:
 
         # 5. 更新设备注册表中的关联
         try:
-            from .utils import call_registry_method as _call_reg
+            # v1.7.31（现场实锤 F-B）：via_device 入参弃用改 via_device_id
+            from .utils import call_registry_method as _call_reg, via_device_kwargs
             device_registry = await self._get_device_registry()
             target_entry = self.hass.config_entries.async_get_entry(target_entry_id)
             if target_entry:
@@ -1114,7 +1118,7 @@ class WindowControllerDeviceManager:
                     identifiers={(DOMAIN, device_sn)},
                     manufacturer=MANUFACTURER,
                     model="开窗器",
-                    via_device=(DOMAIN, new_gateway_sn)
+                    **via_device_kwargs(device_registry, new_gateway_sn)
                 )
                 _LOGGER.info("已更新设备 %s 的注册表关联到网关 %s", device_sn, new_gateway_sn)
         except Exception as e:
@@ -1320,9 +1324,11 @@ class WindowControllerDeviceManager:
             
             # 更新设备关联到新网关
             # 注意：HA 的 async_update_device 没有 config_entry_id 参数，
-            # 必须用 async_get_or_create 重建关联（含新 config_entry_id 与 via_device）
+            # 必须用 async_get_or_create 重建关联（含新 config_entry_id 与宿主归属）
             try:
                 # v1.6.3 收口：registry 写操作一律经 call_registry_method
+                # v1.7.31（现场实锤 F-B）：via_device 入参弃用改 via_device_id
+                from .utils import via_device_kwargs
                 await _call_reg(
                     device_registry.async_get_or_create,
                     config_entry_id=self.entry.entry_id,
@@ -1330,7 +1336,7 @@ class WindowControllerDeviceManager:
                     name=device.name,
                     manufacturer=MANUFACTURER,
                     model=self._get_device_model(DEVICE_TYPE_WINDOW_OPENER),
-                    via_device=(DOMAIN, new_gateway_sn)
+                    **via_device_kwargs(device_registry, new_gateway_sn)
                 )
                 _LOGGER.info("已更新设备 %s 的网关关联到 %s，配置条目ID: %s", device_sn, new_gateway_sn, self.entry.entry_id)
                 migrated_devices.append(device_sn)
@@ -1696,9 +1702,10 @@ class WindowControllerDeviceManager:
                     _LOGGER.warning("回滚时未找到设备 %s，跳过", device_sn)
                     continue
 
-                # 恢复设备关联到旧网关：使用旧网关的 config_entry_id 和 via_device
+                # 恢复设备关联到旧网关：使用旧网关的 config_entry_id 和宿主归属
                 # v1.6.3 收口：registry 写操作一律经 call_registry_method
-                from .utils import call_registry_method as _call_reg
+                # v1.7.31（现场实锤 F-B）：via_device 入参弃用改 via_device_id
+                from .utils import call_registry_method as _call_reg, via_device_kwargs
                 await _call_reg(
                     device_registry.async_get_or_create,
                     config_entry_id=old_gateway_entry_id,
@@ -1706,7 +1713,7 @@ class WindowControllerDeviceManager:
                     name=device.name,
                     manufacturer=MANUFACTURER,
                     model=device.model,
-                    via_device=(DOMAIN, old_gateway_sn)
+                    **via_device_kwargs(device_registry, old_gateway_sn)
                 )
                 _LOGGER.info("已回滚设备 %s 到旧网关 %s (entry_id=%s)",
                              device_sn, old_gateway_sn, old_gateway_entry_id)

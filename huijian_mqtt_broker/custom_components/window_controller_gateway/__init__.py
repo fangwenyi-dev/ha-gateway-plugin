@@ -824,8 +824,16 @@ async def _migrate_devices_async(hass, old_gateway_sn, gateway_sn, remove_old_ga
 
 
 def _make_shutdown_handler(hass, entry):
-    """创建HA停止时的清理回调"""
+    """创建HA停止事件回调"""
     async def async_shutdown(event):
+        # v1.7.31（现场实锤 F-A）：async_listen_once 的一次性监听器在 STOP
+        # 派发时即被总线消费摘除，本回调随后自调 async_unload_entry 若在
+        # :526 对它再 unsub，HA core 会打 "Unable to remove unknown job
+        # listener" ERROR（0918 现场每次停机每条目一条，日志噪声盖真故障）。
+        # 监听器已死，先清句柄摘除这段双重移除面。
+        _data = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+        if _data is not None:
+            _data.pop("_stop_unsub", None)
         _LOGGER.info("Home Assistant停止，保存持久化数据...")
         await save_persistent_data(hass)
         _LOGGER.info("Home Assistant停止，清理网关资源...")

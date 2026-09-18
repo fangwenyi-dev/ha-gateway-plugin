@@ -1,5 +1,7 @@
 """工具模块 - 存放通用辅助函数"""
 import asyncio
+import functools
+import inspect
 import json
 import logging
 import time
@@ -266,6 +268,57 @@ def get_via_device_id(device) -> Optional[str]:
     if isinstance(via, tuple):
         return via[1] if len(via) > 1 else None
     return via
+
+
+def resolve_via_device_id(device_registry, gateway_sn) -> Optional[str]:
+    """写入端解析：网关 (DOMAIN, sn) → 其 DeviceEntry.id（v1.7.31 现场实锤 F-B）。
+
+    ``async_get_or_create`` 的 ``via_device=(DOMAIN, sn)`` 入参已被现网 HA
+    2026.9 实锤弃用（每次启动一条 WARNING，明示 2027.8.0 停摆——v1.7.28
+    迁移批清了 devices/entities 直读面，漏了这个**写参数面**，守卫扫描
+    pattern 未覆盖所致）。新写法 ``via_device_id=<父设备注册表 id>``。
+
+    网关设备尚未注册时返回 None 并省略该参数——HA 旧实现对 via_device 父
+    标识不命中时同样不设置 service 归属，语义逐字一致，子设备注册主链
+    不受影响。与 ``get_via_device_id``（读取端）配对构成本库宿主归属的
+    单一真源。调用点不直接用本函数出参，须经 ``via_device_kwargs``。
+    """
+    try:
+        gateway_device = device_registry.async_get_device(
+            identifiers={(DOMAIN, gateway_sn)})
+    except Exception:  # noqa: BLE001 — 只读面兜底，宁缺归属不断注册
+        return None
+    return gateway_device.id if gateway_device else None
+
+
+@functools.lru_cache(maxsize=None)
+def _supports_via_device_id(async_get_or_create) -> bool:
+    """探测注册表写方法是否已有 via_device_id 形参（源码签名核验，非猜测）。
+
+    台架真 HA 2026.1.3 实证该参数**不存在**（签名仅 via_device）；现场真机
+    2026.9.2 实证存在且旧参弃用告警。manifest 声明支持 2024.12.0 起全区间，
+    故形态选择必须按运行时签名判定，禁止无条件用新参（旧 HA 会
+    TypeError 直接打死设备注册，比弃用告警严重一级）。bound method 的
+    hash/eq 按 (self, func)，同 registry 实例探测结果天然缓存。
+    """
+    try:
+        return "via_device_id" in inspect.signature(
+            async_get_or_create).parameters
+    except (TypeError, ValueError):
+        return False
+
+
+def via_device_kwargs(device_registry, gateway_sn) -> Dict[str, Any]:
+    """宿主归属入参双形态出口（v1.7.31，与 call_registry_method 同族兼容哲学）。
+
+    - 新 HA（≥2026.x 引入 via_device_id 者）：{"via_device_id": <父设备 id>}
+    - 旧 HA（签名仅 via_device）：{"via_device": (DOMAIN, sn)} 原形态保留
+    全库 async_get_or_create 调用点一律 ``**via_device_kwargs(...)`` 展开，
+    禁止直接写 ``via_device=`` 关键字实参（AST 守卫反钉）。
+    """
+    if _supports_via_device_id(device_registry.async_get_or_create):
+        return {"via_device_id": resolve_via_device_id(device_registry, gateway_sn)}
+    return {"via_device": (DOMAIN, gateway_sn)}
 
 
 def get_device_config_entry_ids(device) -> set:

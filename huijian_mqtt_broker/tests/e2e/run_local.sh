@@ -26,7 +26,7 @@ rm -rf "$CFG"; mkdir -p "$CFG/custom_components"
 cp -r "$REPO/huijian_mqtt_broker/custom_components/window_controller_gateway" \
     "$CFG/custom_components/"
 cp "$REPO/huijian_mqtt_broker/tests/e2e/ha_e2e_driver.py" "$CFG/"
-printf 'homeassistant:\n  name: E2E Local\nconfig:\napi:\nauth:\nonboarding:\nperson:\nhttp:\n' \
+printf 'homeassistant:\n  name: E2E Local\nlogger:\n  default: info\nconfig:\napi:\nauth:\nonboarding:\nperson:\nhttp:\n' \
     > "$CFG/configuration.yaml"
 
 echo "启动本地 HA Core（首轮约 60-120s）..."
