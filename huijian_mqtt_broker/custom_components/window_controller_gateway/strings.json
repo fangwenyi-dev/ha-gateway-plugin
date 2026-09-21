@@ -45,7 +45,7 @@
       "mqtt_bootstrap_still_pending": "仍未完成：内置 Broker 未运行、MQTT 条目被禁用或凭据被拒。请确认慧尖加载项处于运行状态后再次提交，或查看 HA 日志 mqtt_bootstrap 行。",
       "cannot_connect": "连接网关失败",
       "invalid_ws_token": "The token must be 8-62 chars of [A-Za-z0-9_-] (spaces/commas break the WebSocket subprotocol handshake and lock you out)",
-      "ws_port_reserved": "This port is used by the add-on itself (2022=MQTT broker / 8099=Web UI / 8123=Home Assistant / 1883=common external broker); pick another",
+      "ws_port_reserved": "This port is used by the add-on itself (2022=MQTT broker / 10998=Web UI / 8123=Home Assistant / 1883=common external broker); pick another",
       "required": "This field is required",
       "already_configured": "This gateway is already configured"
     },
@@ -94,7 +94,7 @@
       "invalid_sn_format": "序列号格式无效，必须至少10位字母数字",
       "already_configured": "该网关已被其他配置条目使用",
       "invalid_ws_token": "令牌无效：需 8-62 位字母/数字/下划线/连字符（留空表示不认证）",
-      "ws_port_reserved": "This port is used by the add-on itself (2022=MQTT broker / 8099=Web UI / 1883=common external broker); pick another"
+      "ws_port_reserved": "This port is used by the add-on itself (2022=MQTT broker / 10998=Web UI / 1883=common external broker); pick another"
     }
   },
   "services": {

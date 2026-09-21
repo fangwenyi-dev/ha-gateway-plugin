@@ -13,7 +13,7 @@ flowchart TB
     subgraph HAOS["Home Assistant OS"]
         subgraph ADDON["慧尖加载项容器 (host_network)"]
             BROKER["内置 Mosquitto :2022<br/>allow_anonymous false<br/>passwd: huijian / ha_mqtt / huijian_z2m<br/>ACL: 三账号最小权限"]
-            NGINX["nginx :8099<br/>(Web UI 静态 + /api/* 代理<br/>仅监听 127.0.0.1 + ingress 子网)"]
+            NGINX["nginx :10998<br/>(Web UI 静态 + /api/* 代理<br/>仅监听 127.0.0.1 + ingress 子网)"]
             RUNSH["run.sh<br/>凭据生成 · 集成落盘 · 自愈循环<br/>共存桥 watchdog(探测1883) · status.json"]
             BOOT["bootstrap 标记文件<br/>/homeassistant/…_mqtt_bootstrap.json"]
         end
@@ -35,7 +35,7 @@ flowchart TB
     FW -- "MQTT 2022<br/>gateway/{sn}/req ⇅ gateway/rpt_rsp" --> BROKER
     MQTTINT <--> BROKER
     INTEG <--> MQTTINT
-    UI -- "ingress → :8099" --> NGINX
+    UI -- "ingress → :10998" --> NGINX
     NGINX -- "/api/ha/* (注入 SUPERVISOR_TOKEN)" --> INTEG
     NGINX -- "/api/status · /api/broker…" --> RUNSH
     MP -- "WebSocket :9001 (令牌握手)" --> INTEG
@@ -53,7 +53,7 @@ flowchart TB
 ```
 LoRa固件 ══2022══▶ [内置Mosquitto] ◐HA MQTT集成(客户端)◎── [慧尖集成: 实体/API/WS]
    (共存桥,v1.7.13默认关,开闸+填官方凭据才搭) ⇅      │                      ▲
-z2m ──直连2022(huijian_z2m)────────────┘          Web UI ──nginx:8099──/api/ha/代理──┘
+z2m ──直连2022(huijian_z2m)────────────┘          Web UI ──nginx:10998──/api/ha/代理──┘
 z2m ──或──官方Mosquitto:1883                        小程序 ──WS:9001(令牌)──┘
 ```
 
@@ -76,7 +76,7 @@ z2m ──或──官方Mosquitto:1883                        小程序 ──W
   `huijian_z2m`（z2m 域）；MQTT 凭据由固件内置，用户不修改（产品设计）
 - 共存桥只桥 z2m 生态主题；`gateway/#` 永不跨桥（匿名注入→物理开窗攻击链
   已真栈实锤封堵，负向 e2e 钉桩防复活）
-- nginx :8099 拒绝一切非 127.0.0.1 / 172.30.32.x（ingress）来源
+- nginx :10998 拒绝一切非 127.0.0.1 / 172.30.32.x（ingress）来源
 - 机制实证资产：`tests/e2e/bridge_coexist_e2e.sh`（桥全状态机+认证环境）、
   `tests/e2e/z2m_direct_e2e.sh`（生产认证形态 Z1-Z5 + 真 HA 消费）、
   `run_local.sh` + CI 硬门禁 E2E

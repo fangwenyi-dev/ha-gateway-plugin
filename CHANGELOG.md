@@ -3,6 +3,14 @@
 所有版本变更记录在此文件中。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.7.32] - 2026-09-21
+
+Ingress Web UI 端口迁移 8099 → 10998（用户指令），全链路单一口径收口。
+
+### Changed
+
+- **Web UI（Ingress/nginx）端口 8099 → 10998**：五处功能面同步——`config.yaml` ingress_port（Supervisor 注册）、`ingress.conf` 模板、`run.sh` heredoc 真值源、nginx 启动失败取证的 `/proc/net/tcp` 十六进制门（`:1F9B$` → `:2AF6$`，漏改则端口占用取证恒空）、`WS_RESERVED_PORTS` 保留口集合（8099 出列、10998 入列，WS 网关端口选项撞口拒绝与报错文案 strings/zh-CN 四处同步）。侧边栏入口经 Supervisor 代理 URL 不变；LAN 直连旧口本就 403（来源白名单），无外部调用方依赖。历史事故叙述（v1.6.18 系列注释与 CHANGELOG 旧条目）保留 8099 原样。
+
 ## [1.7.31] - 2026-09-18
 
 真机 1.7.30 测试 + 五路并行审计收口批：现场抓出 2 枚静态审计漏网缺陷（停机 ERROR、`via_device` 弃用面），审计判死项一次全修，全部经真栈 A/B 实证。

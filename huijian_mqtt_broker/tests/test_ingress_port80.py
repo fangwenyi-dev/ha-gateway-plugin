@@ -10,14 +10,14 @@ nginx.conf 以 `include /etc/nginx/http.d/*.conf` 拉入——宿主 80 空闲�
 本文件钉桩三个静默失效面：
 1. Dockerfile 构建期删除 default.conf，且重写版 nginx.conf 不含任何 listen；
 2. run.sh 启动期先清扫 http.d 中一切 listen 80 杂散 conf，再启动 nginx；
-3. 生成的 ingress 配置（模板文件 + run.sh 内 heredoc）只监听 8099。
+3. 生成的 ingress 配置（模板文件 + run.sh 内 heredoc）只监听 10998。
 """
 import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-# listen 80 / listen [::]:80（含 default_server 等后缀），但不误伤 8099
+# listen 80 / listen [::]:80（含 default_server 等后缀），但不误伤 10998
 LISTEN_80 = re.compile(r"^\s*listen\s+(\[::\]:)?80(\s|;|$)", re.M)
 
 
@@ -77,23 +77,23 @@ class TestRunShRuntimeGuard:
         assert not re.search(r"^\s*netstat\s", block, re.M), \
             "netstat 命令在 HA alpine base 不存在，取证禁止回潮"
 
-    def test_generated_ingress_conf_only_8099(self):
+    def test_generated_ingress_conf_only_10998(self):
         m = re.search(
             r"cat > /etc/nginx/http\.d/ingress\.conf <<NGINXEOF\n(.*?)\nNGINXEOF",
             self.run_sh, re.S)
         assert m, "run.sh 内 ingress.conf heredoc 丢失"
         body = m.group(1)
         listens = re.findall(r"^\s*listen\s+[^;]+;", body, re.M)
-        assert listens and all("8099" in l for l in listens), (
-            f"生成的 ingress 配置只能监听 8099，实际: {listens}"
+        assert listens and all("10998" in l for l in listens), (
+            f"生成的 ingress 配置只能监听 10998，实际: {listens}"
         )
         assert not LISTEN_80.search(body)
 
 
 class TestIngressTemplate:
-    def test_repo_template_only_8099(self):
+    def test_repo_template_only_10998(self):
         template = _read("ingress.conf")
         listens = re.findall(r"^\s*listen\s+[^;]+;", template, re.M)
         assert listens, "模板里一个 listen 都没有？"
-        assert all("8099" in l for l in listens), f"模板混入非 8099 监听: {listens}"
+        assert all("10998" in l for l in listens), f"模板混入非 10998 监听: {listens}"
         assert not LISTEN_80.search(template)

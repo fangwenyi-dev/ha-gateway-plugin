@@ -837,7 +837,7 @@ class OptionsFlow(config_entries.OptionsFlow):
                 errors[CONF_WS_GATEWAY_TOKEN] = "invalid_ws_token"
             elif user_input.get(CONF_WS_GATEWAY_PORT) in WS_RESERVED_PORTS:
                 # v1.6.19（第六轮审计 B-LOW10）：本栈保留口——2022=内置
-                # Mosquitto、8099=Web UI nginx ingress、8123=HA core、
+                # Mosquitto、10998=Web UI nginx ingress、8123=HA core、
                 # 1883=外部 broker 惯用口。撞上后 bind 失败只进日志，
                 # 小程序侧恒 Connection refused 静默失联（与"改端口=失联"
                 # 同族坑），在表单源头拒绝。

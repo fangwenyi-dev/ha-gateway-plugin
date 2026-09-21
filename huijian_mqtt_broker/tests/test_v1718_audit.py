@@ -341,7 +341,7 @@ class TestWsLifecycle:
             CONF_WS_GATEWAY_ENABLED,
             CONF_WS_GATEWAY_PORT,
         )
-        # BUG-7：非表单路径写入 2022/8099/8123/1883 须回退默认口
+        # BUG-7：非表单路径写入 2022/10998/8123/1883 须回退默认口
         for p in sorted(WS_RESERVED_PORTS):
             hass = SimpleNamespace(
                 config_entries=_CE([SimpleNamespace(entry_id="e0", options={

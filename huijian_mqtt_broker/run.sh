@@ -358,7 +358,7 @@ fi
 
 cat > /etc/nginx/http.d/ingress.conf <<NGINXEOF
 server {
-    listen 8099;
+    listen 10998;
 
     # host_network 模式：允许 Supervisor/HA Core (172.30.32.x) 和本地回环。
     # TODO(设备上验证一次 ingress 实际源 IP 后可收紧为具体 IP；当前 supervisor
@@ -468,7 +468,7 @@ chmod 600 /etc/nginx/http.d/ingress.conf 2>/dev/null || true
 # 宿主 80——宿主 80 空闲时是"插件白占 80"，被占时（NAS 常见：DSM 反代/其他
 # 容器）bind 失败打死整个 nginx master，8099 侧边栏连坐全挂（2026-09-02 实锤）。
 # Dockerfile 已 rm，这里再防基础镜像/apk 升级带回同名文件，顺带清掉其他
-# 监听 80 的杂散 conf（本插件只应监听 8099）。
+# 监听 80 的杂散 conf（本插件只应监听 10998）。
 for f in /etc/nginx/http.d/*.conf; do
     [ -e "$f" ] || continue
     [ "$f" = "/etc/nginx/http.d/ingress.conf" ] && continue
@@ -478,7 +478,7 @@ for f in /etc/nginx/http.d/*.conf; do
     fi
 done
 
-# v1.6.4：不再 2>/dev/null 吞启动错误——nginx 起不来最常见是 8099 被占/权限，
+# v1.6.4：不再 2>/dev/null 吞启动错误——nginx 起不来最常见是 10998 被占/权限，
 # 旧写法把真实报错丢了，只剩 nginx -t"配置语法正常"的假象，Web UI 静默瘫痪
 # v1.6.18：bind 失败先试一次兜底重启（宿主 80 服务重启竞态窗口），仍失败则
 # 打印占用诊断，不再只留 syntax ok 假象
@@ -492,9 +492,9 @@ nginx || {
         # 端口占用现场取证（v1.6.26 第八轮审计 E-4 根治）：旧版用 netstat，
         # 但 HA alpine base 镜像没有 netstat（本文件 §7 的 v1.6.4 注释早已
         # 实锤"apk 包仅 bash/bind-tools/…"且据此改用 /proc 方案——当时漏改
-        # 了这处取证，宿主 80/8099 被占时恰在最需要时无输出）。复用
-        # /proc/net/tcp{,6} 扫描：state 0A=LISTEN；80=0050、8099=1F9B
-        awk -v p80=':0050$' -v p99=':1F9B$' \
+        # 了这处取证，宿主 80/10998 被占时恰在最需要时无输出）。复用
+        # /proc/net/tcp{,6} 扫描：state 0A=LISTEN；80=0050、10998=2AF6
+        awk -v p80=':0050$' -v p99=':2AF6$' \
             'FNR>1 && ($2 ~ p80 || $2 ~ p99) && $4=="0A" { print "  [取证] LISTEN " $2 }' \
             /proc/net/tcp /proc/net/tcp6 2>/dev/null
     }
@@ -698,7 +698,7 @@ echo "  慧尖 LoRa 网关一体化插件已就绪"
 echo "============================================"
 echo ""
 echo "MQTT Broker: 0.0.0.0:${INTERNAL_PORT} (host_network)"
-echo "Ingress Web UI: 8099 (侧边栏)"
+echo "Ingress Web UI: 10998 (侧边栏)"
 echo "MQTT 用户名: ${USERNAME}"
 echo ""
 

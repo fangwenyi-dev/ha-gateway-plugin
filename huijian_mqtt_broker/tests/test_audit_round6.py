@@ -590,7 +590,7 @@ class TestNoSnInstall:
 class TestReservedPortsAndStrings:
 
     def test_const_set(self):
-        assert {2022, 8099, 8123, 1883} == set(c.WS_RESERVED_PORTS)
+        assert {2022, 10998, 8123, 1883} == set(c.WS_RESERVED_PORTS)
 
     @pytest.mark.asyncio
     async def test_options_rejects_reserved_port(self):

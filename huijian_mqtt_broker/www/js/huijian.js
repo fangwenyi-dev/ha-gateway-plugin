@@ -7,7 +7,7 @@
         document.getElementById('footerVersion').textContent = 'v' + CURRENT_VERSION;
 
         // Ingress 下页面路径形如 /api/hassio_ingress/<token>/index.html（或带尾斜杠），
-        // 直连插件端口 8099 时为 /index.html。去掉最后一段得到部署基路径。
+        // 直连插件端口 10998 时为 /index.html。去掉最后一段得到部署基路径。
         const INGRESS_BASE = window.location.pathname.replace(/\/[^/]*$/, '/');
         // 各配置条目的网关 SN（控制操作后刷新设备用，避免空 SN 误匹配首个实体）
         const GATEWAY_SN_BY_ENTRY = {};

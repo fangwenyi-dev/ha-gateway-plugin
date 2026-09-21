@@ -198,9 +198,9 @@ DEFAULT_EXPOSE_COVER_AS_CURTAIN: Final = False
 DEFAULT_WS_GATEWAY_PORT: Final = 9001
 # v1.6.19（第六轮审计 B-LOW10）：本栈保留端口——WS 网关端口选项若撞上这些
 # 口，bind 失败只进 HA 日志、小程序恒 Connection refused 静默失联，
-# config_flow 在源头拒绝。2022=内置 Mosquitto，8099=Web UI nginx ingress，
+# config_flow 在源头拒绝。2022=内置 Mosquitto，10998=Web UI nginx ingress，
 # 8123=HA core，1883=外部 broker 惯用口。
-WS_RESERVED_PORTS: Final = frozenset({2022, 8099, 8123, 1883})
+WS_RESERVED_PORTS: Final = frozenset({2022, 10998, 8123, 1883})
 DEFAULT_WS_GATEWAY_TOKEN: Final = "hIZ56jhQ-wzA3ENiP2xGzo55PXsewUWM"
 
 # 交叉引用锚（v1.6.21）：run.sh 的 mqtt_password_is_default 判定与
