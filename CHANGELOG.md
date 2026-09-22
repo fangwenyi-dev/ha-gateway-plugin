@@ -3,6 +3,29 @@
 所有版本变更记录在此文件中。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.7.34] - 2026-09-22
+
+v1.7.33 发布后的两条现场链路复核批（用户问「新装加载项后第一台网关直接进集成」与「新网关首报 001」是否仍有问题）：
+复核确认两条主链在真栈上已通，同时抓出 v1.7.33 自己引入的一处生命周期回归、三态门的第二个盲区，并把两条链路补成 CI 真栈门禁。
+
+### Fixed
+
+- **域级服务注销放错生命周期钩子（v1.7.33 引入的回归）**：注销写在 `async_unload_entry`，而 reload 同样走 unload，且 reload 时条目仍留在 `config_entries` 里——"剩余条目为空"恒真 ⇒ **每次重载都摘掉全部 7 个域级服务**（start_pairing / refresh_devices / set_position / check_gateway_status / rename_device / transfer_device / unignore_gateway）；若重载后的 setup 失败（ConfigEntryNotReady 或异常），服务就长期空着，再调用得裸 KeyError/500 而非可读错误。落点改到 `async_remove_entry`（条目确已从列表移除后才回调），并补双向反钉（unload 体内不得出现 `services.async_remove`、remove 体内必须在）。
+- **条目「已配置但未加载」时两只耳朵一起装聋（v1.7.31 三态门的第二个盲区）**：`entry_state_for_sn` 只看 SN 命中与 `disabled_by`，从不看 `entry.state`——命中条目处于 `setup_error` / `setup_retry` / `not_loaded` 时照样返回 "configured"，耳朵静默"让位"一个根本没挂订阅的 handler：网关 001 无人应答、固件每 5s 重发永不停血、日志**零留痕**。用户视角比禁用态更难归因（条目明明就在 设置→设备与服务 列表里）。四态门补 `not_loaded` 态（`ENTRY_STATES_UNANSWERED` 单一真源；状态名归一兼容 StrEnum / 旧 `str,Enum` 混血 / 裸字符串三形态，与 config_flow 既有 `_entry_state` 同式）：两耳照答止血 + 每 SN 10 分钟节流 WARNING 指向 setup 失败根因 + 不弹发现卡（条目已在列表里，`async_discover_gateway` 第 3 步命中同 SN 本就早退）。`loaded` / `setup_in_progress` / `unload_in_progress` / `migration_in_progress` 与状态未知一律仍按 configured 静默——否则与正式 handler 双答，把 v1.7.30 仲裁刚收口的"1 请求 2~3 答"噪声面放回来。
+
+### Added
+
+- **真栈 E2E 补两臂（`ha_e2e_driver.py` K/L 段，随 e2e job 作发布硬门禁）**：
+  - K 臂：未配置网关首报 001 → `gateway/{sn}/req` 上**恰好一条**同型代答（head `$SH` / ctype / id / sn 回带 + `data.errcode:0` + `uuid`），且发现卡挂起可确认。计数在凑够后再静置 2s——只等到第一条就返回会漏掉晚几十毫秒的第二个应答者（假绿）。
+  - L 臂：空 SN 等待条目（发现代理同款 REST 路径）+ 首报 → SN 自动填进**同一条**等待条目、条目 loaded、子设备真注册进设备注册表、发现卡 **0 张**（"直接添加到集成"零点击契约），且两耳并存（handler 耳 + 心跳耳）时仍 1 请求 1 答（v1.7.30 仲裁在真栈上的第二应答者形态）。
+
+### Tests
+
+- 新增 `test_v1734_gate_states.py`（38 条）：四态门单元判定（含三种状态形态归一、禁用优先于未加载、同 SN 多条目只要一个在飞即 configured）；两只耳朵的**行为级**证据——心跳耳经真 `async_setup_entry` 的 awaiting 分支真抓 `_heartbeat_listener`、`_protocol` 耳经真 `WindowControllerMQTTHandler._do_subscribe_topics` 真抓 `handle_gateway_response`，判定逻辑不打桩；风暴下"每请求必答（6 请求 6 答）+ 留痕只放一条"；setup 重试成功后同一条耳朵立刻转静默（状态实时读、无缓存）。反钉：健康条目零代答零留痕、未配置仍走发现链、禁用态文案优先、状态未知不倒退、加载态判定不得在耳朵文件里各写一份。
+- 新增 `test_v1734_e2e_arms.py`（15 条）：两臂不被悄悄删掉或断言被稀释（含"两臂必须跑在 J 段 500 条 soak 之前，否则 req 主题被洪水污染"的顺序钉、settle 窗不得调 0）；并把 driver 的 `_check_single_ack` / `_wait_acks` 从源文本切片抽出真跑——多答、错 id、漏 uuid、errcode≠0 必须真 `die`，晚到的第二答必须被计入（否则 CI 绿是假的）。
+- 变异核验（影子树）：把 `ENTRY_STATES_UNANSWERED` 清空＝退回 v1.7.33 盲区 → 新守卫 13 条红，其中双耳行为面直接呈现"零代答 + 零留痕"，而全部反向钉仍绿（证明红的正是被修的那一面）。
+- 全量 820 用例通过（基线 767）；`bash -n` 全部 shell、`compileall` 递归、`py_compile` driver、`node --check` 两份 JS、ruff（F,E9,B）生产+测试全清。
+
 ## [1.7.33] - 2026-09-22
 
 五路并行只读审计 + 一手复核后的全量收口批（用户指令「全部采用最佳方案优化」）。

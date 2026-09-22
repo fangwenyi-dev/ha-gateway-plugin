@@ -129,9 +129,12 @@ class TestWiring:
         assert "async_ear_ack_001_arbitrated" in src[i_ack:i_log], \
             "v1.7.30 ②：本耳必须走仲裁统一入口"
         # A-3：disabled 态=照答止血但短路发现（禁用卡片对用户是打扰）
-        i_dret = src.index('return  # 代答已做；发现卡对禁用网关是打扰')
+        # v1.7.34：短路条件扩为两态（disabled + not_loaded，详见
+        # test_v1734_gate_states.py）——本钉语义不变：短路必须在代答之后、
+        # 触发发现之前。
+        i_dret = src.index('if _st in ("disabled", "not_loaded"):')
         assert i_ack < i_dret < i_log, \
-            "disabled 必须先派发代答、再于触发发现前 return"
+            "disabled/not_loaded 必须先派发代答、再于触发发现前 return"
         assert '"_hb_disabled_logged"' in src, "disabled 态必须节流 WARNING 留痕"
 
     def test_protocol_other_sn_branch_acks_inside_not_configured(self):
@@ -144,8 +147,15 @@ class TestWiring:
             "代答必须圈在未配置分支内（已配置他网关由其自身 handler 应答）"
         assert "async_ear_ack_001_arbitrated" in src[i_ack:i_disc], \
             "v1.7.30 ②：本耳必须走仲裁统一入口"
-        assert src.count('if _st == "disabled":') == 2, \
-            "A-3：本耳 disabled 留痕+代答后短路发现两处俱在"
+        # v1.7.34：短路条件从 `== "disabled"` 扩为两态元组（disabled +
+        # not_loaded）——计数钉同步：留痕分支 1 处、短路分支 1 处且必须落在
+        # 代答与发现之间（死码/搬走都会红）。
+        assert src.count('if _st == "disabled":') == 1, \
+            "A-3：disabled 留痕分支仅一处（短路已并入两态元组）"
+        assert src.count('if _st in ("disabled", "not_loaded"):') == 1
+        i_short = src.index('if _st in ("disabled", "not_loaded"):')
+        assert i_ack < i_short < i_disc, \
+            "止血短路必须在代答之后、发现触发之前"
         assert "代答已派发" in src[i_ack:i_disc] or "止血代答已派发" in src, \
             "disabled 态必须在代答之后、发现触发之前 return"
 

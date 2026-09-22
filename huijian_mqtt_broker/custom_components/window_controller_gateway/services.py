@@ -759,7 +759,8 @@ def register_services(hass: HomeAssistant) -> bool:
             })
         )
 
-        # v1.7.33（全量审计）：登记本次注册的服务名——卸载时按名注销，
+        # v1.7.33（全量审计）：登记本次注册的服务名——最后一个条目被**删除**
+        # 时按名注销（v1.7.34 起落点在 async_remove_entry，见该处注释），
         # 防"集成卸载后服务句柄仍在注册表"（调用得到裸 KeyError/500，而非
         # 可读的 ServiceValidationError），也顺带把重复 setup 的覆盖显性化。
         hass.data.setdefault(DOMAIN, {})["_registered_services"] = [

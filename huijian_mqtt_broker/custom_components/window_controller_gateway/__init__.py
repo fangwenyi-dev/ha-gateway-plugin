@@ -179,9 +179,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     if not re.match(r"^[a-zA-Z0-9]{10,}$", response_sn):
                         return
 
-                    # 检查是否已配置（v1.7.31 A-3 三态门：禁用条目不算已配置
-                    # ——BUG-5 统一口径。仅禁用条目命中时仍代答止血，但不弹
-                    # 发现卡、留节流痕；正式"已配置"才整体静默让位 handler）
+                    # 检查是否已配置（v1.7.31 A-3 三态门 → v1.7.34 四态：
+                    # 禁用条目不算已配置——BUG-5 统一口径；未加载条目同样不算
+                    # ——正式 handler 没挂订阅时耳朵必须顶上。仅"在飞/已加载"
+                    # 才整体静默让位 handler）
                     from .utils import entry_state_for_sn, log_throttled
                     _st = entry_state_for_sn(hass, response_sn)
                     if _st == "configured":
@@ -193,6 +194,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                             "网关 %s 的条目处于禁用状态但仍上报——继续代答 001 止血"
                             "（风暴不停在禁用侧无解），但不弹发现卡（尊重禁用决策）；"
                             "如需恢复使用请到 设置→设备与服务 启用该条目。每 SN 10 分钟去重",
+                            response_sn)
+                    if _st == "not_loaded":
+                        # v1.7.34：旧实现此形态返回 "configured" ⇒ 两耳一起静默
+                        # 让位一个不存在的 handler，网关 001 无人应答且日志零留痕。
+                        log_throttled(
+                            hass, "_hb_unloaded_logged", response_sn.lower(), 600.0,
+                            _LOGGER.warning,
+                            "网关 %s 的条目已配置但未加载（setup 失败或等待重试），"
+                            "正式 handler 未挂订阅——本耳继续代答 001 止血，但不弹"
+                            "发现卡（条目已在列表里）。根因请到 设置→设备与服务 查看"
+                            "该条目的错误提示，或检索日志中本集成的 setup 异常。"
+                            "每 SN 10 分钟去重",
                             response_sn)
 
                     # v1.7.26 用户裁定 A / v1.7.27 格式定稿 / v1.7.30 仲裁收口：
@@ -214,8 +227,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                             _LOGGER.info("耳朵已代答 001 绑定应答（未配置网关）: %s",
                                          response_sn)
 
-                    if _st == "disabled":
-                        return  # 代答已做；发现卡对禁用网关是打扰（A-3 裁定）
+                    if _st in ("disabled", "not_loaded"):
+                        # 代答已做；发现卡对"用户主动禁用"是打扰（A-3 裁定），
+                        # 对"条目已在列表里只是没加载起来"更是纯噪音
+                        # （async_discover_gateway 第 3 步命中同 SN 条目本就早退）。
+                        return
                     gateway_name = f"慧尖网关 {response_sn[-4:]}"
                     _LOGGER.info("心跳监听器发现新网关: %s (SN: %s)", gateway_name, response_sn)
                     await async_discover_gateway(hass, response_sn, gateway_name)
@@ -722,24 +738,11 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     except Exception as e:
         _LOGGER.warning("小程序 WS 网关状态同步失败: %s", e)
 
-    # v1.7.33（全量审计）：最后一个条目离场时注销域级服务。服务是 DOMAIN
-    # 级注册（register_services 每次 setup 全覆盖注册），集成整体卸载后句柄
-    # 仍留在 services 注册表——再调用得到裸 KeyError/500 而非可读错误，
-    # 且下次加载前同名服务指向旧闭包（旧 hass 引用）。
-    try:
-        _remaining = [e for e in hass.config_entries.async_entries(DOMAIN)
-                      if e.entry_id != entry_id]
-        if not _remaining:
-            for _svc_name in (hass.data.get(DOMAIN, {}) or {}).get(
-                    "_registered_services", []) or []:
-                try:
-                    hass.services.async_remove(DOMAIN, _svc_name)
-                except Exception as _svc_err:  # noqa: BLE001
-                    _LOGGER.debug("注销服务 %s 失败（可能未注册）: %s",
-                                  _svc_name, _svc_err)
-            _LOGGER.info("全部条目已卸载，域级服务已注销")
-    except Exception as e:  # noqa: BLE001
-        _LOGGER.debug("服务注销检查失败（不影响卸载结果）: %s", e)
+    # v1.7.34：服务注销**不在此处**（v1.7.33 曾误放这里）——reload 也走
+    # unload，而 reload 时条目仍留在 config_entries 里（"剩余条目为空"恒真），
+    # 每次 reload 都会把域级服务摘掉；若随后的 setup 失败
+    # （ConfigEntryNotReady/异常），服务就长期空着（调用得裸 KeyError）。
+    # 正确落点是 async_remove_entry（条目确已从列表移除后才回调）。
 
     return unload_successful
 
@@ -754,6 +757,27 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """删除配置条目"""
     gateway_sn = entry.data.get(CONF_GATEWAY_SN, "unknown")
     _LOGGER.info("从配置中永久移除开窗器网关: %s", gateway_sn)
+
+    # v1.7.34：最后一个条目被**删除**时注销域级服务（服务是 DOMAIN 级注册，
+    # register_services 每次 setup 全覆盖注册；不注销则集成整体卸载后句柄仍
+    # 留在 services 注册表，再调用得裸 KeyError/500）。落点必须在 remove 而非
+    # unload——reload 同样走 unload 且条目仍在列表里，放 unload 会每次 reload
+    # 摘一遍服务（v1.7.33 的实装位置，已由 test_v1733_guards 反钉）。
+    try:
+        _remaining = [e for e in hass.config_entries.async_entries(DOMAIN)
+                      if e.entry_id != entry.entry_id]
+        if not _remaining:
+            for _svc_name in (hass.data.get(DOMAIN, {}) or {}).get(
+                    "_registered_services", []) or []:
+                try:
+                    hass.services.async_remove(DOMAIN, _svc_name)
+                except Exception as _svc_err:  # noqa: BLE001
+                    _LOGGER.debug("注销服务 %s 失败（可能未注册）: %s",
+                                  _svc_name, _svc_err)
+            _LOGGER.info("全部条目已删除，域级服务已注销")
+    except Exception as e:  # noqa: BLE001
+        _LOGGER.debug("服务注销检查失败（不影响删除结果）: %s", e)
+
     
     # 重置该网关的发现去重/忽略记录，使删除后的网关可被再次自动发现。
     # 否则 announced_gateways 中残留的"已通知"记录会永久屏蔽该网关。

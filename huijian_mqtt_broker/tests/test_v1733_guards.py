@@ -107,6 +107,19 @@ class TestServiceCatalogRegistration:
         assert names, "注册集未登记——卸载时无法按名注销"
         assert sorted(names) == sorted(set(names)) and len(names) == len(registered)
 
+    def test_service_unregister_lives_in_remove_entry_not_unload(self):
+        """reload 也走 unload——注销逻辑放 unload 会把域级服务在每次重载时摘掉，
+        而重载的 setup 若失败（ConfigEntryNotReady）服务就长期空着。"""
+        src = _code_only((PKG / "__init__.py").read_text(encoding="utf-8"))
+        unload_body = src.split("async def async_unload_entry(", 1)[1]
+        unload_body = unload_body.split("async def async_update_options(", 1)[0]
+        assert "hass.services.async_remove" not in unload_body, \
+            "服务注销不得写在 async_unload_entry（reload 会误触发）"
+        remove_body = src.split("async def async_remove_entry(", 1)[1]
+        remove_body = remove_body.split("async def ", 1)[0]
+        assert "hass.services.async_remove" in remove_body, \
+            "最后一个条目被删除时须注销域级服务（防句柄指向旧闭包）"
+
 
 # ==================== G：容器脚本（结构钉） ====================
 

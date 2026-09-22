@@ -53,8 +53,36 @@ def should_ear_ack_001(ctype: Any, data: Any) -> bool:
     return (ctype == "001" and isinstance(data, dict) and "errcode" not in data)
 
 
+#: 条目「此刻没人应答」的状态集（v1.7.34）：正式 handler 未订阅 ⇒ 网关 001
+#: 无人应答，固件每 5s 重发永不停血。not_loaded=从未加载/已卸载；
+#: setup_error=setup 抛异常终态失败（等人工重试）；setup_retry=ConfigEntryNotReady
+#: 退避重试中。三者都不持有 MQTT 订阅。
+#: 反之 loaded / setup_in_progress / unload_in_progress / migration_in_progress
+#: 都是「在飞或将答」的瞬态——按 configured 静默，避免与正式 handler 双答
+#: （v1.7.30 仲裁只收编耳朵之间的重复，管不住耳朵 vs 正式 handler）。
+ENTRY_STATES_UNANSWERED = frozenset({"not_loaded", "setup_error", "setup_retry"})
+
+
+def entry_state_name(entry: Any) -> str:
+    """条目状态归一为小写裸名（"loaded"/"not_loaded"/…）。
+
+    三种形态同源：StrEnum（HA 2024.4+，``str()`` 即值）、``str, Enum`` 混血
+    （旧 core，``str()`` 得 "ConfigEntryState.LOADED" 但 ``.value`` 是裸名）、
+    REST 字典里的裸字符串（发现代理形态）。取 ``.value`` 再兜底字符串化，
+    与 config_flow._entry_state 同式（该处为本仓既有先例）。
+    状态缺失/不可识别 ⇒ 返回 ""，调用方按「未知＝不打断既有语义」处理。
+    """
+    st = getattr(entry, "state", None)
+    if st is None:
+        return ""
+    raw = getattr(st, "value", st)
+    if not isinstance(raw, str):
+        return ""
+    return raw.rsplit(".", 1)[-1].strip().lower()
+
+
 def entry_state_for_sn(hass: HomeAssistant, gateway_sn: Any) -> str:
-    """「已配置」判定三态门（v1.7.31 A-3，现场+真源实锤）。
+    """「已配置」判定四态门（v1.7.31 A-3 三态 → v1.7.34 补加载态）。
 
     真源核验（HA 2026.1.3 源码 inspect）：``async_entries()`` 默认
     ``include_disabled=True``——禁用条目照样返回。旧三处"已配置"门
@@ -64,13 +92,23 @@ def entry_state_for_sn(hass: HomeAssistant, gateway_sn: Any) -> str:
     有效配置"——本函数把该口径收为单一真源（自过滤 disabled_by，不依赖
     跨版本参数旗标，manifest 2024.12 下限安全）。
 
+    v1.7.34：三态门的第二个盲区——命中条目**未加载**（setup_error/setup_retry/
+    not_loaded）时旧实现照样返回 "configured"，两只耳朵一起静默让位一个根本
+    不存在的 handler：网关 001 无人应答、日志零留痕，比禁用态更难归因（用户
+    眼里条目就在列表里）。加载态一并纳入判定。
+
     返回：
-    - "configured"：存在未禁用条目命中该 SN → 耳朵静默让位正式 handler
+    - "configured"：存在未禁用且**在飞/已加载**的条目命中该 SN → 耳朵静默让位
+                    正式 handler（状态未知同样按此处理，不打断既有语义）
     - "disabled" ：仅禁用条目命中 → 代答止血但**不弹发现卡**（尊重禁用决策），
                     由调用方打节流 WARNING 留痕
+    - "not_loaded"：命中条目全部处于 ``ENTRY_STATES_UNANSWERED`` → 代答止血+
+                    节流 WARNING 指向 setup 失败根因；发现卡不弹（条目已在列表
+                    里，弹卡是打扰且 async_discover_gateway 第 3 步本就早退）
     - "none"     ：未配置 → 正常代答+发现链
     """
     disabled_hit = False
+    unloaded_hit = False
     try:
         entries = hass.config_entries.async_entries(DOMAIN)
     except Exception as e:  # noqa: BLE001 — 判定面炸穿按 none（不阻断止血主语义）
@@ -86,9 +124,13 @@ def entry_state_for_sn(hass: HomeAssistant, gateway_sn: Any) -> str:
             continue
         if getattr(e, "disabled_by", None):
             disabled_hit = True
+        elif entry_state_name(e) in ENTRY_STATES_UNANSWERED:
+            unloaded_hit = True
         else:
             return "configured"
-    return "disabled" if disabled_hit else "none"
+    if disabled_hit:
+        return "disabled"
+    return "not_loaded" if unloaded_hit else "none"
 
 
 def log_throttled(hass: HomeAssistant, bucket: str, key: str, ttl: float,

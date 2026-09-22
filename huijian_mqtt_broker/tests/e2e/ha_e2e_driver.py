@@ -193,12 +193,15 @@ import paho.mqtt.client as paho  # HA 自带依赖，零新增
 
 step("G", "paho 经真 broker 发布 002 上报（并订阅 req 观察 ack）")
 acks = []
+ack_msgs = []   # (topic, payload)：v1.7.34 K/L 两臂需按主题甄别代答归属
 pc = paho.Client(paho.CallbackAPIVersion.VERSION2, client_id="e2e-driver")
 pc.connect(MQTT_HOST, MQTT_PORT, 30)
 
 
 def _onmsg(_c, _u, msg):
-    acks.append(msg.payload.decode(errors="replace"))
+    raw = msg.payload.decode(errors="replace")
+    acks.append(raw)
+    ack_msgs.append((msg.topic, raw))
 
 
 pc.subscribe(f"gateway/{GW_SN}/req", qos=1)  # 现场实锤 ack 正常发出，
@@ -348,6 +351,180 @@ if _leaked:
 step("H2", "HomeKit 双机型实证：5007 Window(SET_POSITION+position=50+004 真发) / "
            "5002 三态(无位置位、位置服务被拒、无空口泄漏) ✓")
 
+# ---------- K/L 共用助手 ----------
+def _hj_entries():
+    """本集成全部配置条目（列表端点形态经 F 段实证）。"""
+    _st, items = call("GET", "/api/config/config_entries/entry")
+    items = items if isinstance(items, list) else (items or {}).get("entries", [])
+    return [e for e in items if e.get("domain") == "window_controller_gateway"]
+
+
+def _hj_flows():
+    """本集成在途流程（发现卡）。"""
+    _st, flows = call("GET", "/api/config/config_entries/flow")
+    return [f for f in (flows if isinstance(flows, list) else [])
+            if f.get("handler") == "window_controller_gateway"]
+
+
+def _cards_for(sn):
+    return [f for f in _hj_flows()
+            if str((f.get("context") or {}).get("unique_id") or "").lower()
+            == sn.lower()]
+
+
+def _wait_acks(topic, since, want=1, timeout=30, settle=2.0):
+    """等 topic 上出现 want 条代答后**再静置** settle 秒。
+
+    仲裁门禁（v1.7.30）必须能抓到"多答"——只等到第一条就返回会假绿：
+    第二个应答者往往晚几十毫秒到。
+    """
+    deadline = time.time() + timeout
+    got = [m for m in ack_msgs[since:] if m[0] == topic]
+    while time.time() < deadline and len(got) < want:
+        time.sleep(0.5)
+        got = [m for m in ack_msgs[since:] if m[0] == topic]
+    time.sleep(settle)
+    return [m for m in ack_msgs[since:] if m[0] == topic]
+
+
+def _first_report(sn, msg_id):
+    """网关首报 001 绑定请求（现场实锤形态：固件每 5s 重发直到收到应答）。"""
+    return {"head": "$SH", "ctype": "001", "id": msg_id, "sn": sn,
+            "data": {"vesion": "V3.55", "model": "YGZN_GW001",
+                     "userid": 0, "familyid": 0}}
+
+
+def _check_single_ack(acks_seen, sn, msg_id, label):
+    """契约：一条 001 请求恰好换来一条同型 001 应答（多答=仲裁失效）。"""
+    topic = f"gateway/{sn}/req"
+    replies = []
+    for _t, raw in acks_seen:
+        try:
+            if json.loads(raw).get("ctype") == "001":
+                replies.append(raw)
+        except Exception:
+            continue
+    if len(replies) != 1:
+        die(f"{label}：{topic} 应恰好 1 条 001 代答（v1.7.30 仲裁），"
+            f"实得 {len(replies)}: {[r[:120] for r in replies[:3]]}")
+    body = json.loads(replies[0])
+    if (body.get("head"), body.get("ctype"), body.get("id"), body.get("sn")) \
+            != ("$SH", "001", msg_id, sn):
+        die(f"{label}：代答报文与请求不同形 {body}")
+    dat = body.get("data") or {}
+    if dat.get("errcode") != 0 or not isinstance(dat.get("uuid"), str) \
+            or len(dat["uuid"]) < 8:
+        die(f"{label}：代答 data 缺 errcode:0 / uuid（v1.7.27 定稿同形）{dat}")
+    return body
+
+
+# ---------- K. 未配置网关首报 001：耳朵恰好一答 + 发现卡 ----------
+# 现场断过两条链：①首报 001 无人应答 → 固件每 5s 重发永不停血（v1.7.26 起
+# 耳朵代答止血）；②多耳并存时 1 请求 2~3 答（v1.7.30 仲裁收口）。本臂在真
+# HA + 真 broker 上钉住应答面与发现面。
+NEW_GW = "E2EGW0000002"
+step("K", f"未配置网关 {NEW_GW} 首报 001 → 恰好一条同型代答 + 发现卡")
+pc.subscribe(f"gateway/{NEW_GW}/req", qos=1)
+time.sleep(1)                     # 让 SUB 报文过网再发布（G 段同款竞态教训）
+_k0 = len(ack_msgs)
+pc.publish("gateway/rpt_rsp", json.dumps(_first_report(NEW_GW, 7101))) \
+    .wait_for_publish(timeout=5)
+_k_acks = _wait_acks(f"gateway/{NEW_GW}/req", _k0)
+_check_single_ack(_k_acks, NEW_GW, 7101, "K 未配置网关首报")
+
+_card = None
+_dead = time.time() + 30
+while time.time() < _dead and _card is None:
+    _c = _cards_for(NEW_GW)
+    _card = _c[0] if _c else None
+    if _card is None:
+        time.sleep(2)
+if _card is None:
+    die(f"未配置网关 {NEW_GW} 的发现卡未在 30s 内出现（discovery 链断，"
+        f"在途流={[(f.get('context') or {}).get('unique_id') for f in _hj_flows()]}）")
+step("K", f"首报 001 真栈实证 ✓（1 请求 1 答·含 uuid；发现卡 {_card.get('flow_id')[:8]} 已挂起）")
+
+# ---------- L. 空 SN 等待条目 + 首报 → 零点击「直接添加到集成」 ----------
+# v1.7.11/v1.7.12 设计：发现代理建一个空 SN 的等待条目挂心跳耳；网关首报后
+# discovery 第 3.5 步把 SN **直接填进该条目**（不弹卡、无需用户点确认），
+# reload 由 update listener 单驱动。本臂真栈走完整条零点击链，并顺带把
+# v1.7.30 仲裁在"两耳并存"形态下钉死（此刻 handler 耳 + 心跳耳同时在听）。
+AUTO_GW = "E2EGW0000003"
+AUTO_DEV = "500700000002"
+step("L", "建空 SN 等待条目（发现代理同款 REST 路径）")
+st, fl = call("POST", "/api/config/config_entries/flow",
+              json_body={"handler": "window_controller_gateway"})
+if st != 200 or "flow_id" not in fl:
+    die(f"等待条目 flow 启动 HTTP {st}: {fl}")
+st, res = call("POST", f"/api/config/config_entries/flow/{fl['flow_id']}",
+               json_body={"gateway_sn": "", "gateway_name": ""})
+if not (isinstance(res, dict) and res.get("type") == "create_entry"):
+    die(f"空 SN 提交未创建等待条目: {res}")
+
+awaiting_id, awaiting_state = None, "?"
+_dead = time.time() + 60
+while time.time() < _dead:
+    for e in _hj_entries():
+        if not (e.get("data") or {}).get("gateway_sn"):
+            awaiting_id, awaiting_state = e.get("entry_id"), e.get("state")
+    if awaiting_id and awaiting_state == "loaded":
+        break
+    time.sleep(2)
+if not awaiting_id:
+    die("空 SN 等待条目未出现（零点击链的第一步就没落地）")
+if awaiting_state != "loaded":
+    die(f"等待条目未 loaded（{awaiting_state}）——心跳耳无从挂载，自动发现必死")
+step("L", f"等待条目 {awaiting_id} loaded ✓（心跳耳已挂，两耳并存）")
+
+pc.subscribe(f"gateway/{AUTO_GW}/req", qos=1)
+time.sleep(1)
+_l0 = len(ack_msgs)
+pc.publish("gateway/rpt_rsp", json.dumps(_first_report(AUTO_GW, 7202))) \
+    .wait_for_publish(timeout=5)
+_l_acks = _wait_acks(f"gateway/{AUTO_GW}/req", _l0)
+_check_single_ack(_l_acks, AUTO_GW, 7202, "L 两耳并存首报")
+
+filled_id, filled_state = None, "?"
+_dead = time.time() + 90
+while time.time() < _dead:
+    for e in _hj_entries():
+        if str((e.get("data") or {}).get("gateway_sn") or "").lower() == AUTO_GW.lower():
+            filled_id, filled_state = e.get("entry_id"), e.get("state")
+    if filled_id and filled_state == "loaded":
+        break
+    time.sleep(3)
+if filled_id != awaiting_id:
+    die(f"SN 未被填进等待条目（填充={filled_id} 等待={awaiting_id}）——"
+        "零点击自动添加链断（discovery 3.5）")
+if filled_state != "loaded":
+    die(f"自动填充后条目未 loaded（{filled_state}）——update listener 单驱动 reload 断")
+
+_stray = _cards_for(AUTO_GW)
+if _stray:
+    die(f"零点击自动填充不得再弹发现卡，实得 {len(_stray)} 张（用户会被要求"
+        "确认一台已经加进来的网关）")
+
+pc.publish("gateway/rpt_rsp", json.dumps({
+    "head": {"cmdid": "002", "id": 7203}, "ctype": "002", "id": 7203,
+    "sn": AUTO_GW, "data": {"status": 1, "devices": [
+        {"sn": AUTO_DEV, "model": "5007", "battery": 1210,
+         "r_travel": 60}]}})).wait_for_publish(timeout=5)
+_taken = False
+_dead = time.time() + 60
+while time.time() < _dead and not _taken:
+    st, d2 = call("GET", f"/api/window_controller_gateway/devices"
+                         f"?config_entry_id={filled_id}")
+    if st == 200 and isinstance(d2, list):
+        _sns = {i[1] for d in d2 for i in (d.get("identifiers") or [])
+                if isinstance(i, list) and len(i) > 1}
+        _taken = AUTO_DEV in _sns and any(x.get("gateway_online") is True for x in d2)
+    time.sleep(3)
+if not _taken:
+    die("自动填充后的条目未真正接管上报（子设备未注册/网关未在线）——"
+        "只改了 data 没走完整 setup")
+step("L", f"零点击自动添加真栈实证 ✓（{AUTO_GW} 填入等待条目→loaded→"
+           f"子设备 {AUTO_DEV} 注册；发现卡 0 张；两耳并存仍 1 请求 1 答）")
+
 # ---------- I. WS 网关默认监听 ----------
 step("I", f"WS 网关 {WS_PORT} 常听断言（v1.6.16 默认开语义守护）")
 ok = False
@@ -406,6 +583,9 @@ if summary:
                 "- onboarding/config flow/002 上报全链路真栈 ✓\n"
                 f"- gateway_online + 子设备注册 + WS {WS_PORT} 常听 ✓\n"
                 "- HomeKit 双机型：5007 Window(SET_POSITION/position/004 真发)、5002 三态(位置服务被拒) ✓\n"
+                f"- 首报 001 代答：未配置网关 1 请求 1 答（含 uuid）+ 发现卡挂起 ✓\n"
+                f"- 零点击自动添加：空 SN 等待条目 → {AUTO_GW} 自动填充 → loaded → "
+                f"子设备 {AUTO_DEV} 注册，发现卡 0 张，两耳并存仍 1 答 ✓\n"
                 f"- soak 500 条注入 ~{rate:.0f}/s，HA 全程可用\n")
 
 pc.loop_stop()

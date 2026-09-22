@@ -154,6 +154,10 @@ class _ProtocolMixin:
                             # 条目**也算已配置：被禁用的另一台网关 001 在本
                             # 耳同样零止血、零留痕。disabled 态照答止血、
                             # 跳过发现卡、节流留痕。
+                            # v1.7.34：三态门补第四态 not_loaded（setup_error/
+                            # setup_retry/not_loaded）——命中条目未加载时正式
+                            # handler 根本没订阅，旧口径返回 configured ⇒ 两耳
+                            # 一起静默、网关 001 无人应答且零留痕。
                             # v1.7.33：log_throttled 已升模块级导入（本地导入
                             # 会把整个函数作用域的名字标记为局部，遮蔽上方
                             # 入站尺寸闸的错误分支 → UnboundLocalError）
@@ -168,6 +172,16 @@ class _ProtocolMixin:
                                     "网关 %s 的条目处于禁用状态但仍上报——本耳继续"
                                     "代答 001 止血但不弹发现卡；恢复使用请到 "
                                     "设置→设备与服务 启用。每 SN 10 分钟去重",
+                                    response_sn)
+                            if _st == "not_loaded":
+                                log_throttled(
+                                    self.hass, "_proto_unloaded_logged",
+                                    response_sn.lower(), 600.0, _LOGGER.warning,
+                                    "网关 %s 的条目已配置但未加载（setup 失败或等待"
+                                    "重试），正式 handler 未挂订阅——本耳继续代答 "
+                                    "001 止血但不弹发现卡（条目已在列表里）。根因请"
+                                    "到 设置→设备与服务 查看该条目错误提示或检索"
+                                    "setup 异常日志。每 SN 10 分钟去重",
                                     response_sn)
                             
                             if _st != "configured":
@@ -187,9 +201,12 @@ class _ProtocolMixin:
                                         async_ear_ack_001_arbitrated(
                                             self.hass, response_sn,
                                             payload.get("id", 0)))
-                                if _st == "disabled":
+                                if _st in ("disabled", "not_loaded"):
                                     # A-3：禁用网关止血代答已派发——发现卡
                                     # 对"用户主动禁用"是打扰，到此为止。
+                                    # v1.7.34：not_loaded 同口径——条目已在
+                                    # 列表里，async_discover_gateway 第 3 步
+                                    # 命中同 SN 条目本就早退，弹卡是纯噪音。
                                     return
                                 # v1.6.26（第八轮审计 A-1）：v1.6.25 拆包回归——
                                 # 旧单文件里 `from .discovery` 解析到集成根的
