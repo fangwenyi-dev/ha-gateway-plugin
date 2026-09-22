@@ -141,8 +141,20 @@ async def _update_mqtt_entry(
     一体化插件场景：用户安装插件后，可能已有其他 broker 的 MQTT 条目
     （如官方 Mosquitto 插件、EMQX 等）。本函数将该条目更新为指向
     插件内置 broker，确保 HA 能接收到 LoRa 网关的数据。
+
+    v1.7.33（全量审计）：除覆写连接四键外，显式清除**与明文内置 broker
+    不兼容**的键。旧实现只覆写 broker/port/username/password，用户自建
+    条目里的 `certificate`/`tls_insecure`/`transport=websockets`/`ws_*`
+    被原样带进明文 2022——HA MQTT 客户端按 TLS/WebSocket 去连明文 TCP，
+    永久连不上；而此处标记已删、healer 下轮走"地址匹配分支"直接 return，
+    没有任何出口再纠偏（现场表现：全部门窗离线且不随重启自愈）。
     """
+    _INCOMPATIBLE_KEYS = ("certificate", "tls_insecure", "transport",
+                          "ws_path", "ws_headers")
     new_data = dict(entry.data)
+    dropped = [k for k in _INCOMPATIBLE_KEYS if k in new_data]
+    for k in dropped:
+        new_data.pop(k, None)
     new_data["broker"] = broker
     new_data["port"] = port
     if username is not None:
@@ -150,6 +162,12 @@ async def _update_mqtt_entry(
     if password is not None:
         new_data["password"] = password
     hass.config_entries.async_update_entry(entry, data=new_data)
+    if dropped:
+        _LOGGER.warning(
+            "接管 MQTT 条目时清除了与内置明文 Broker 不兼容的键 %s"
+            "（若原有 TLS/WebSocket 配置仍被其他集成依赖，请另行保留独立条目）",
+            sorted(dropped),
+        )
     _LOGGER.info(
         "已将 MQTT 配置条目 %s 更新为内置 Broker %s:%s",
         entry.entry_id, broker, port,

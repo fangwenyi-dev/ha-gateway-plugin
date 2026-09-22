@@ -255,7 +255,6 @@ class TestClosingLatch:
         import inspect
         src = inspect.getsource(WindowControllerMQTTHandler.cleanup)
         assert "_closing = True" in src
-        idx_close = src.index("_closing = True")
         code_lines = [ln for ln in src.splitlines()
                       if ln.strip() and not ln.strip().startswith("#")]
         first_await = next((i for i, ln in enumerate(code_lines) if "await " in ln), None)

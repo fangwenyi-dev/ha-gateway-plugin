@@ -92,11 +92,31 @@ class WindowControllerDeviceManager:
         self._trigger_persistent_save()
     
     def _trigger_persistent_save(self) -> None:
-        """触发持久化保存（异步）"""
+        """触发持久化保存（异步）。
+
+        v1.7.33（全量审计）：刻意**不**并入 `_bg_tasks`——persist 是模块级防抖
+        锁（`_save_pending` + `_save_lock`），cleanup 期取消"等锁中"的保存任务
+        会让该标志永久为 True，此后所有保存被静默吞掉（比丢一次落盘严重得多）。
+        改为独立任务 + 完成回调记账：任务内异常不再无声（旧实现的 try 只包住
+        create_task 本身，落盘协程里的异常零可见）。
+        """
         try:
-            self.hass.async_create_task(save_persistent_data(self.hass))
+            task = self.hass.async_create_task(save_persistent_data(self.hass))
         except Exception as e:
             _LOGGER.warning("触发持久化保存失败: %s", e)
+            return
+        if task is None or not hasattr(task, "add_done_callback"):
+            return
+
+        def _log_save_result(t):
+            try:
+                exc = None if t.cancelled() else t.exception()
+            except Exception:  # noqa: BLE001 - 取异常失败不再二次抛
+                return
+            if exc is not None:
+                _LOGGER.error("持久化保存失败（本次内存变更未落盘）: %s", exc)
+
+        task.add_done_callback(_log_save_result)
     
     def _load_device_to_gateway_mapping(self) -> dict:
         """从持久化存储中加载设备到网关的映射关系"""
@@ -214,12 +234,20 @@ class WindowControllerDeviceManager:
                     device_name = get_device_display_name(self.gateway_sn, device_sn)
                     
                     # 同步添加到内存字典中
+                    # v1.7.33（全量审计）：回填必须带 last_update——cover/sensor
+                    # 的 15 分钟时效契约（v1.6.12 #7 / v1.6.19 B-MED3）判据写作
+                    # `if _lu and …`，无时间戳=永久新鲜：重启后网关不再上报时，
+                    # 实体永久冻结在关机前的位置/电压显示（"无时间戳视为新鲜"
+                    # 是给历史形态/测试夹具的兼容语义，不该被回填路径借用）。
+                    # 时间戳语义与 cover.async_added_to_hass 恢复路径同款：
+                    # 重启时刻 =「信任关机快照 15 分钟」的起点。
                     self.devices[device_sn] = {
                         "sn": device_sn,
                         "name": device_name,
                         "type": DEVICE_TYPE_WINDOW_OPENER,
                         "status": DEVICE_STATUS_UNKNOWN,
-                        "attributes": {}
+                        "attributes": {},
+                        "last_update": time.time(),
                     }
                     _LOGGER.info("同步加载设备到内存: %s", device_sn)
                     
@@ -851,6 +879,14 @@ class WindowControllerDeviceManager:
                 _LOGGER.error("执行设备移除回调失败: %s", e)
         
         _LOGGER.info("设备移除流程完成: %s", device_sn)
+
+        # v1.7.33（全量审计）说明：删除**不**经 _notify_status_listeners。
+        # 该漏斗的 payload 构造要求设备仍在缓存（_device_update_payload 里
+        # `devices.get(device_sn)`，缺失即返回 None），删除后调用只会空转；
+        # 而固件 WS 协议只定义了 device_update（七键）一种推送，没有"设备已
+        # 删除"类型——凭空造一种会破坏"1:1 复刻 app_ws_gateway.c"的纪律。
+        # 删除可见性由发起方闭环：WS unbind 走 ok ack + 后续 get_devices 刷新，
+        # HA 按钮路径由实体/注册表移除表达。
         
         # 协议说明：002 是网关主动发起的上报，HA 无法主动触发设备发现
         # 设备删除后，设备列表更新依赖网关下一次主动上报 002 消息
@@ -1023,6 +1059,11 @@ class WindowControllerDeviceManager:
                 )
 
         self._trigger_persistent_save()
+        # v1.7.33（全量审计）：改名同样要走状态推送漏斗——WS 客户端的
+        # device_update 走 _notify_status_listeners 单点挂钩（002/005 上报与
+        # 003 绑定确认三处），rename 是第四条增改路径却不推，小程序端要等
+        # 自己下次 get_devices 才看到新名（改名后立刻操作会按旧名对不上）。
+        self._notify_status_listeners(device_sn)
         _LOGGER.info("设备 %s 重命名成功: %s → %s", device_sn, old_name, new_name)
         return True
 
@@ -1248,7 +1289,7 @@ class WindowControllerDeviceManager:
         try:
             # 查找网关的MQTT处理器
             gateway_sn_lower = gateway_sn.lower()
-            for entry_id, data in self.hass.data[DOMAIN].items():
+            for _entry_id, data in self.hass.data[DOMAIN].items():
                 if isinstance(data, dict) and data.get("gateway_sn", "").lower() == gateway_sn_lower:
                     if "mqtt_handler" in data:
                         mqtt_handler = data["mqtt_handler"]
@@ -1269,7 +1310,7 @@ class WindowControllerDeviceManager:
             device_to_gateway_mapping = self.hass.data[DOMAIN][DEVICE_TO_GATEWAY_MAPPING]
             # P1 修复：使用大小写不敏感比较，与 add_device/remove_device 保持一致
             gateway_sn_lower = gateway_sn.lower()
-            for device_sn, mapped_gateway_sn in device_to_gateway_mapping.items():
+            for _device_sn, mapped_gateway_sn in device_to_gateway_mapping.items():
                 if mapped_gateway_sn.lower() == gateway_sn_lower:
                     count += 1
         

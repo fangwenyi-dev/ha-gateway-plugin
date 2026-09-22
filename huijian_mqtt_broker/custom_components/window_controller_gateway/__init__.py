@@ -2,7 +2,7 @@
 import logging
 import asyncio
 from datetime import timedelta
-from typing import Any, Dict
+from typing import Any, Dict, Final
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -77,6 +77,36 @@ async def async_setup(hass: HomeAssistant, config: Dict[str, Any]) -> bool:
 
     return True
 
+DISCOVERY_INTERVAL_MIN_SECONDS: Final = 60
+DISCOVERY_INTERVAL_MAX_SECONDS: Final = 3600
+
+
+def _clamp_discovery_interval(raw) -> int:
+    """发现间隔归一与钳制（v1.7.33 全量审计）。
+
+    该值是 mqtt_handler.check_connection() 的唯一节拍源（网关离线回收只在
+    这一拍里跑）：options 里的原值可能被用户调到 3600（离线回收滞后 1 小时）
+    或被 .storage 手改成字符串（timedelta(seconds="300") → TypeError → 条目
+    setup 直接失败、集成起不来且无自愈）。此处统一 int 归一 + 钳到
+    [60, 3600]，越界留 WARNING 且不抛。
+    """
+    if isinstance(raw, timedelta):
+        raw = raw.total_seconds()
+    try:
+        seconds = int(float(raw))
+    except (TypeError, ValueError, OverflowError):
+        seconds = int(SCAN_INTERVAL)
+    if seconds < DISCOVERY_INTERVAL_MIN_SECONDS or seconds > DISCOVERY_INTERVAL_MAX_SECONDS:
+        _LOGGER.warning(
+            "发现间隔 %s 超出允许范围（%d-%d 秒），已钳制——该值同时是网关"
+            "离线回收的唯一节拍源", seconds,
+            DISCOVERY_INTERVAL_MIN_SECONDS, DISCOVERY_INTERVAL_MAX_SECONDS,
+        )
+        seconds = min(max(seconds, DISCOVERY_INTERVAL_MIN_SECONDS),
+                      DISCOVERY_INTERVAL_MAX_SECONDS)
+    return seconds
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """设置配置条目
 
@@ -124,6 +154,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 """监听网关心跳，触发自动发现"""
                 try:
                     import json
+                    # v1.7.33（全量审计）：与 _protocol 耳同款入站尺寸闸。
+                    # 旧实现只在 handler 侧有闸，等待态条目的心跳耳（干净主机
+                    # 首配形态下**唯一**的应答者）直接 json.loads 全量 payload
+                    # ——mosquitto 默认不限 message_size_limit，一条 50-100MB
+                    # 报文就在事件循环线程卡死整个 HA。留痕走节流（防刷盘）。
+                    from .utils import inbound_payload_ok, log_throttled
+                    if not inbound_payload_ok(msg):
+                        log_throttled(hass, "_hb_oversize_logged", "rpt_rsp",
+                                      600.0, _LOGGER.warning,
+                                      "心跳耳收到超大 MQTT 报文（%d 字节），拒收处理",
+                                      len(msg.payload))
+                        return
                     payload = json.loads(msg.payload)
                     if "head" not in payload or "ctype" not in payload:
                         return
@@ -255,15 +297,27 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         return  # 条目已卸载/重载，放弃武装
                     # v1.7.12（审计 CF-F4）：武装协程内订阅同样兜异常——旧版
                     # subscribe 抛错=task 未检索异常静默放弃，本条目再无人监听
-                    try:
-                        unsub = await mqtt_comp.async_subscribe(
-                            hass, TOPIC_GATEWAY_RSP, _heartbeat_listener, 1
-                        )
-                    except Exception as sub_e:  # noqa: BLE001
-                        _LOGGER.warning(
-                            "心跳武装订阅失败（网关需手动添加 SN，或重载本条目）: %s",
-                            sub_e)
-                        return
+                    # v1.7.33（全量审计）：失败不再一次即弃——MQTT 已就绪但订阅
+                    # 瞬时失败（broker 重启竞态/换代期）会让本条目在剩余生命周期
+                    # 内永久失聪（与 v1.7.28 修掉的"120s 即弃"同族，只换了触发点）。
+                    # 改为 60s 退避无限重试（任务登记在 _bg_tasks，卸载即取消；
+                    # 每轮条目存活双检）。留痕走节流防刷屏。
+                    unsub = None
+                    while unsub is None:
+                        try:
+                            unsub = await mqtt_comp.async_subscribe(
+                                hass, TOPIC_GATEWAY_RSP, _heartbeat_listener, 1
+                            )
+                        except Exception as sub_e:  # noqa: BLE001
+                            from .utils import log_throttled as _log_throttled
+                            _log_throttled(
+                                hass, "_hb_arm_fail_logged", entry.entry_id, 600.0,
+                                _LOGGER.warning,
+                                "心跳武装订阅失败，60s 后自动重试（无需手动干预）: %s",
+                                sub_e)
+                            await asyncio.sleep(60)
+                            if hass.data.get(DOMAIN, {}).get(entry.entry_id) is None:
+                                return  # 条目已卸载/重载，放弃武装
                     data_now = hass.data.get(DOMAIN, {}).get(entry.entry_id)
                     if data_now is None:
                         if unsub:
@@ -364,7 +418,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         # 获取配置选项
         options = entry.options
-        discovery_interval = options.get("discovery_interval", SCAN_INTERVAL)
+        # v1.7.33（全量审计）：读取端补类型归一与值域钳制。该值是
+        # mqtt_handler.check_connection() 的唯一节拍源（网关离线回收只在这里
+        # 跑）：旧实现直接把 options 原值喂给 timedelta——用户调成 3600 则离线
+        # 回收滞后 1 小时（实体假在线），.storage 手改成字符串则
+        # timedelta(seconds="300") TypeError 落进 except 使条目 setup 直接失败
+        # （集成起不来且无自愈）。钳到 [60, 3600] 与表单 schema 同界。
+        discovery_interval = _clamp_discovery_interval(
+            options.get("discovery_interval", SCAN_INTERVAL))
         debug_logging = options.get("debug_logging", False)
         
         # P1 修复：启用/禁用调试日志时使用引用计数控制模块 logger 级别。
@@ -387,8 +448,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             except Exception as e:
                 _LOGGER.warning("定期连接检查时出错: %s", e)
 
-        seconds = discovery_interval.total_seconds() if isinstance(discovery_interval, timedelta) else discovery_interval
-        remove_interval = async_track_time_interval(hass, periodic_update, timedelta(seconds=seconds))
+        # v1.7.33：seconds 已在上方归一/钳制（int 秒），此处不再做 timedelta 分支
+        remove_interval = async_track_time_interval(hass, periodic_update, timedelta(seconds=discovery_interval))
         unsub_listeners.append(remove_interval)
 
         # 更新完整运行数据
@@ -401,7 +462,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             "_setup_complete": True
         }
         # 合并已有数据（保留平台可能附加的键，如 created_remove_buttons）
+        # v1.7.33（全量审计）：先清掉上一次生命周期遗留的**状态类**键——
+        # async_unload_entry 失败时不 pop 该条目字典，下次 setup 的
+        # previous.update() 会把 _platforms_forwarded=True / _bg_tasks /
+        # unsub_listeners 原样继承：门禁据此对从未 forward 的平台调
+        # async_unload_platforms（每平台一条 "Config entry was never loaded!"
+        # ERROR），旧任务/监听器列表也持续累积（已无引用可取消）。
+        # 平台附加键（created_*）不受影响，仍在 update 中保留。
         previous = hass.data[DOMAIN].get(entry.entry_id, {})
+        for _stale in ("_platforms_forwarded", "_bg_tasks", "unsub_listeners"):
+            previous.pop(_stale, None)
         previous.update(entry_data)
         hass.data[DOMAIN][entry.entry_id] = previous
 
@@ -651,6 +721,25 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await async_ensure_ws_gateway(hass)
     except Exception as e:
         _LOGGER.warning("小程序 WS 网关状态同步失败: %s", e)
+
+    # v1.7.33（全量审计）：最后一个条目离场时注销域级服务。服务是 DOMAIN
+    # 级注册（register_services 每次 setup 全覆盖注册），集成整体卸载后句柄
+    # 仍留在 services 注册表——再调用得到裸 KeyError/500 而非可读错误，
+    # 且下次加载前同名服务指向旧闭包（旧 hass 引用）。
+    try:
+        _remaining = [e for e in hass.config_entries.async_entries(DOMAIN)
+                      if e.entry_id != entry_id]
+        if not _remaining:
+            for _svc_name in (hass.data.get(DOMAIN, {}) or {}).get(
+                    "_registered_services", []) or []:
+                try:
+                    hass.services.async_remove(DOMAIN, _svc_name)
+                except Exception as _svc_err:  # noqa: BLE001
+                    _LOGGER.debug("注销服务 %s 失败（可能未注册）: %s",
+                                  _svc_name, _svc_err)
+            _LOGGER.info("全部条目已卸载，域级服务已注销")
+    except Exception as e:  # noqa: BLE001
+        _LOGGER.debug("服务注销检查失败（不影响卸载结果）: %s", e)
 
     return unload_successful
 

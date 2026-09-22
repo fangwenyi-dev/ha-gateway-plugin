@@ -286,6 +286,16 @@ class WindowControllerCover(WindowControllerBaseEntity, RestoreEntity, CoverEnti
         attrs["position_capable"] = self._position_capable
         device = self.device_manager.get_device(self.device_sn)
         if device:
+            # v1.7.33（全量审计）：位置/状态属性此前不受时效闸约束——
+            # current_cover_position（上方）有 15 分钟闸，extra_state_attributes
+            # 无闸，失联设备于是出现「圆点灰未知 + 状态:打开 + 位置 65%」并存，
+            # 且 Web 面板滑块仍可拖。同判据收敛（None=新鲜的历史形态语义不变，
+            # 见 is_closed 处的 v1.6.19 注释）。
+            _lu = device.get("last_update")
+            if _lu and (time.time() - _lu) > SENSOR_TIMEOUT_MINUTES * 60:
+                attrs["device_status"] = DEVICE_STATUS_UNKNOWN
+                attrs["position_stale"] = True
+                return attrs
             status = device.get("status")
             if status:
                 attrs["device_status"] = status
@@ -362,8 +372,11 @@ class WindowControllerCover(WindowControllerBaseEntity, RestoreEntity, CoverEnti
         position = kwargs.get(ATTR_POSITION)
         try:
             position_int = int(position)
-        except (ValueError, TypeError, OverflowError):
-            raise HomeAssistantError(f"设置位置失败：无效的位置值 {position!r}")
+        except (ValueError, TypeError, OverflowError) as err:
+            # v1.7.33：raise ... from err——异常链保留原始原因（排障时能看出
+            # 是 "abc"/None 还是 inf 溢出），HA 日志逐层可读
+            raise HomeAssistantError(
+                f"设置位置失败：无效的位置值 {position!r}") from err
         if not 0 <= position_int <= 100:
             raise HomeAssistantError(f"设置位置失败：位置超出范围(0-100): {position_int}")
         if not self._position_capable:

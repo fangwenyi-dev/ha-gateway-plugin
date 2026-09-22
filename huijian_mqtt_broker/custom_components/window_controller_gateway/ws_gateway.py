@@ -43,6 +43,7 @@ Mosquitto@2022 与 nginx@8099，"能看到但连不上"即因 9001 无监听者�
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import logging
 import math
@@ -52,7 +53,6 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from aiohttp import WSMsgType, web
 
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
 from .const import (
@@ -76,6 +76,7 @@ from .const import (
     WS_TOKEN_MAX_LEN,
     WS_TOKEN_MIN_LEN,
 )
+from .utils import log_throttled
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -84,6 +85,8 @@ _LOGGER = logging.getLogger(__name__)
 WS_GATEWAY_DATA_KEY = "_ws_gateway"
 # HA STOP 闩锁：关机序列中 entry 逐个 unload 不得把服务器重新拉起
 WS_GATEWAY_STOPPED_KEY = "_ws_gateway_stopped"
+# HA STOP 监听句柄（v1.7.33：单例注册，防"停旧起新"路径重复登记回调）
+WS_GATEWAY_STOP_LISTENER_KEY = "_ws_gateway_stop_unsub"
 
 # set_token 校验消息——与固件 app_ws_gateway.c 逐字对齐（小程序侧按 msg 提示）
 _MSG_MISSING_NEW = "missing newToken"
@@ -99,18 +102,29 @@ def offered_subprotocols(header_value: Optional[str]) -> List[str]:
     """解析 Sec-WebSocket-Protocol 头为候选列表。
 
     固件以 strtok_r(", ") 拆分（',' 与 ' ' 任一均为分隔符），逐字对齐：
-    按 ',' 拆分后 strip 空白（含 ' '）。
+    只认 ',' 与 ' ' 两种分隔符。
+
+    v1.7.33（全量审计）：旧实现 `.replace(",", " ").split()` 按**任意空白**
+    拆分（\\t \\n \\v \\f 皆断），比固件宽一档，也比 aiohttp 自身协商宽
+    （aiohttp 按 ',' 拆再 strip）——出现"插件判命中放行、aiohttp 不回显
+    子协议"的静默分歧。收敛为 [ ,]+ 切分。
     """
     if not header_value:
         return []
-    return [p for p in header_value.replace(",", " ").split() if p]
+    return [p for p in re.split(r"[ ,]+", header_value.strip()) if p]
 
 
 def handshake_token_ok(header_value: Optional[str], token: str) -> bool:
-    """握手令牌校验：令牌为空 = 不认证放行；否则候选中须有精确匹配。"""
+    """握手令牌校验：令牌为空 = 不认证放行；否则候选中须有精确匹配。
+
+    v1.7.33（全量审计）：逐候选改 hmac.compare_digest——`token in list` 的
+    字符串相等短路比较逐字节提前返回，配合"101/401 预言机"构成时序侧信道
+    （同网段可在线枚举预共享令牌）。
+    """
     if not token:
         return True
-    return token in offered_subprotocols(header_value)
+    return any(hmac.compare_digest(cand, token)
+               for cand in offered_subprotocols(header_value))
 
 
 def token_charset_ok(token: str) -> bool:
@@ -132,7 +146,8 @@ def validate_new_token(new_token: Any, old_token: Any, current_token: str) -> Op
     if not token_charset_ok(new_token):
         return _MSG_BAD_CHARS
     auth_active = bool(current_token)
-    if auth_active and (not isinstance(old_token, str) or old_token != current_token):
+    if auth_active and (not isinstance(old_token, str)
+                        or not hmac.compare_digest(old_token, current_token)):
         return _MSG_OLD_MISMATCH
     return None
 
@@ -452,8 +467,16 @@ class WsGatewayServer:
         # 与 MQTT 链路真实状态本就不是同一件事）的网关，属行为分歧。
         # 改为对全部已注册条目发布，返回语义与固件一致 = 发布级成败；
         # 仅 broker 发布失败（send_ws_raw_004 返回 False）才算 send failed。
+        entries = self._entries_data()
+        if not entries:
+            # v1.7.33（全量审计）：零条目时旧实现循环空转、仍回 ok:true 的
+            # 假成功（小程序显示已下发、设备无动作）。control 是执行语义，
+            # 无对象可发必须如实失败——与 _cmd_pair 的"广播后恒 ok"定案
+            # （固件 P2 广播语义）不同，后者不属此列。
+            return {"type": "control_ack", "ok": False,
+                    "msg": "no gateway registered"}
         publish_failed = False
-        for _gw, edata in self._entries_data():
+        for _gw, edata in entries:
             if not await edata["mqtt_handler"].send_ws_raw_004(dev_sn, attribute, value_s):
                 publish_failed = True
         if publish_failed:
@@ -475,7 +498,13 @@ class WsGatewayServer:
                 return {"type": "pair_ack", "ok": True}
             return {"type": "pair_ack", "ok": False,
                     "msg": "gateway offline or not registered"}
-        for _gw, edata in self._entries_data():
+        entries = self._entries_data()
+        if not entries:
+            # v1.7.33（全量审计）：空集上的"广播成功"与 control 同属假成功，
+            # 如实拒绝；条目存在时仍按固件 P2 广播语义恒 ok（下方不动）。
+            return {"type": "pair_ack", "ok": False,
+                    "msg": "no gateway registered"}
+        for _gw, edata in entries:
             handler = edata["mqtt_handler"]
             try:
                 await handler.send_command(handler.gateway_sn, "start_pairing")
@@ -568,7 +597,14 @@ class WsGatewayServer:
         ②抛异常 → 回滚内存（联审 F6 定案，固件 NVS 写失败同款语义）；
         ③一个可写 enabled 条目都没命中 → 同样回滚（v1.6.19 D-F3：旧写法
         循环空转正常结束不回滚，"小程序已存新令牌、HA 重启回退旧令牌"的
-        永久 401 漂移从这条路漏出去）。"""
+        永久 401 漂移从这条路漏出去）。
+
+        v1.7.33（全量审计）：旧实现只写**第一个** enabled 条目即 break，
+        而 ws_gateway_wanted 的运行态取值同样只看第一个 enabled 条目——
+        删掉/禁用承载令牌的那个条目后，下一个条目的 options 仍是默认令牌，
+        重启静默回退、小程序侧永久 401（正是 docstring 自称已封堵的
+        "内存==持久化"之外的第四种结局）。改为写入**全部** enabled 条目。
+        """
         wrote = False
         try:
             for entry in self.hass.config_entries.async_entries(DOMAIN):
@@ -580,7 +616,6 @@ class WsGatewayServer:
                     self.hass.config_entries.async_update_entry(entry, options=options)
                     _LOGGER.info("WS 网关令牌已持久化到集成选项（条目 %s）", entry.entry_id)
                 wrote = True
-                break
         except Exception as e:  # noqa: BLE001
             _LOGGER.error("WS 令牌持久化失败，回滚为旧令牌（与固件 NVS 写失败语义一致）: %s", e)
             if self._token == new_token:
@@ -637,21 +672,40 @@ class WsGatewayServer:
         dead = []
         text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
         for ws in list(self._clients):
+            if getattr(ws, "closed", False):
+                dead.append(ws)
+                continue
             try:
                 await ws.send_str(text)
             except Exception:  # noqa: BLE001 - 发送失败按断连处理
                 dead.append(ws)
         for ws in dead:
             self._clients.discard(ws)
+            # v1.7.33（全量审计）：仅丢引用不关连接，槽位提前释放而 socket
+            # 最长再活 300s（要等它自己的空闲超时）——短时"活连接数＞上限"，
+            # 且该连接仍能收帧、继续占宿主 fd。明确 close，让会话立刻收口。
+            try:
+                self.hass.async_create_task(ws.close())
+            except Exception:  # noqa: BLE001
+                pass
 
     # ---------- aiohttp 连接处理 ----------
 
     async def _handle_ws(self, request: web.Request) -> web.WebSocketResponse:
+        # v1.7.33（全量审计）：停机/关闭窗口的准入闸。async_stop 先快照清空
+        # _clients 再 await 关连接，其间监听 socket 仍开着——落在该窗口的
+        # 握手会拿到一个"已在停止"的服务器（继续完整服务 control/pair/
+        # set_token 最长 300s，且此后无人踢它；runner.cleanup 还要等它）。
+        if self._stopping:
+            return web.Response(status=503, text="shutting down")
         header = request.headers.get("Sec-WebSocket-Protocol")
         if not handshake_token_ok(header, self._token):
             # 固件语义：拒绝握手（不返回 101）。aiohttp 层用 401 显式表达。
-            _LOGGER.warning("WS 握手令牌校验失败，拒绝连接（来源 %s）",
-                            request.remote)
+            # v1.7.33：按来源节流，防未认证方无限写 HA 日志（刷掉环形缓冲）
+            log_throttled(
+                self.hass, "_ws_handshake_denied_logged", str(request.remote),
+                600.0, _LOGGER.warning,
+                "WS 握手令牌校验失败，拒绝连接（来源 %s）", request.remote)
             return web.Response(status=401, text="unauthorized")
         if len(self._clients) + self._pending_handshakes >= WS_MAX_CLIENTS:
             _LOGGER.warning("WS 连接数已满（%d），拒绝新连接", WS_MAX_CLIENTS)
@@ -726,17 +780,32 @@ class WsGatewayServer:
         存活）。固件 recv_wait_timeout 是 socket 任意帧复位，此处为已知的
         语义偏差，接入非小程序客户端前须知；小程序侧 60s get_gateways 是
         唯一被联审的保活通道。
+
+        v1.7.33（全量审计）：**实现**与上述口径此前不符——旧代码每轮
+        `wait_for(ws.receive(), 300)` 重新起表，任何让 receive() 返回的帧
+        （含 BINARY/空 TEXT）都复位计时，而 docstring 声称只认业务 TEXT。
+        默认令牌公开在本仓，同网段主机握手后每 299s 发 1 字节二进制帧即可
+        永久占槽（WS_MAX_CLIENTS=4 被占满，真小程序恒 503）。改为显式
+        deadline：只在业务 TEXT 分支续期；`_stopping` 时主动退出。
         """
-        while not ws.closed:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + WS_RECV_TIMEOUT_SECONDS
+        while not ws.closed and not self._stopping:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                _LOGGER.info("WS 空闲超 %ds，断开连接", WS_RECV_TIMEOUT_SECONDS)
+                return
             try:
-                msg = await asyncio.wait_for(
-                    ws.receive(), timeout=WS_RECV_TIMEOUT_SECONDS
-                )
+                msg = await asyncio.wait_for(ws.receive(), timeout=remaining)
             except asyncio.TimeoutError:
                 _LOGGER.info("WS 空闲超 %ds，断开连接", WS_RECV_TIMEOUT_SECONDS)
                 return
             if msg.type in (WSMsgType.CLOSE, WSMsgType.CLOSING, WSMsgType.CLOSED,
                             WSMsgType.ERROR):
+                if msg.type is WSMsgType.ERROR and msg.data is not None:
+                    # v1.7.33：ERROR 帧是唯一的断连归因通道（1009 帧超限等），
+                    # 旧实现裸 return 把它丢了，现场只能猜。
+                    _LOGGER.info("WS 错误帧断开: %s", msg.data)
                 return
             if msg.type == WSMsgType.TEXT:
                 if len(msg.data.encode("utf-8", errors="replace")) > WS_MAX_FRAME_BYTES:
@@ -748,7 +817,8 @@ class WsGatewayServer:
                         pass
                     return
                 if not msg.data:
-                    continue  # 空帧：固件忽略
+                    continue  # 空帧：固件忽略（不计业务活动）
+                deadline = loop.time() + WS_RECV_TIMEOUT_SECONDS  # 业务帧续期
                 try:
                     resp = await self.handle_json_message(msg.data)
                 except Exception as e:  # noqa: BLE001 - 单条命令异常不断会话
@@ -761,10 +831,9 @@ class WsGatewayServer:
                         )
                     except Exception:  # noqa: BLE001
                         return
-            # BINARY/PING/PONG：固件非文本帧消费丢弃。注意（v1.7.31 B-3）：
-            # PING 的 PONG 由 aiohttp 协议层自动完成、**不经过本循环**，
-            # 不重置上方 300s 空闲计时——只有 TEXT 业务帧保活（详见
-            # _session docstring）。
+            # BINARY/PING/PONG：固件非文本帧消费丢弃。v1.7.33 起**不再**为
+            # 这类帧续期（B-3 口径即"只认业务 TEXT"）；PING 的 PONG 由 aiohttp
+            # 协议层自动完成、不经过本循环。
 
 
 # ==================== 生命周期入口（__init__.py 调用） ====================
@@ -797,6 +866,7 @@ def ws_gateway_wanted(hass: HomeAssistant) -> Optional[Tuple[int, str]]:
         if not isinstance(token, str):
             token = DEFAULT_WS_GATEWAY_TOKEN
         elif token and (not token_charset_ok(token)
+                        or len(token) < WS_TOKEN_MIN_LEN
                         or len(token) >= WS_TOKEN_MAX_LEN):
             # v1.7.31（B-4，与 port 侧 BUG-7 同威胁模型补全）：子协议头按
             # ",\s" 拆分候选——含空白/逗号的令牌是不可满足握手（对任何客户端
@@ -804,6 +874,9 @@ def ws_gateway_wanted(hass: HomeAssistant) -> Optional[Tuple[int, str]]:
             # HTTP 值；≥63 为固件判式上限。表单层与 set_token 层均已拦，
             # Storage 手改/迁移残留不走表单 ⇒ 运行时同样回退默认+告警。
             # 空串=不认证是 D-1 合法形态，不在回退之列。
+            # v1.7.33：补 < WS_TOKEN_MIN_LEN——短令牌（storage 手改/迁移残留
+            # 可写入 3 字符）在线枚举成本极低，破之即得物理开窗能力；表单层
+            # 早有下限判据，运行态此前漏判（判据分叉）。
             _LOGGER.warning(
                 "WS 网关令牌含 RFC6455 子协议不安全字符或超长（不可满足握手"
                 "=全部客户端永久 401），已回退默认令牌——若小程序侧存有"
@@ -916,10 +989,16 @@ async def async_ensure_ws_gateway(hass: HomeAssistant) -> None:
     async def _on_ha_stop(_event) -> None:
         await async_stop_ws_gateway(hass)
 
-    try:
-        hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _on_ha_stop)
-    except Exception as e:  # noqa: BLE001 - 无 bus 环境（测试桩）不应阻断服务器
-        _LOGGER.debug("注册 WS 网关 STOP 监听失败: %s", e)
+    # v1.7.33（全量审计）：STOP 监听单例——旧实现每次 async_start（改端口/
+    # 改令牌的"停旧起新"、启动失败重试）都新注册一个 listen_once 且句柄不存
+    # 不摘，停机时按启动次数重复执行 stop（幂等但串行），回调集合无界增长；
+    # 与 _attach_listeners/_detach_listeners 的成对生命周期不对称。
+    if not domain_data.get(WS_GATEWAY_STOP_LISTENER_KEY):
+        try:
+            domain_data[WS_GATEWAY_STOP_LISTENER_KEY] = hass.bus.async_listen_once(
+                EVENT_HOMEASSISTANT_STOP, _on_ha_stop)
+        except Exception as e:  # noqa: BLE001 - 无 bus 环境（测试桩）不应阻断服务器
+            _LOGGER.debug("注册 WS 网关 STOP 监听失败: %s", e)
 
 
 async def async_stop_ws_gateway(hass: HomeAssistant) -> None:

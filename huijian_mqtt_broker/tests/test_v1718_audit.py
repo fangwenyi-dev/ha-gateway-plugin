@@ -12,7 +12,6 @@ BUG-14(_norm_cmd_id bool)、BUG-16(WS 脏数值拒绝)。
 import asyncio
 import json
 import math
-import types
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -354,7 +353,14 @@ class TestWsLifecycle:
         # BUG-16：inf/nan/1e+308 str() 成设备不可解析线值还回 ok=true 假成功
         s = wg.WsGatewayServer.__new__(wg.WsGatewayServer)
         s._device_gateway = lambda sn: None
-        s._entries_data = lambda: []
+        # v1.7.33：零条目广播已在审计批改为**如实** ok:false（空集假成功面），
+        # 本用例只验线值白名单（BUG-16），故给一个可发布条目保持原断言语义；
+        # 空集新语义由 tests/test_v1733_honest_ack.py 单独钉桩。
+        class _H:
+            async def send_ws_raw_004(self, dev, attr, val):
+                return True
+
+        s._entries_data = lambda: [("G", {"mqtt_handler": _H()})]
         for bad in (math.inf, -math.inf, math.nan, 1e308):
             out = await s._cmd_control({"gwSn": "G", "devSn": "D",
                                         "attribute": "position", "value": bad})

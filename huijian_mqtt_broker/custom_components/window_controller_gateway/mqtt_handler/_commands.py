@@ -11,7 +11,6 @@ from homeassistant.components import mqtt
 from ..utils import is_mqtt_loaded
 from ..utils import is_mqtt_connected
 from ..const import (
-    GATEWAY_TIMEOUT_SECONDS,
     MAX_COMMAND_ID,
     PROTOCOL_HEAD,
     DEVICE_TYPE_CURTAIN_CTR,

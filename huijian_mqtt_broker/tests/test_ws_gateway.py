@@ -24,7 +24,6 @@ from custom_components.window_controller_gateway.ws_gateway import (
     offered_subprotocols,
     validate_new_token,
     ws_gateway_wanted,
-    WS_GATEWAY_DATA_KEY,
     _MSG_BAD_CHARS,
     _MSG_MISSING_NEW,
     _MSG_OLD_MISMATCH,

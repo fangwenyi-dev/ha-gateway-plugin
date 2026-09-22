@@ -72,7 +72,19 @@ jobs:
           # 覆盖。改 compileall 递归编译，永不复现"目录变子包→门静默缩窄"。
           python3 -m compileall -q huijian_mqtt_broker/custom_components/window_controller_gateway
           python3 -m py_compile huijian_mqtt_broker/mdns_publisher.py
+          # v1.7.33（全量审计）：补机械化 lint 门。此前 CI 只有语法+测试，
+          # 未用导入/未用变量/裸 except/异常链缺失等一律无人拦（审计实测生产
+          # 侧 5 处 F401 + 1 处 B904，测试侧 11 处）。存量已清零，本门零成本。
+          pip install -q ruff
+          ruff check --select F,E9,B --ignore B008,B905               huijian_mqtt_broker/custom_components               huijian_mqtt_broker/tests               huijian_mqtt_broker/mdns_publisher.py               huijian_mqtt_broker/gateway_discovery_proxy.py
           python3 -m pytest huijian_mqtt_broker/tests -q
+
+      - name: JS syntax gate
+        run: |
+          # v1.7.33（全量审计）：79KB 手写前端此前无机械语法门——一个花括号
+          # 不配对可直发 Release 且浏览器整页白屏（仓库唯一前端结构检查只是
+          # onclick↔函数名对账）。node 在 ubuntu-latest 预装。
+          for f in huijian_mqtt_broker/www/js/*.js; do node --check "$f"; done
 
       - name: Verify version consistency
         run: |
@@ -391,6 +403,9 @@ jobs:
         run: bash huijian_mqtt_broker/tests/e2e/run_e2e.sh
 
   # ========== 4. Gitee Release 自动补发 —— v1.7.24 起整段移除 ==========
-  # 用户裁定（2026-09-16）：网关仓（ha-gateway-plugin）此后只推 GitHub，
-  # 不再双推 Gitee；Gitee 镜像仓与 Release 冻结在 v1.7.24（41a1506）。
-  # 本 job（v1.6.21 引入的幂等自动补发）随之下线；如需恢复，git 历史可查。
+  # v1.7.33：本节注释曾写"用户裁定（2026-09-16）此后只推 GitHub"——该裁定
+  # 已于 2026-09-17 被推翻（见 CLAUDE.md 推送与验证流程）：停推代价实证是
+  # **已配置 Gitee 源的 HA 实例商店 latest 永久停在 1.7.24、升级提示静默失效**，
+  # 故每次发版必须双推 main+tag（Gitee push 用系统 git 或一次性 token 注入）。
+  # gitee-release job 仍是墓碑（不自动建 Gitee Release；商店只读仓库内
+  # config.yaml，不受影响，但 Web UI 升级徽章并集源会因此偏旧）。

@@ -262,6 +262,16 @@
                 }
                 let html = '';
                 for (const entry of entries) {
+                    // v1.7.33：与 :176-177 的 MQTT 条目同口径——禁用条目不再当
+                    // 正常网关渲染（旧版照常配控制按钮，点下去只会 HA 4xx，
+                    // 徽标恒"未知"而用户无从知道是条目被禁用）。
+                    if (entry.disabled_by || (entry.state && entry.state !== 'loaded')) {
+                        const gwSn0 = (entry.data && entry.data.gateway_sn) || '未知';
+                        html += renderGatewayDisabled(entry.title || '慧尖网关', gwSn0,
+                                                      entry.entry_id, entry.state,
+                                                      entry.disabled_by);
+                        continue;
+                    }
                     const gwSn = (entry.data && entry.data.gateway_sn) || '未知';
                     const gwName = entry.title || '慧尖网关';
                     html += renderGateway(gwName, gwSn, entry.entry_id);
@@ -317,14 +327,40 @@
                 '</div>';
         }
 
+        function renderGatewayDisabled(name, sn, entryId, state, disabledBy) {
+            // v1.7.33：被禁用/未 loaded 的条目不当正常网关渲染——旧版照常给
+            // 配对/状态按钮，点下去只会 HA 4xx，徽标恒"未知"而用户无从知道
+            // 根因是条目被禁用（同页 MQTT 条目早已过滤 !disabled_by）。
+            let why = '未知';
+            if (disabledBy === 'user') why = '已被用户禁用';
+            else if (disabledBy) why = '已被 ' + disabledBy + ' 禁用';
+            else if (state && state !== 'loaded') why = '状态: ' + state;
+            return '<div class="gateway-item" id="gw-' + escapeHtml(entryId) + '">' +
+                '<div class="gateway-header"><div class="gw-id"><span class="gw-avatar">📡</span><div class="gw-meta">' +
+                '<span class="gateway-name">' + escapeHtml(name) + '</span>' +
+                '<span class="gateway-sn">SN: ' + escapeHtml(sn) + '</span>' +
+                '</div></div><div style="display:flex;align-items:center;gap:8px;">' +
+                '<span class="badge badge-gray" title="条目未启用：' + escapeHtml(why) +
+                '——请到 设置→设备与服务 启用后再操作">' + escapeHtml(why) + '</span>' +
+                '</div></div>' +
+                '<div class="device-list" id="devices-' + escapeHtml(entryId) +
+                '"><p class="empty-hint">条目未启用，暂不可用</p></div></div>';
+        }
+
         async function loadGatewayDevices(entryId, gatewaySn) {
-            const deviceListEl = document.getElementById('devices-' + entryId);
-            const statusEl = document.getElementById('gw-status-' + entryId);
+            // v1.7.33：let + await 后重取——手动刷新/静默刷新/配对后重建会在
+            // 让出点整体重建容器，旧引用写回落在孤儿节点上（列表停在 spinner
+            // 直到下一轮 30s 自愈）。每次 await 后按 id 重取，取不到即放弃本轮。
+            let deviceListEl = document.getElementById('devices-' + entryId);
+            let statusEl = document.getElementById('gw-status-' + entryId);
             if (!deviceListEl) return;
             try {
                 const resp = await haApi('/window_controller_gateway/devices?config_entry_id=' + entryId);
                 if (!resp.ok) throw new Error('HA API ' + resp.status);
                 const devices = await resp.json();
+                deviceListEl = document.getElementById('devices-' + entryId);
+                statusEl = document.getElementById('gw-status-' + entryId);
+                if (!deviceListEl) return;
                 if (!devices || devices.length === 0) {
                     deviceListEl.innerHTML = '<p class="empty-hint">暂无子设备，点击「配对」按钮添加</p>';
                     // v1.7.12（第 6 轮审计 M-1）：'offline' 红标改 'unknown'——
@@ -356,6 +392,9 @@
                     const stateResp = await haApi('/states');
                     if (!stateResp.ok) throw new Error('HA API ' + stateResp.status);
                     const states = await stateResp.json();
+                    deviceListEl = document.getElementById('devices-' + entryId);
+                    statusEl = document.getElementById('gw-status-' + entryId);
+                    if (!deviceListEl) return;
                     // 网关在线状态：优先用 API 的 gateway_online 字段
                     // （mqtt_handler.connected 实时值 = 收到网关上报即在线），
                     // 不依赖 binary_sensor 实体（实体未创建/匹配失败时不再显示"未知"）。
@@ -455,6 +494,9 @@
                     const stateResp = await haApi('/states');
                     if (!stateResp.ok) return;
                     const states = await stateResp.json();
+                    deviceListEl = document.getElementById('devices-' + entryId);
+                    statusEl = document.getElementById('gw-status-' + entryId);
+                    if (!deviceListEl) return;
                     let gwStatus = 'unknown';
                     if (gwDevice && typeof gwDevice.gateway_online === 'boolean') {
                         gwStatus = gwDevice.gateway_online ? 'online' : 'offline';
@@ -499,7 +541,9 @@
             const sn = deviceSnOf(dev) || '未知';
             const supportsWindLock = sn.startsWith('5005');
             const coverEntity = findEntityState(dev, 'cover', 'cover', states);
-            const onlineEntity = findEntityState(dev, 'binary_sensor', 'online', states);
+            // v1.7.33：移除 online 实体判据——子设备永无 binary_sensor online
+            // 实体（全集成唯一 online 传感器挂在网关设备上），该分支恒假；
+            // 圆点真值源在 loadDeviceState（v1.7.31 D-1：status 传感器）。
             const batteryEntity = findEntityState(dev, 'sensor', 'battery', states);
             const speedEntity = findEntityState(dev, 'number', 'speed', states);
             const strengthEntity = findEntityState(dev, 'number', 'strength', states);
@@ -509,13 +553,10 @@
             const safeSn = escapeHtml(sn);
             const safeDevId = escapeHtml(devId);
             const safeEntryId = escapeHtml(entryId);
-            const isOnline = onlineEntity ? (onlineEntity.state === 'on') : false;
             let batteryText = '';
             if (batteryEntity && batteryEntity.state && batteryEntity.state !== 'unknown' && batteryEntity.state !== 'unavailable') {
                 const bUnit = batteryEntity.attributes.unit_of_measurement || 'V';
                 batteryText = escapeHtml(batteryEntity.state + bUnit);
-            } else if (coverEntity && coverEntity.attributes.voltage) {
-                batteryText = escapeHtml(coverEntity.attributes.voltage) + 'V';
             }
             const speedMin = speedEntity && speedEntity.attributes.min !== undefined ? speedEntity.attributes.min : 0;
             const speedMax = speedEntity && speedEntity.attributes.max !== undefined ? speedEntity.attributes.max : 100;
@@ -530,7 +571,7 @@
             let html = '<div class="device-item" id="dev-' + safeDevId + '">' +
                 '<div class="device-top">' +
                 '<div class="device-info"><div class="device-name dev-name">' +
-                '<span class="dev-dot ' + (onlineEntity ? (isOnline ? 'dot-online' : 'dot-offline') : 'dot-unknown') + '" id="dev-dot-' + safeDevId + '"></span>' +
+                '<span class="dev-dot dot-unknown" id="dev-dot-' + safeDevId + '"></span>' +
                 safeName + '</div>' +
                 '<div class="device-sn">SN: ' + safeSn + '</div>' +
                 '<div class="device-status" id="dev-state-' + safeDevId + '">状态: 加载中' + (batteryText ? ' | 电压: ' + batteryText : '') + '</div></div>' +
@@ -550,13 +591,26 @@
             }
             html += '</div>';
 
-            // === 滑块区：位置 / 速度 / 力度 ===
-            html += '<div class="slider-group">' +
-                '<div class="slider-row"><span class="slider-label">位置</span>' +
-                '<input type="range" class="position-slider" min="0" max="100" value="' + (currentPos === '--' ? 0 : escapeHtml(currentPos)) + '"' +
-                ' oninput="this.nextElementSibling.textContent=this.value+\'%\'"' +
-                ' onchange="controlDevicePosition(\'' + jsAttr(devId) + '\', this.value, \'' + jsAttr(entryId) + '\')">' +
-                '<span class="slider-value position-value">' + escapeHtml(currentPos) + (currentPos === '--' ? '' : '%') + '</span></div>' +
+            // === 滑块区：位置（按机型能力渲染）/ 速度 / 力度 ===
+            // v1.7.33（全量审计）：位置滑块此前无条件渲染且 min/max 硬编码
+            // 0-100，无视 cover.py 自 v1.7.21 起暴露的 attributes.position_capable
+            // ——无百分比能力机型（如 5002）上滑块可拖、指令打到 LoRa 空口、
+            // 服务回 200 而设备不动（假成功）。服务侧同批已补能力闸，此处
+            // 消掉"可拖的假滑块"，能力属性成为唯一判据。
+            const posCapable = !!(coverEntity && coverEntity.attributes
+                && coverEntity.attributes.position_capable);
+            html += '<div class="slider-group">';
+            if (posCapable) {
+                html += '<div class="slider-row"><span class="slider-label">位置</span>' +
+                    '<input type="range" class="position-slider" min="0" max="100" value="' + (currentPos === '--' ? 0 : escapeHtml(currentPos)) + '"' +
+                    ' oninput="this.nextElementSibling.textContent=this.value+\'%\'"' +
+                    ' onchange="controlDevicePosition(\'' + jsAttr(devId) + '\', this.value, \'' + jsAttr(entryId) + '\')">' +
+                    '<span class="slider-value position-value">' + escapeHtml(currentPos) + (currentPos === '--' ? '' : '%') + '</span></div>';
+            } else {
+                html += '<div class="slider-row"><span class="slider-label">位置</span>' +
+                    '<span class="slider-value position-na" title="该机型不支持百分比定位（position_capable=false）">不支持百分比定位</span></div>';
+            }
+            html +=
                 '<div class="slider-row"><span class="slider-label">速度</span>' +
                 '<input type="range" class="speed-slider" min="' + escapeHtml(speedMin) + '" max="' + escapeHtml(speedMax) + '" value="' + escapeHtml(speedValid ? speedEntity.state : speedMin) + '"' +
                 ' oninput="this.nextElementSibling.textContent=this.value' + (speedUnit ? '+\'' + jsAttr(speedUnit) + '\'' : '') + '"' +
@@ -867,12 +921,36 @@
                 // 实际服务为 window_controller_gateway.set_position）
                 const coverEntity = findEntityByUniqueId(dev, 'cover', 'cover');
                 if (coverEntity) {
-                    // 集成未注册 cover.set_cover_position（cover.py 无 SET_POSITION 特性标志），
-                    // 实际服务为 window_controller_gateway.set_position：字段 device_id（设备注册表ID）+ position
+                    // v1.7.33（全量审计）：能力前置判——从 HA states 读 cover 的
+                    // attributes.position_capable（后端服务侧已同批加闸，这里把
+                    // 失败提前到点击时，省一次必然 500 的往返并给出可读原因）。
+                    // 读失败按放行处理，最终仍由服务侧闸兜底。
+                    try {
+                        const stResp = await haApi('/states/' + encodeURIComponent(coverEntity.entity_id));
+                        if (stResp.ok) {
+                            const st = await stResp.json();
+                            const cap = st && st.attributes && st.attributes.position_capable;
+                            if (cap === false) {
+                                showToast('该机型不支持百分比定位', 'warn');
+                                return;
+                            }
+                        }
+                    } catch (capErr) { /* 能力探测失败不阻断：服务侧闸为准 */ }
+                    // 实际服务为 window_controller_gateway.set_position：
+                    // 字段 device_id（设备注册表ID）+ position
                     const r = await haApi('/services/window_controller_gateway/set_position', 'POST', {
                         device_id: deviceId, position: pos
                     });
-                    if (!r.ok) throw new Error('HA API ' + r.status);
+                    if (!r.ok) {
+                        // v1.7.33：失败时带出服务端原因（如"机型不支持百分比
+                        // 定位"），不再只回裸状态码。showToast 走 textContent，无注入面。
+                        let detail = 'HA API ' + r.status;
+                        try {
+                            const body = await r.text();
+                            if (body) detail = body.length > 160 ? body.slice(0, 160) : body;
+                        } catch (readErr) { /* 读不到体则退回状态码 */ }
+                        throw new Error(detail);
+                    }
                     showToast('位置设置: ' + pos + '%', 'ok');
                 } else {
                     showToast('未找到设备 cover 实体', 'warn');
@@ -984,9 +1062,9 @@
                         '<div class="update-title">发现新版本 v' + escapeHtml(latestVersion) + '</div>' +
                         '<div class="update-desc">当前版本 v' + CURRENT_VERSION + '</div></div>' +
                         '<button class="btn btn-success" onclick="doUpgrade()">去加载项页面更新</button>' +
-                        '<a class="btn btn-primary" href="' + escapeHtml(latestRelease.html_url) + '" target="_blank">查看详情</a></div>' +
-                        '<div style="margin-top:10px;font-size:12px;color:var(--text-muted);white-space:pre-wrap;">' + escapeHtml(truncatedBody) + '</div>' +
-                        '<div style="margin-top:8px;font-size:12px;color:var(--text-muted);">' +
+                        '<a class="btn btn-primary" href="' + safeReleaseUrl(latestRelease.html_url) + '" target="_blank" rel="noopener noreferrer">查看详情</a></div>' +
+                        '<div style="margin-top:10px;font-size:12px;color:var(--text-secondary);white-space:pre-wrap;">' + escapeHtml(truncatedBody) + '</div>' +
+                        '<div style="margin-top:8px;font-size:12px;color:var(--text-secondary);">' +
                         '提示：Supervisor 安全设计禁止插件通过 API 自我更新（一键升级会返回 403/400）。' +
                         '请使用上方按钮跳转到 Supervisor 加载项页面，以管理员身份点击「更新」。' +
                         '<br>若跳转后提示「App huijian_mqtt_broker does not exist in the store」，' +
@@ -1088,10 +1166,6 @@
             return null;
         }
 
-        function findEntityByDomain(dev, domain) {
-            if (!dev || !dev.entities || !dev.entities.length) return null;
-            return dev.entities.find(e => e.domain === domain) || null;
-        }
 
         // 删除按钮实体特殊归属：GatewayDeviceRemoveButton.device_info 用网关 SN
         // （gateway.py identifiers={(DOMAIN, gateway_sn)}），实体挂在网关设备下，
@@ -1150,6 +1224,15 @@
         // 仅限事件属性；文本节点仍然只用 escapeHtml。
         function jsAttr(v) {
             return escapeHtml(jsQuote(v));
+        }
+
+        // v1.7.33：Release 链接协议白名单——escapeHtml 只挡引号逃逸，挡不住
+        // `javascript:`/`data:` 协议（上游被劫持/镜像源被投毒时点击即同源执行）。
+        // 非 https 的 github/gitee 地址一律不渲染为可点链接。
+        function safeReleaseUrl(url) {
+            const s = String(url == null ? '' : url);
+            if (/^https:\/\/(github\.com|gitee\.com)\//.test(s)) return escapeHtml(s);
+            return '#';
         }
 
         function showToast(message, type) {

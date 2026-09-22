@@ -73,7 +73,11 @@ def entry_state_for_sn(hass: HomeAssistant, gateway_sn: Any) -> str:
     disabled_hit = False
     try:
         entries = hass.config_entries.async_entries(DOMAIN)
-    except Exception:  # noqa: BLE001 — 判定面炸穿按 none（不阻断止血主语义）
+    except Exception as e:  # noqa: BLE001 — 判定面炸穿按 none（不阻断止血主语义）
+        # v1.7.33（全量审计）：兜底不得无声——误判 none 会对已配置/已禁用网关
+        # 重复弹发现卡，静默断链无从归因。节流留痕（不阻断止血主语义）。
+        log_throttled(hass, "_entry_state_err_logged", "entries", 600.0,
+                      _LOGGER.warning, "条目状态判定读取失败，按 none 处理: %s", e)
         return "none"
     target = str(gateway_sn or "").lower()
     for e in entries:
@@ -94,9 +98,16 @@ def log_throttled(hass: HomeAssistant, bucket: str, key: str, ttl: float,
     TTL 窗内同 key 只放行一条——5s 上报风暴下"必响的留痕"不得刷屏（0917
     取证铁律要求 WARNING+ 可见与不刷屏的平衡点，同 _ear_promotion_watched
     去重窗哲学）。dict 过期即清，容量随活跃 key 数有界。
+
+    v1.7.33：宿主 data 面不可用（测试替身/极端形态）时退化为直接打日志，
+    绝不因为"留痕工具本身"把主流程炸掉——留痕是旁路，不是前置条件。
     """
-    runtime = hass.data.setdefault(DOMAIN, {})
-    seen = runtime.setdefault(bucket, {})
+    try:
+        runtime = hass.data.setdefault(DOMAIN, {})
+        seen = runtime.setdefault(bucket, {})
+    except Exception:  # noqa: BLE001
+        log_fn(msg, *args, **kwargs)
+        return
     now = time.monotonic()
     for stale in [k for k, ts in seen.items() if now - ts > ttl]:
         seen.pop(stale, None)
@@ -157,8 +168,37 @@ async def async_ack_gateway_001(hass: HomeAssistant, gateway_sn: str,
 
 EAR_ACK_CLAIM_TTL = 30.0
 EAR_ACK_CLAIM_MAX = 256
+# 入站报文尺寸上限（协议合法帧远小于此：最大 002 全量设备列表也仅数 KB）
+EAR_INBOUND_MAX_BYTES = 64 * 1024
 EAR_PROMOTION_WATCH_SECONDS = 30.0
 EAR_PROMOTION_WATCH_LOG_TTL = 600.0
+
+
+def ear_ack_release(hass: HomeAssistant, gateway_sn: str, msg_id: Any) -> None:
+    """撤销一枚代答认领（v1.7.33 全量审计）。
+
+    发布失败时必须撤销：否则"该答而没答成"的 (sn,id) 会在 TTL 内对所有耳朵
+    静默抑制——固件 5s 重发的同 id 请求最长 30s 拿不到代答（6 次），且顺带
+    跳过转正看守，现场只见"网关不出现"。撤销后下一次重发即可重新认领发布。
+    """
+    runtime = hass.data.get(DOMAIN) or {}
+    claims = runtime.get("_ear_ack_claims") or {}
+    claims.pop((str(gateway_sn).lower(), str(msg_id)), None)
+
+
+def inbound_payload_ok(msg) -> bool:
+    """入站 MQTT 报文尺寸闸（v1.6.19 A-LOW7 定案，v1.7.33 上收双耳共用）。
+
+    旧实现只在 `_protocol` 耳的闭包里做，等待态条目的心跳耳（干净主机首配
+    形态下**唯一**的应答者）直接 json.loads 全量 payload——mosquitto 默认
+    不限 message_size_limit，LAN 上任一可连 2022 的客户端 publish 一条
+    50-100MB 的 rpt_rsp 就在事件循环线程卡死整个 HA。
+    payload 非常规类型时放行（交给下游既有归一/兜底流程，不在闸上抛）。
+    """
+    try:
+        return len(msg.payload) <= EAR_INBOUND_MAX_BYTES
+    except Exception:  # noqa: BLE001
+        return True
 
 
 def ear_ack_claim(hass: HomeAssistant, gateway_sn: str, msg_id: Any) -> bool:
@@ -260,6 +300,10 @@ async def async_ear_ack_001_arbitrated(hass: HomeAssistant, gateway_sn: str,
     ok = await async_ack_gateway_001(hass, gateway_sn, msg_id)
     if ok:
         _watch_ear_promotion(hass, gateway_sn)
+    else:
+        # v1.7.33（全量审计）：发布失败必须撤销认领——否则固件 5s 重发的同
+        # id 请求在 TTL 内被全体耳朵抑制，止血目标反而被放大成 6 次不应答。
+        ear_ack_release(hass, gateway_sn, msg_id)
     return ok
 
 
@@ -379,7 +423,12 @@ def via_device_kwargs(device_registry, gateway_sn) -> Dict[str, Any]:
     禁止直接写 ``via_device=`` 关键字实参（AST 守卫反钉）。
     """
     if _supports_via_device_id(device_registry.async_get_or_create):
-        return {"via_device_id": resolve_via_device_id(device_registry, gateway_sn)}
+        # v1.7.33（全量审计）：父网关未注册时**省略**该参数而非显式传 None。
+        # registry 契约里 None=清空归属、缺省(Undefined)=不改——旧实现传 None，
+        # 首启顺序竞态（网关条目尚未落地）下会把已存在子设备改挂关系抹掉
+        # （设备详情页层级丢失，async_remove_entry 的 get_via_device_id 反查失效）。
+        resolved = resolve_via_device_id(device_registry, gateway_sn)
+        return {"via_device_id": resolved} if resolved else {}
     return {"via_device": (DOMAIN, gateway_sn)}
 
 
@@ -518,7 +567,7 @@ def find_gateway_by_device_id(hass: Any, device_id: str) -> Tuple[Optional[Dict[
         _LOGGER.error("服务调用失败：集成尚未完成初始化或没有已配置的网关。")
         return None, None
 
-    for entry_id, data in hass.data[DOMAIN].items():
+    for _entry_id, data in hass.data[DOMAIN].items():
         if isinstance(data, dict):
             gateway_sn = data.get("gateway_sn", "")
             if gateway_sn and gateway_sn in device_id.split("_"):
@@ -531,13 +580,15 @@ def find_gateway_by_device_id(hass: Any, device_id: str) -> Tuple[Optional[Dict[
                 id_parts = device_id.split("_")
                 for device in devices:
                     device_sn = device.get("sn", "")
-                    if device_sn in id_parts:
+                    # v1.7.33：空串防护——device_id="" 时 id_parts=[""]，
+                    # 缺 sn 的设备条目会因 "" in [""] 命中而把命令派发到错误网关
+                    if device_sn and device_sn in id_parts:
                         return data, gateway_sn
     
     # 兜底：device_id 可能是 HA 设备注册表ID（UUID）
     gateway_sn = _resolve_domain_identifier(hass, device_id)
     if gateway_sn:
-        for entry_id, data in hass.data[DOMAIN].items():
+        for _entry_id, data in hass.data[DOMAIN].items():
             if isinstance(data, dict) and data.get("gateway_sn", "").lower() == gateway_sn.lower():
                 return data, gateway_sn
         # v1.7.12（第 6 轮审计 E-10）：用户从**子设备**详情页复制"设备 ID"
@@ -552,7 +603,7 @@ def find_gateway_by_device_id(hass: Any, device_id: str) -> Tuple[Optional[Dict[
                     mapped = v
                     break
         if mapped:
-            for entry_id, data in hass.data[DOMAIN].items():
+            for _entry_id, data in hass.data[DOMAIN].items():
                 if (isinstance(data, dict)
                         and str(data.get("gateway_sn", "")).lower()
                         == str(mapped).lower()):
@@ -575,7 +626,7 @@ def find_device_by_device_id(hass: Any, device_id: str) -> Tuple[Optional[Dict[s
         _LOGGER.error("服务调用失败：集成尚未完成初始化或没有已配置的网关。")
         return None, None, None
 
-    for entry_id, data in hass.data[DOMAIN].items():
+    for _entry_id, data in hass.data[DOMAIN].items():
         if isinstance(data, dict):
             device_manager = data.get("device_manager")
             if device_manager:
@@ -583,13 +634,13 @@ def find_device_by_device_id(hass: Any, device_id: str) -> Tuple[Optional[Dict[s
                 id_parts = device_id.split("_")
                 for device in devices:
                     device_sn = device.get("sn", "")
-                    if device_sn in id_parts:
+                    if device_sn and device_sn in id_parts:   # v1.7.33：空串防护
                         return device, data, data.get("gateway_sn", "")
 
     # 兜底：device_id 可能是 HA 设备注册表ID（UUID）
     device_sn = _resolve_domain_identifier(hass, device_id)
     if device_sn:
-        for entry_id, data in hass.data[DOMAIN].items():
+        for _entry_id, data in hass.data[DOMAIN].items():
             if isinstance(data, dict):
                 device_manager = data.get("device_manager")
                 if device_manager:

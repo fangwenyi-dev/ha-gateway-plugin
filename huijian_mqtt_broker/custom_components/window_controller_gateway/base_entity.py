@@ -70,7 +70,7 @@ class WindowControllerBaseEntity:
             # 守卫：hass 可能为 None 或 DOMAIN 数据已清理（实体已移除）
             if self.hass is None or DOMAIN not in self.hass.data:
                 return self.mqtt_handler
-            for entry_id, data in self.hass.data[DOMAIN].items():
+            for _entry_id, data in self.hass.data[DOMAIN].items():
                 if isinstance(data, dict) and data.get("gateway_sn", "").lower() == current_gateway_sn.lower():
                     if "mqtt_handler" in data:
                         self._mqtt_handler_cache[current_gateway_sn] = data["mqtt_handler"]

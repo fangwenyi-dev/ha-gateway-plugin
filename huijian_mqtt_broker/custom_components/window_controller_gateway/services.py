@@ -32,6 +32,8 @@ from .const import (
     GATEWAY_PAIRING_TIMEOUT,
     POSITION_MIN,
     POSITION_MAX,
+    POSITION_CAPABLE_SN_PREFIXES,
+    DEVICE_TYPE_WINDOW_OPENER,
     COMMAND_SET_POSITION,
 )
 
@@ -225,6 +227,19 @@ async def handle_set_position(hass: HomeAssistant, call: ServiceCall) -> None:
         _LOGGER.error("未找到设备ID %s 对应的设备", device_id)
         raise ServiceValidationError(f"未找到设备ID {device_id} 对应的设备")
 
+    # v1.7.33（全量审计）：机型百分比能力闸 + 设备类型闸——与 cover.py 实体侧
+    # 同规则（"绝不把无效的 w_travel 指令打到 LoRa 空口"）。此前 Web 面板滑块/
+    # 自动化/REST 直调绕过实体侧校验：无百分比能力机型上滑块可拖、指令照发、
+    # HTTP 200 报成功而硬件无动作（假成功）。能力集合单一真源 = const。
+    _dev_sn = str(device.get("sn") or "")
+    if _dev_sn[:4] not in POSITION_CAPABLE_SN_PREFIXES:
+        _LOGGER.error("设置位置失败：机型 %s 不支持百分比定位", _dev_sn[:4] or "未知")
+        raise ServiceValidationError(
+            f"设置位置失败：机型 {_dev_sn[:4] or '未知'} 不支持百分比定位")
+    if device.get("type") and device.get("type") != DEVICE_TYPE_WINDOW_OPENER:
+        _LOGGER.error("设置位置失败：目标设备 %s 不是开窗器", _dev_sn)
+        raise ServiceValidationError("设置位置失败：目标设备不是开窗器")
+
     mqtt_handler = gateway_data.get("mqtt_handler")
     if not mqtt_handler:
         _LOGGER.error("未找到MQTT处理器")
@@ -267,7 +282,7 @@ async def handle_check_gateway_status(hass: HomeAssistant, call: ServiceCall) ->
         gateway_data, resolved_sn = find_gateway_by_device_id(hass, device_id)
     elif gateway_sn:
         # 通过 gateway_sn 直接查找
-        for entry_id, data in hass.data.get(DOMAIN, {}).items():
+        for _entry_id, data in hass.data.get(DOMAIN, {}).items():
             if isinstance(data, dict) and data.get("gateway_sn", "").lower() == gateway_sn.lower():
                 gateway_data = data
                 resolved_sn = gateway_sn
@@ -551,7 +566,8 @@ async def handle_transfer_device(hass: HomeAssistant, call: ServiceCall) -> None
 
     # 方法3：在所有设备管理器的设备列表中查找
     if not device_sn:
-        for entry_id, data in hass.data[DOMAIN].items():
+        # v1.7.33：DOMAIN 数据面缺失时不裸 KeyError（同函数上方已有守卫写法）
+        for _entry_id, data in (hass.data.get(DOMAIN) or {}).items():
             if isinstance(data, dict):
                 dm = data.get("device_manager")
                 if dm:
@@ -570,7 +586,8 @@ async def handle_transfer_device(hass: HomeAssistant, call: ServiceCall) -> None
 
     # 查找任意一个设备管理器实例来执行转移
     device_manager = None
-    for entry_id, data in hass.data[DOMAIN].items():
+    # v1.7.33：DOMAIN 数据面缺失时不裸 KeyError（同函数上方已有守卫写法）
+    for _entry_id, data in (hass.data.get(DOMAIN) or {}).items():
         if isinstance(data, dict) and data.get("device_manager"):
             device_manager = data["device_manager"]
             break
@@ -742,6 +759,14 @@ def register_services(hass: HomeAssistant) -> bool:
             })
         )
 
+        # v1.7.33（全量审计）：登记本次注册的服务名——卸载时按名注销，
+        # 防"集成卸载后服务句柄仍在注册表"（调用得到裸 KeyError/500，而非
+        # 可读的 ServiceValidationError），也顺带把重复 setup 的覆盖显性化。
+        hass.data.setdefault(DOMAIN, {})["_registered_services"] = [
+            SERVICE_START_PAIRING, SERVICE_REFRESH_DEVICES, "set_position",
+            "check_gateway_status", SERVICE_RENAME_DEVICE, SERVICE_TRANSFER_DEVICE,
+            "unignore_gateway",
+        ]
         _LOGGER.info("开窗器网关服务注册成功")
     except vol.Invalid as e:
         _LOGGER.error("服务参数模式无效: %s", e)

@@ -24,6 +24,13 @@ LICENSE text eol=lf
 # HTML 使用 LF
 *.html text eol=lf
 
+# v1.7.33：前端 JS/CSS 同步钉 LF——此前漏网，已提交 blob 带 CR
+#（git show HEAD:...huijian.js 实测），跨平台行号与 diff 噪音源。
+# 注：历史 blob 的 CR 需 `git add --renormalize` 才消除，属独立决策，
+# 本批只钉住新增/改动内容不再引入 CRLF。
+*.js text eol=lf
+*.css text eol=lf
+
 # 二进制文件
 *.png binary
 *.base64 text eol=lf

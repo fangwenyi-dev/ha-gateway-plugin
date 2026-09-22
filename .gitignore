@@ -35,3 +35,9 @@ Thumbs.db
 .gitee_token
 bridge_harness_lib.sh
 screenshots/
+
+# v1.7.33：未跟踪残留收口（防 git add . 误入库）
+.qoder-credits/
+.codegraph/
+# 误引环境变量建出的空目录树（cmd 重定向 %SystemDrive% 未展开）
+%SystemDrive%/

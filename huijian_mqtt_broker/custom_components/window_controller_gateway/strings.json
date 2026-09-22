@@ -94,7 +94,7 @@
       "invalid_sn_format": "序列号格式无效，必须至少10位字母数字",
       "already_configured": "该网关已被其他配置条目使用",
       "invalid_ws_token": "令牌无效：需 8-62 位字母/数字/下划线/连字符（留空表示不认证）",
-      "ws_port_reserved": "This port is used by the add-on itself (2022=MQTT broker / 10998=Web UI / 1883=common external broker); pick another"
+      "ws_port_reserved": "This port is used by the add-on itself (2022=MQTT broker / 10998=Web UI / 8123=Home Assistant / 1883=common external broker); pick another"
     }
   },
   "services": {
@@ -125,6 +125,10 @@
     "transfer_device": {
       "name": "转移设备",
       "description": "将单个设备从一个网关转移到另一个网关"
+    },
+    "unignore_gateway": {
+      "name": "取消忽略网关",
+      "description": "移除发现卡片上误点「忽略」的网关的忽略记录（v1.7.12 起忽略持久化跨重启，误点会导致该网关永不出卡）。取消后该网关下一次上报即重新出现发现卡片"
     }
   }
 }

@@ -9,6 +9,9 @@
 # =============================================================================
 
 set -e
+# v1.7.33（全量审计）：补 pipefail——只有 set -e 时"管道左端失败、右端成功"
+# 会被整体判成功（v1.6.4 的 cat|jq / cut|tr 两处死兜底即同族事故）。
+set -o pipefail
 
 USERNAME=$(bashio::config 'username')
 PASSWORD=$(bashio::config 'password')
@@ -482,6 +485,13 @@ done
 # 旧写法把真实报错丢了，只剩 nginx -t"配置语法正常"的假象，Web UI 静默瘫痪
 # v1.6.18：bind 失败先试一次兜底重启（宿主 80 服务重启竞态窗口），仍失败则
 # 打印占用诊断，不再只留 syntax ok 假象
+# v1.7.33（全量审计）残留风险留痕：/api/ha/ 的来源白名单当前是整段
+# 172.30.32.0/24（Supervisor/HA Core 所在网桥），而该网桥为**所有加载项
+# 容器**共用——同网段其它加载项可借本加载器的 token 访问 HA Core 全量
+# REST。收窄到具体 IP 需先在真机测出 ingress 实际源 IP（裸收紧会整站 403）。
+# 取证命令（真机执行一次）：
+#   docker exec addon_<slug> sh -c 'apk add --no-cache tcpdump >/dev/null 2>&1; #       tcpdump -ni any "tcp port 10998" -c 5'   # 观察 SYN 源地址
+echo "[Ingress] 提示: /api/ha/ 白名单=172.30.32.0/24（含同网段其它加载项）——"     "收紧前需真机确认 ingress 源 IP，见 run.sh 注释与 CHANGELOG v1.7.33"
 nginx || {
     echo "[Ingress] nginx 首启失败，5 秒后重试一次…"
     sleep 5
@@ -643,9 +653,24 @@ if [ "${INSTALL_INTEGRATION}" = "true" ]; then
                     BACKUP_PERSIST=true
                 fi
 
-                rm -rf "${INTEGRATION_DST}"
-                cp -r "${INTEGRATION_SRC}" "${INTEGRATION_DST}"
-                echo "[集成] 集成代码已安装到 ${INTEGRATION_DST}"
+                # v1.7.33（全量审计）：原子换防。旧序 rm -rf + cp -r 两步非原子，
+                # cp 中途失败（盘满/只读/并发读）被 set -e 直接杀死 run.sh——
+                # 结果比 640-644 有备份的 persist 文件更惨：集成目录半截且
+                # broker（§8）尚未启动，整个加载项连 Mosquitto 一起起不来。
+                # 改为"拷到同目录临时名 → mv 原子换名"，失败回滚并降级告警。
+                _STAGE="${INTEGRATION_DST}.new.$$"
+                if cp -r "${INTEGRATION_SRC}" "${_STAGE}"; then
+                    rm -rf "${INTEGRATION_DST}"
+                    if mv "${_STAGE}" "${INTEGRATION_DST}"; then
+                        echo "[集成] 集成代码已安装到 ${INTEGRATION_DST}（原子换防）"
+                    else
+                        echo "[集成] 警告: 换名失败，集成目录可能缺失——本次不阻断启动"
+                        rm -rf "${_STAGE}"
+                    fi
+                else
+                    echo "[集成] 警告: 拷贝集成代码失败（磁盘/权限？），保留旧版本继续启动"
+                    rm -rf "${_STAGE}"
+                fi
 
                 if [ "${BACKUP_PERSIST}" = "true" ]; then
                     cp "/tmp/window_controller_gateway_data.json.bak" "${PERSIST_FILE}"

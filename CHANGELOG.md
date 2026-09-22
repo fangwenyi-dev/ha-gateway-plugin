@@ -3,6 +3,33 @@
 所有版本变更记录在此文件中。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.7.33] - 2026-09-22
+
+五路并行只读审计 + 一手复核后的全量收口批（用户指令「全部采用最佳方案优化」）。
+核心是两枚此前"看起来有守卫、实际是假绿"的洞，以及三条物理控制面的假成功链。
+
+### Fixed
+
+- **决定开合方向的线值此前零行为覆盖**：open/close/stop/a 的 100/0/101/200 是唯一决定"窗往哪边走"的常量，而全测试树只在断言 CLAUDE.md 里的 markdown 表格字符串（`test_audit_round6::test_claude_wire_values_fixed`）、`send_command` 真实调用点只有 start_pairing/set_position/set_speed 三种命令——把常量对调或退回废弃旧表，655 条全绿而现网每台窗反向动作。新增出站行为守卫：逐命令驱动并断言发布报文的值字面量 + `改常量必须改报文` 的反钉 + 文档表格从常量派生比对。
+- **Ingress 端口五处真值源，`config.yaml ingress_port` 零守卫**：v1.7.32 的"五处收口"只被机械对账到四处（config.yaml 那处在 tests/ 与 .github/ 零引用），改它即全绿 + 侧边栏 502。新增五源等式守卫（config.yaml / ingress.conf / run.sh heredoc / `WS_RESERVED_PORTS` / `:2AF6` 取证门），并顺带把 `MQTT_PORT`/`INGRESS_PORT` 升为 const 一等真值源、保留口集合由其派生；options 步撞口文案补漏报的 8123。
+- **三条假成功链**：① WS `control`/`pair` 在零条目（awaiting-only 或 reload 让出窗）时循环空转仍回 `ok:true`——小程序显示"已下发"而一条报文未发；② `set_position` 服务无机型能力闸，Web 滑块/REST/自动化绕过实体侧校验，向无百分比硬件打固件未定义的 w_travel 指令并回 200（前端同步按 `position_capable` 渲染，并带出服务端失败原因）；③ 「移除」按钮在 `await sleep()` 让出点之后仍用构造期捕获的旧 manager，reload 窗内本地删除整体 no-op → 手动删除名单未登记 → 幽灵设备复活（照 WS 通道既有写法按 entry_id 重解析）。
+- **陈旧值冒充新鲜值三破口**：`sensor` 用 `r_travel == 0` 严格比较（字符串 `"0"`/`"0.0"` 与 255 未校准标记全落 "open"，而 v1.7.31 起 Web 圆点主判据就是它）改数值归一 + 0..100 值域；重启回填设备补 `last_update`（不推翻 v1.6.8/1.6.19「无时间戳=新鲜」定案——真缺口是回填路径借用了该语义）；`cover.extra_state_attributes` 补同款 15 分钟时效闸（失联设备此前「灰点 + 状态:打开 + 位置 65%」并存且滑块可拖）。
+- **MQTT 链加固**：心跳耳补入站 64KB 闸（旧实现只有 `_protocol` 耳有，而干净主机首配期只有心跳耳，一条大报文即在事件循环线程卡死 HA）；代答认领在发布失败时撤销（30s 抑制窗把一次失败放大成 6 次不应答）；002 先应答再批处理（保留"必 ack"契约）；订阅重建加互斥且句柄"先落新的再退旧的"；订阅代际判据由裸 `id()` 改弱引用（地址复用会让 B-1 形态复活且零日志）；`_schedule_async_task` 守 `_closing`、`cleanup` 退订提到首个 await 前；接管 MQTT 条目时清除 TLS/WebSocket 等不兼容键（旧实现只覆写四键，会把用户条目的证书/传输方式带进明文 2022 且此后无纠偏出口）。
+- **WS 网关安全与资源**：令牌比较改 `hmac.compare_digest`（含 oldToken）；运行态令牌闸补 `WS_TOKEN_MIN_LEN`（storage 手改短令牌可绕过表单下限）；子协议切分收窄到 `[ ,]+`（与固件及 aiohttp 对齐）；空闲计时**实现**改为只认业务 TEXT 帧（旧代码每轮重起表，BINARY 帧可永久占槽，与自述口径相反）；停机窗口拒绝新握手；广播失败显式 close；令牌写入全部 enabled 条目；STOP 监听单例；401 日志按来源节流；ERROR 帧留归因。
+- **生命周期与表单**：setup 先清 `_platforms_forwarded`/`_bg_tasks`/`unsub_listeners` 再合并（卸载失败残留会被下次 setup 原样继承）；`discovery_interval` 抽出可测的归一+钳制（该值是网关离线回收唯一节拍源，旧实现可被调成 3600 或字符串导致集成起不来）；心跳武装订阅失败改 60s 退避无限重试；令牌字段 default 取存储值；5 处 `async_set_unique_id` 显式 `raise_on_progress=False`；`via_device_kwargs` 未解析时省略参数（传 None=清空归属）；服务注册集登记 + 最后条目卸载时注销；`integration_type` 改 `hub`。
+- **容器与前端**：集成目录改临时名+`mv` 原子换防（旧 rm -rf + cp -r 失败会把集成目录留半截且 broker 未起）；`set -o pipefail`；mosquitto 队列 100→1000 且 `autosave_on_changes`；发现代理 stderr 留痕；Web UI 修未定义 CSS 变量、Release 链接协议白名单 + `rel=noopener`、禁用条目单独渲染、await 后重取容器节点、清死分支与死函数、logo cache-buster。
+
+### Added
+
+- CI 补机械化 lint 门（`ruff --select F,E9,B`，生产+测试，存量已清零）与 JS 语法门（`node --check`，79KB 手写前端此前无任何机械门）。
+- Web UI 停机/禁用可见性：被禁用或未 loaded 的条目独立渲染（灰徽 + 原因），不再当正常网关配控制按钮。
+
+### Tests
+
+- 新增 8 个守卫文件（共 111 条用例）：线值出站行为、Ingress 五源等式、服务目录三方一致、假成功链（WS 空集如实 ack / 能力闸 / 让出点重解析）、陈旧值契约（r_travel 归一 / 回填时间戳 / 属性时效闸）、协议加固（双耳闸 / 认领撤销 / 弱引用代际 / 先应答后处理 / 接管清洗 / 闩锁派发）、WS 加固（时序安全 / 下限制 / TEXT-only 续期 / 停机准入 / 广播 close / 令牌全条目）、F/G/H 组（间隔钳制 / 桩签名 / 原子换防 / 队列设置 / 前端结构）。
+- 修三处假绿守卫：`test_v1624` 的 `pytest.skip` 从未 import pytest（无 bash 机器上 skip 变 NameError，已实测复现）；`test_v1621` 的"墓碑断言"（循环体是 pass，三项锚只断言两项）；`test_services_failfast` 的零参 `async_entries` 桩（只因断言在遍历前抛出才恰好绿）。
+- 全量 766 用例通过（基线 655）；`bash -n` 全部 shell、`compileall` 递归、`node --check` 两份 JS、ruff 生产+测试全清。
+
 ## [1.7.32] - 2026-09-21
 
 Ingress Web UI 端口迁移 8099 → 10998（用户指令），全链路单一口径收口。

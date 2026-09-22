@@ -19,7 +19,6 @@ CF-F1 空 SN 幽灵 unique_id 清除（行为钉在 test_audit_round6）
 I-*  CI 加固（VERSION fail-fast / e2e 语法门 / fetch-depth / Gitee 兜底）
 M-*/L-* Web 语义与卫生修复（静态形态）
 """
-import asyncio
 import json
 import re
 import tempfile
@@ -336,11 +335,21 @@ class TestProtocolStaticPins:
         head, rest = src.split("async def _subscribe_topics(self)", 1)
         sig = rest[:80]
         assert "-> bool" in sig, "订阅入口未返回成败（B-3 判据回潮）"
-        body = rest.split("async def ")[0]
-        assert "self._mqtt_client_id = id(" in body
-        assert body.count("self._schedule_reconnect()") >= 1, \
+        wrapper = rest.split("async def ")[0]
+        # v1.7.33：订阅重建加并发闸，实体逻辑移到 _do_subscribe_topics。
+        assert "_do_subscribe_topics()" in wrapper, "并发闸包装层丢失"
+        assert "_sub_lock" in wrapper, "订阅重建互斥闸丢失（句柄互相覆盖面）"
+        impl = rest.split("async def _do_subscribe_topics(self)", 1)[1]
+        impl = impl.split("async def ")[0]
+        assert ("self._remember_mqtt_client()" in impl
+                or "self._mqtt_client_id = id(" in impl), \
+            "订阅成功未记账 client 身份（B-1 巡检失据）"
+        lifecycle = _read(MW / "_lifecycle.py")
+        assert "self._mqtt_client_ref = weakref.ref(" in lifecycle, \
+            "v1.7.33：身份须持弱引用（裸 id 地址复用=换代漏判，B-1 形态复活）"
+        assert impl.count("self._schedule_reconnect()") >= 1, \
             "订阅失败不补重连调度（B-3 回潮）"
-        assert "return False" in body and "return True" in body
+        assert "return False" in impl and "return True" in impl
 
     def test_lifecycle_hooks(self):
         src = _read(MW / "_lifecycle.py")
@@ -444,7 +453,6 @@ class TestIgnorePersistence:
             "E-4：unique_id 占用者判重缺失（撞车即 InvalidData）"
 
     def test_backup_failure_is_loud(self):
-        from custom_components.window_controller_gateway import persist
         src = _read(PKG / "persist.py")
         assert "备份轮转失败" in src, "E-8：.bak 轮转失败回潮静默"
         assert "降级直写主文件" in src, "E-8：非原子降级回潮静默"

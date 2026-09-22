@@ -25,6 +25,23 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 
+def _entry_still_configured(hass, entry_id) -> bool:
+    """条目是否仍在 config_entries 列表里（reload 令出点判定用）。
+
+    判定不了（宿主/配置面异常、测试替身无 config_entries）一律返回 False——
+    调用方据此退回"照常执行"的原行为，绝不因探测失败而阻断用户操作。
+    """
+    if not entry_id:
+        return False
+    try:
+        entries = hass.config_entries.async_entries(DOMAIN)
+    except Exception:  # noqa: BLE001
+        return False
+    if not entries:
+        return False
+    return any(getattr(e, "entry_id", None) == entry_id for e in entries)
+
+
 
 class GatewayOnlineSensor(BinarySensorEntity):
     """网关在线状态传感器"""
@@ -275,9 +292,30 @@ class GatewayDeviceRemoveButton(ButtonEntity):
         # 等待1秒，确保网关有足够时间处理解绑命令
         await asyncio.sleep(GATEWAY_READY_DELAY)
 
+        # v1.7.33（全量审计）：sleep 是让出点——期间该条目可能被 reload（另一
+        # 会话改令牌/选项即触发）或被删除。旧 manager 在 unload 时被 cleanup
+        # 清空，拿构造期引用 remove_device 会整体 no-op（不登记手动删除名单、
+        # 不清映射），新 manager 又按残留映射回填 → 幽灵设备复活（v1.6.19
+        # A-MED2 在 WS 通道修过同案，按钮路径漏改）。按 (entry_id → data)
+        # 重解析；条目仍在而 data 未就绪=重载中，如实拒绝让用户重试。
+        manager_now = self.device_manager
+        data_now = None
+        try:
+            data_now = (self.hass.data.get(DOMAIN) or {}).get(self._entry_id)
+        except Exception:  # noqa: BLE001 - 宿主数据面异常按"判定不了"处理
+            data_now = None
+        if isinstance(data_now, dict) and data_now.get("device_manager") is not None:
+            manager_now = data_now["device_manager"]
+        elif data_now is None and self._entry_id and _entry_still_configured(
+                self.hass, self._entry_id):
+            _LOGGER.warning(
+                "移除按钮：条目 %s 正在重载，设备 %s 的本地删除未执行——请稍后重试",
+                self._entry_id, self.device_sn)
+            return
+
         # 从设备管理器中删除设备（本地操作，不受网关状态影响）
         try:
-            await self.device_manager.remove_device(self.device_sn)
+            await manager_now.remove_device(self.device_sn)
             _LOGGER.info("已从系统中删除设备: %s", self.device_sn)
         except Exception as e:
             _LOGGER.error("从系统中删除设备失败: %s", e)

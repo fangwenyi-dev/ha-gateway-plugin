@@ -15,6 +15,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+import pytest
+
 RUN = Path(__file__).resolve().parents[1] / "run.sh"
 TEXT = RUN.read_text(encoding="utf-8")
 
@@ -38,9 +40,9 @@ def _posix_candidates(p):
 
 
 def test_shell_syntax():
+    """run.sh 是生产心脏，语法门必须钉进 pytest（CI lint job 顺带执行）"""
     if shutil.which("bash") is None:
         pytest.skip("本机无 bash（Windows 开发机无 Git Bash/WSL），跳过语法检查")
-    """run.sh 是生产心脏，语法门必须钉进 pytest（CI lint job 顺带执行）"""
     last = None
     for cand in _posix_candidates(RUN):
         r = subprocess.run(["bash", "-n", cand], capture_output=True, text=True)

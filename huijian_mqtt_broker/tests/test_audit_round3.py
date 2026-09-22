@@ -151,11 +151,13 @@ class TestCleanupSnapshotIteration:
         async def boom_task():
             try:
                 await asyncio.sleep(30)
-            except asyncio.CancelledError:
-                raise ValueError("boom")
+            except asyncio.CancelledError as cancel_err:
+                # v1.7.33：保留异常链（B904）——模拟"取消被吞成别的异常"时，
+                # 排障需要看到原始取消来源
+                raise ValueError("boom") from cancel_err
 
         tasks = []
-        for i in range(6):
+        for _ in range(6):
             t = asyncio.create_task(boom_task())
             # 复刻 :166 的真实回调：完成即从列表 remove
             t.add_done_callback(

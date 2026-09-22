@@ -69,6 +69,8 @@ z2m ──或──官方Mosquitto:1883                        小程序 ──W
 
 `config.yaml`（加载项）· `www/version.json` · `www/index.html` CURRENT_VERSION ·
 集成 `manifest.json` —— **四处版本号强制一致**（发版铁律，CI 校验）。
+另：`www/index.html` 内 `?v=` cache-buster 三处（css/starsky.js/huijian.js）
+与 logo 一处亦须同步（v1.7.33 起纳入守卫断言）。
 
 ## 安全边界（v1.6.24 定案）
 

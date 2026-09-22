@@ -182,12 +182,29 @@ class WindowControllerStatusSensor(WindowControllerBaseEntity, SensorEntity):
             _LOGGER.debug("设备 %s 状态更新为: %s", self.device_sn, status)
         else:
             # 如果没有状态，使用r_travel判断
+            # v1.7.33（全量审计）：旧判定 `r_travel == 0` 是严格比较——字符串
+            # "0"/"0.0"（005 上报原样入库形态，test_cover_state 夹具实证存在）
+            # 与 255（未校准/离线标记）都落 "open"，关着的窗显示"打开"；而
+            # v1.7.31 起 Web 设备卡圆点的主判据正是本传感器。改数值归一 +
+            # 0..100 值域：越界/非法一律 unknown，绝不用位置反推状态。
             attributes = device.get("attributes", {})
             r_travel = attributes.get("r_travel")
             if r_travel is not None:
-                new_status = "closed" if r_travel == 0 else "open"
-                self._attr_native_value = new_status
-                _LOGGER.debug("设备 %s 状态根据r_travel更新为: %s", self.device_sn, new_status)
+                raw = None
+                if not isinstance(r_travel, bool):
+                    try:
+                        raw = int(float(r_travel))
+                    except (ValueError, TypeError, OverflowError):
+                        raw = None
+                if raw is None or not 0 <= raw <= 100:
+                    self._attr_native_value = None
+                    _LOGGER.debug("设备 %s r_travel 非法或未校准(%r)，状态转 unknown",
+                                  self.device_sn, r_travel)
+                else:
+                    new_status = "closed" if raw == 0 else "open"
+                    self._attr_native_value = new_status
+                    _LOGGER.debug("设备 %s 状态根据r_travel更新为: %s",
+                                  self.device_sn, new_status)
 
     async def async_update(self) -> None:
         """更新实体状态"""

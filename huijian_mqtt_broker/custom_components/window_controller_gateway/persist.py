@@ -63,7 +63,9 @@ async def load_persistent_data(hass: HomeAssistant) -> None:
 
     if data is None:
         _LOGGER.error("持久化数据完全不可用，使用空数据继续运行")
-        hass.data[DOMAIN].setdefault(DEVICE_SETPOINTS, {})
+        # v1.7.33：走 setdefault(DOMAIN, {}) 出口——旧实现直取 hass.data[DOMAIN]，
+        # 隐式依赖 async_setup 先建好该键（调用顺序一变即 KeyError 直穿 setup）
+        hass.data.setdefault(DOMAIN, {}).setdefault(DEVICE_SETPOINTS, {})
         return
 
     version = data.get("schema_version", 0)

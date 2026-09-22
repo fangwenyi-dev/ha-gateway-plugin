@@ -7,6 +7,7 @@ import logging
 import asyncio
 import random
 import time
+import weakref
 from typing import Optional
 from homeassistant.core import HomeAssistant
 from ..utils import is_mqtt_loaded, gateway_instance_uuid
@@ -49,9 +50,15 @@ class _LifecycleMixin:
         # cleanup 首行置 True，重连路径创建任何后台任务前必须检查。
         self._closing = False
         self._unsub_rsp = None  # MQTT 订阅取消函数
-        # v1.7.12（审计 B-1）：订阅所绑定的 MQTT client 实例身份（id），
-        # 巡检发现变化即重建订阅（见 _ensure_mqtt_subscription）
+        # v1.7.12（审计 B-1）：订阅所绑定的 MQTT client 实例身份，巡检发现
+        # 变化即重建订阅（见 _ensure_mqtt_subscription）。
+        # v1.7.33：同时持弱引用——裸 id() 在 reload 后可能被新对象复用地址
+        # （"client 未变"假阴性），弱引用按对象身份判换代。
         self._mqtt_client_id = None
+        self._mqtt_client_ref = None
+        # v1.7.33：订阅重建互斥（重连任务 × 30s 巡检并发进入会让两个句柄
+        # 互相覆盖、前一个回调永久泄漏）
+        self._sub_lock = asyncio.Lock()
         self._msg_lock = asyncio.Lock()  # 异步消息去重锁
         # v1.7.27：公式上收 utils.gateway_instance_uuid 单一真源——耳朵 001
         # 代答与正式 handler 应答共用同一确定性 uuid（值逐字不变，回归安全）
@@ -109,6 +116,20 @@ class _LifecycleMixin:
         except Exception:
             return True
 
+    def _remember_mqtt_client(self) -> None:
+        """记下订阅所绑定的 MQTT client 身份（v1.7.33 双份形态）。
+
+        弱引用用于身份比较（地址复用不再造成假阴性）；身份整数保留给不可
+        弱引用的替身/极端形态做退化路径，二者由 _ensure_mqtt_subscription
+        按可用性选用。
+        """
+        client = self.hass.data.get("mqtt")
+        self._mqtt_client_id = id(client)
+        try:
+            self._mqtt_client_ref = weakref.ref(client) if client is not None else None
+        except TypeError:
+            self._mqtt_client_ref = None
+
     def _clear_bind_ops_for_device(self, device_sn: str) -> None:
         """清除指定设备的待处理 003 绑定/解绑方向记录
 
@@ -128,7 +149,15 @@ class _LifecycleMixin:
         - 在事件循环内：使用 hass.async_create_task（线程安全，HA 自动记录异常）
         - 在线程中：使用 asyncio.run_coroutine_threadsafe（线程安全），
           并通过 done_callback 记录未捕获异常，避免静默吞没。
+
+        v1.7.33（全量审计）：首行判 `_closing`——cleanup 置闩锁后仍有一串
+        await 让出点（退订/取消任务/await 收口），此窗口内到达的上报会再拉起
+        新任务、逃过 A-6 的在途快照，在 device_manager.cleanup() 清空后继续
+        写缓存。闩锁后一律丢弃。
         """
+        if self._closing:
+            coro.close()
+            return
         try:
             loop = self.hass.loop
             if not loop.is_running():
@@ -352,6 +381,15 @@ class _LifecycleMixin:
         # await 都是让出点，重连任务可能在任意让出点恢复并重建后台任务；
         # 置位后 _schedule_reconnect/重连循环/检查任务重建全部拒绝。
         self._closing = True
+        # v1.7.33（全量审计）：退订提到**第一个 await 之前**（旧序在若干 await
+        # 之后才退订，窗口内到达的上报仍会经 handle_gateway_response 派发；
+        # 虽有 _closing 门兜底，但订阅面早退一秒就少一秒在途面——两者同批）。
+        if self._unsub_rsp:
+            try:
+                self._unsub_rsp()
+            except Exception as e:
+                _LOGGER.debug("取消MQTT订阅异常: %s", e)
+            self._unsub_rsp = None
         # v1.7.31（A-6）：先收口在途派发任务——消息处理协程（002 批处理/
         # 003 绑定/代答派发）不得活到 cleanup 之后去写已清空的 device_manager
         # /注册表（同族 P1 定案；_closing 门旧版只罩住重连路径）。
@@ -406,13 +444,7 @@ class _LifecycleMixin:
                 _LOGGER.debug("cleanup 尾检取消残留超时检查任务")
             self._check_task = None
         
-        # 取消 MQTT 订阅
-        if self._unsub_rsp:
-            try:
-                self._unsub_rsp()
-            except Exception as e:
-                _LOGGER.debug("取消MQTT订阅异常: %s", e)
-            self._unsub_rsp = None
+        # v1.7.33：订阅已在 cleanup 首部（首个 await 之前）退订，此处不再重复。
         
         # 清理所有回调引用，避免内存泄漏
         self._status_callbacks.clear()

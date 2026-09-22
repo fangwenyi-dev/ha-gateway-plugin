@@ -127,8 +127,12 @@ class DiscoveryProxy:
     def run_subprocess(self, argv) -> int:
         """长驻订阅循环。mosquitto_sub 退出（broker 重启等）即非零返回，
         交给外层 shell 看门狗重启——与 mdns_publisher 监督模式同构。"""
+        # v1.7.33（全量审计）：stderr 并入 stdout——旧实现 DEVNULL 吞掉
+        # 认证被拒/broker 拒连的根因，只剩"异常退出 (code N)"，看门狗每 5s
+        # 空转静默半瘫（与 run.sh:481 自立的"不再 2>/dev/null 吞启动错误"相悖）。
+        # 非触发行由既有的行过滤逻辑丢弃，不污染发现主流程。
         proc = subprocess.Popen(argv, stdout=subprocess.PIPE,
-                                stderr=subprocess.DEVNULL, text=True, bufsize=1)
+                                stderr=subprocess.STDOUT, text=True, bufsize=1)
         try:
             for line in proc.stdout:
                 try:

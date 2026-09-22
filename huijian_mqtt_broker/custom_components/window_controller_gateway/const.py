@@ -196,11 +196,16 @@ DEFAULT_WS_GATEWAY_ENABLED: Final = True
 CONF_EXPOSE_COVER_AS_CURTAIN: Final = "expose_cover_as_curtain"
 DEFAULT_EXPOSE_COVER_AS_CURTAIN: Final = False
 DEFAULT_WS_GATEWAY_PORT: Final = 9001
+# v1.7.33（全量审计 G2）：端口升为一等真值源。此前 2022/10998 只以字面量
+# 散在 config.yaml、mosquitto.conf、run.sh heredoc、ingress.conf 与本集合的
+# 大括号里，没有任何一处能反查一致性——换口时"五处收口"全靠人肉。
+MQTT_PORT: Final = 2022            # 内置 Mosquitto（1883 已废弃避让官方加载项）
+INGRESS_PORT: Final = 10998        # Web UI nginx ingress（Supervisor 注册口）
 # v1.6.19（第六轮审计 B-LOW10）：本栈保留端口——WS 网关端口选项若撞上这些
 # 口，bind 失败只进 HA 日志、小程序恒 Connection refused 静默失联，
 # config_flow 在源头拒绝。2022=内置 Mosquitto，10998=Web UI nginx ingress，
 # 8123=HA core，1883=外部 broker 惯用口。
-WS_RESERVED_PORTS: Final = frozenset({2022, 10998, 8123, 1883})
+WS_RESERVED_PORTS: Final = frozenset({MQTT_PORT, INGRESS_PORT, 8123, 1883})
 DEFAULT_WS_GATEWAY_TOKEN: Final = "hIZ56jhQ-wzA3ENiP2xGzo55PXsewUWM"
 
 # 交叉引用锚（v1.6.21）：run.sh 的 mqtt_password_is_default 判定与

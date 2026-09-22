@@ -11,16 +11,15 @@ import re
 from homeassistant.components import mqtt
 from ..const import (
     DOMAIN,
-    CONF_GATEWAY_SN,
     ATTR_DEVICE_SN,
     ATTR_DEVICE_NAME,
     ATTR_POSITION,
     ATTR_BATTERY,
     DEVICE_TYPE_WINDOW_OPENER,
     PROTOCOL_HEAD,
-    TOPIC_GATEWAY_RSP,
     TOPIC_GATEWAY_REQ_FORMAT,
 )
+from ..utils import inbound_payload_ok, log_throttled
 
 # logger 名钉死为拆分前模块 __name__ 值——日志输出零差异（回归要求）
 _LOGGER = logging.getLogger("custom_components.window_controller_gateway.mqtt_handler")
@@ -52,22 +51,30 @@ class _ProtocolMixin:
         return raw
 
     async def _subscribe_topics(self) -> bool:
+        """订阅网关响应主题（并发闸入口，v1.7.33）。
+
+        重连任务与 30s 巡检都可能进入订阅重建（双方都在 `await
+        async_subscribe` 让出），旧实现无互斥：两次订阅的后一个句柄覆盖前一个，
+        前一个回调永久泄漏——每条上报双份处理（id=0 的周期 002/005 走旁路、
+        不经去重），`cleanup()` 又只取消最后一个。同一时刻只允许一次重建。
+        """
+        if self._sub_lock.locked():
+            _LOGGER.debug("已有订阅重建在进行中，跳过本次（防句柄互相覆盖）")
+            return False
+        async with self._sub_lock:
+            return await self._do_subscribe_topics()
+
+    async def _do_subscribe_topics(self) -> bool:
         """订阅MQTT主题 - 根据协议要求简化为只订阅网关响应主题
 
         v1.7.12（第 6 轮审计 B-3）：返回订阅结果——旧版吞掉全部异常仍返回
         None，setup/重连循环把失败当成功置 connected=True，"指数退避重连"
         成死代码。False 时唯一安全分支（通用异常）照旧补跳重连。
-        B-1 配套：记录订阅所绑定的 MQTT client 实例身份（id），供巡检在
+        B-1 配套：记录订阅所绑定的 MQTT client 实例身份，供巡检在
         MQTT 条目 reload（client 重建）后识别订阅失效并重建。
+        v1.7.33：句柄交接改为"先落新的、再退旧的"（旧顺序在失败时留下
+        订阅空窗）。
         """
-        # 取消旧订阅（防止重连时累积重复订阅）
-        if self._unsub_rsp:
-            try:
-                self._unsub_rsp()
-            except Exception as e:
-                _LOGGER.debug("取消旧MQTT订阅时出错: %s", e)
-            self._unsub_rsp = None
-        
         # 订阅网关响应和数据主题
         def handle_gateway_response(msg):
             """处理网关响应和数据消息"""
@@ -75,16 +82,16 @@ class _ProtocolMixin:
             # message_size_limit 不限，LAN 上任一可连 2022 的客户端 publish
             # 一条 50-100MB 的 rpt_rsp 会在事件循环线程 json.loads 卡死整个
             # HA（本回调与分发全在 loop 内）。WS 侧有 1024B 帧闸，MQTT 侧
-            # 对称补齐：>64KB 一律拒收（协议合法帧远小于此，最大 002 全量
-            # 设备列表也仅数 KB）。
-            try:
-                if len(msg.payload) > 64 * 1024:
-                    _LOGGER.warning(
-                        "收到超大 MQTT 报文（%d 字节），拒收处理", len(msg.payload)
-                    )
-                    return
-            except Exception:  # noqa: BLE001 - payload 非常规类型交给下方既有流程
-                pass
+            # 对称补齐：>64KB 一律拒收。
+            # v1.7.33（全量审计）：闸上收 utils.inbound_payload_ok 双耳共用
+            # （心跳耳此前无闸，而干净主机首配期只有那只耳），留痕改节流
+            # ——旧实现逐条打 WARNING，畸形流量下日志盘被刷。
+            if not inbound_payload_ok(msg):
+                log_throttled(self.hass, "_inbound_oversize_logged", "rpt_rsp",
+                              600.0, _LOGGER.warning,
+                              "收到超大 MQTT 报文（%d 字节），拒收处理",
+                              len(msg.payload))
+                return
             try:
                 payload = json.loads(msg.payload)
                 _LOGGER.debug("收到网关消息: %s", payload)
@@ -147,8 +154,10 @@ class _ProtocolMixin:
                             # 条目**也算已配置：被禁用的另一台网关 001 在本
                             # 耳同样零止血、零留痕。disabled 态照答止血、
                             # 跳过发现卡、节流留痕。
-                            from ..utils import (entry_state_for_sn,
-                                                 log_throttled)
+                            # v1.7.33：log_throttled 已升模块级导入（本地导入
+                            # 会把整个函数作用域的名字标记为局部，遮蔽上方
+                            # 入站尺寸闸的错误分支 → UnboundLocalError）
+                            from ..utils import entry_state_for_sn
                             _st = entry_state_for_sn(self.hass, response_sn)
                             if _st == "configured":
                                 return
@@ -270,7 +279,11 @@ class _ProtocolMixin:
                                 )
                             )
                     else:
-                        _LOGGER.warning("未知的消息类型: %s", ctype)
+                        # v1.7.33：按 ctype 分桶节流（固件/第三方高频发未知类型
+                        # 时逐条 WARNING 会刷盘，多条目下还 ×N 条各打一行）
+                        log_throttled(self.hass, "_proto_unknown_ctype_logged",
+                                      str(ctype), 600.0, _LOGGER.warning,
+                                      "未知的消息类型: %s", ctype)
                     
                     return
                 
@@ -360,19 +373,38 @@ class _ProtocolMixin:
             except json.JSONDecodeError:
                 # v1.7.12（审计 B-12）：投毒/损坏报文此前全量入日志（64KB 闸
                 # 内单条即可刷满日志盘）——截 256 字节
-                _LOGGER.error("MQTT消息解析失败: %s", msg.payload[:256])
+                # v1.7.33：再按 600s 节流——畸形流量逐条打仍能刷盘，与 A-4
+                # 在心跳耳定案的"必响+去重"口径对齐（形态分桶留痕不丢）。
+                log_throttled(self.hass, "_proto_parse_err_logged", "json",
+                              600.0, _LOGGER.error,
+                              "MQTT消息解析失败: %s", msg.payload[:256])
             except KeyError as e:
-                _LOGGER.error("MQTT消息缺少必要字段: %s", e)
+                log_throttled(self.hass, "_proto_parse_err_logged", "keyerror",
+                              600.0, _LOGGER.error,
+                              "MQTT消息缺少必要字段: %s", e)
             except ValueError as e:
-                _LOGGER.error("MQTT消息数据格式错误: %s", e)
+                log_throttled(self.hass, "_proto_parse_err_logged", "valueerror",
+                              600.0, _LOGGER.error,
+                              "MQTT消息数据格式错误: %s", e)
             except Exception as e:
-                _LOGGER.error("处理网关消息时出错: %s", e)
+                log_throttled(self.hass, "_proto_parse_err_logged",
+                              f"exc:{type(e).__name__}", 600.0, _LOGGER.error,
+                              "处理网关消息时出错: %s", e)
         
         try:
             # 订阅网关响应主题
-            self._unsub_rsp = await mqtt.async_subscribe(self.hass, self.TOPIC_GATEWAY_RSP, handle_gateway_response, 1)
-            # v1.7.12（审计 B-1）：记下订阅所绑定的 client 实例身份
-            self._mqtt_client_id = id(self.hass.data.get("mqtt"))
+            new_unsub = await mqtt.async_subscribe(self.hass, self.TOPIC_GATEWAY_RSP, handle_gateway_response, 1)
+            # v1.7.33：新的先落地、再退旧的——旧顺序（先退后订）在订阅失败
+            # 时把已工作的订阅也拆了，留下空窗直到下轮巡检。
+            old_unsub, self._unsub_rsp = self._unsub_rsp, new_unsub
+            if old_unsub:
+                try:
+                    old_unsub()
+                except Exception as e:  # noqa: BLE001
+                    _LOGGER.debug("取消旧MQTT订阅时出错: %s", e)
+            # v1.7.12（审计 B-1）：记下订阅所绑定的 client 实例身份（弱引用 +
+            # 身份整数双份，见 _remember_mqtt_client）
+            self._remember_mqtt_client()
             _LOGGER.debug("订阅网关消息主题: %s", self.TOPIC_GATEWAY_RSP)
             return True
         except ConnectionError as e:
@@ -404,8 +436,24 @@ class _ProtocolMixin:
         身份与订阅所绑定时不一致 → 重跑 _subscribe_topics（内部自带旧订阅
         取消）。返回是否执行了重建。
         """
-        current = id(self.hass.data.get("mqtt"))
-        if self._mqtt_client_id is None or current == self._mqtt_client_id:
+        # v1.7.33（全量审计）：改用弱引用做身份比较。旧实现存 `id(client)`
+        # 整数——MQTT 条目 reload 后旧 client 引用归零被释放，新对象**可能
+        # 复用同一地址**（同类型同尺寸），`current == self._mqtt_client_id`
+        # 恒真 → "client 未变"假阴性，B-1 要修的形态复活且更隐蔽（发布正常、
+        # rpt_rsp 永不再达、全程零日志）。弱引用还活着且 `is` 同一对象才是
+        # 真·未换代；引用死亡或指向别的对象皆为换代。
+        current = self.hass.data.get("mqtt")
+        if self._mqtt_client_id is None:
+            return False                       # 从未订阅成功（旧语义）
+        if current is None:
+            return False                       # client 尚未就绪：下轮再判，不空转
+        ref = getattr(self, "_mqtt_client_ref", None)
+        if ref is not None:
+            stale = ref() is not current
+        else:
+            # 不可弱引用的替身（测试桩）退回身份整数路径，语义不劣化
+            stale = id(current) != self._mqtt_client_id
+        if not stale:
             return False
         _LOGGER.warning(
             "检测到 MQTT client 实例已更换（条目 reload/重建），重建 "

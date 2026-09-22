@@ -8,6 +8,7 @@
   本地没有），首阶段 continue-on-error 盲调试，连绿后升硬门禁。
 """
 import json
+import re
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -113,7 +114,6 @@ def test_webui_credential_status_wired():
     assert "凭据状态" not in html
     assert "wsTokenIsDefault" not in html
     # 后端诊断面仍在（保留决策）：
-    import pathlib
     api = (HERE.parent / "custom_components" / "window_controller_gateway" /
            "api.py").read_text(encoding="utf-8")
     assert "WindowGatewaySecurityView" in api
@@ -168,10 +168,18 @@ def test_e2e_script_key_steps():
     # auth 契约注释必须留痕（client_id 需 IndieAuth URL 形态的实证结论）
     assert "verify_client_id" in d and "indieauth" in d.lower()
     # 本地一键迭代 harness（与 CI 同一 driver，契约同源）
-    import os
     rl = HERE / "e2e" / "run_local.sh"
     assert rl.exists()
     r = rl.read_text(encoding="utf-8")
-    for anchor in ("ha_e2e_driver.py", "home[A]", "python[0-9.]* -m home[a]ssistant"):
-        pass  # 括号防自杀技巧与 driver 引用
-    assert "ha_e2e_driver.py" in r and "home[a]ssistant" in r
+    for anchor in ("ha_e2e_driver.py", "python[0-9.]* -m home[a]ssistant"):
+        assert anchor in r, f"run_local.sh 缺关键锚: {anchor}"
+    # 防自杀（v1.6.21 定案）：pkill/pgrep 的 homeassistant 模式必须写成
+    # `home[a]ssistant` 括号形态——裸写会连本 harness 自身一起杀。此处由
+    # 死循环（for … : pass）转正为真断言 + 裸模式反钉，两向都判。
+    assert r.count("home[a]ssistant") >= 2, (
+        "括号技巧的两个使用点（pkill + wait 循环）应都在："
+        f"实际 {r.count('home[a]ssistant')} 处"
+    )
+    assert not re.search(r'p(?:kill|grep)\s+-f\s+"[^"]*homeassistant[^"]*"', r), (
+        "pkill/pgrep 的 homeassistant 模式必须保留括号技巧（裸模式=自杀）"
+    )

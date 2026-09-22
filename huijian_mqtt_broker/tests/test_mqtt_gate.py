@@ -32,7 +32,6 @@ from custom_components.window_controller_gateway.config_flow import ConfigFlow
 from custom_components.window_controller_gateway.const import (
     CONF_GATEWAY_NAME,
     CONF_GATEWAY_SN,
-    DOMAIN,
 )
 from custom_components.window_controller_gateway.utils import (
     async_wait_mqtt_loaded,
@@ -547,7 +546,9 @@ class TestUserStepWiring:
         f.context = {}
         f.form_calls = []
 
-        async def _set_uid(uid):
+        # v1.7.33：真签名含 raise_on_progress 关键字（config_flow 现按
+        # HA 惯例显式传 False），替身不得比真实现窄一档
+        async def _set_uid(uid, raise_on_progress=True):
             f.unique_id_seen = uid
 
         f.async_set_unique_id = _set_uid
@@ -687,7 +688,9 @@ class TestCustomerFirstAddScenario:
         f.hass = hass
         f.context = {}
 
-        async def _set_uid(uid):
+        # v1.7.33：真签名含 raise_on_progress 关键字（config_flow 现按
+        # HA 惯例显式传 False），替身不得比真实现窄一档
+        async def _set_uid(uid, raise_on_progress=True):
             pass
 
         f.async_set_unique_id = _set_uid

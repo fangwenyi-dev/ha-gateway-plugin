@@ -494,6 +494,25 @@ class TestRuntimeTokenGate:
             CONF_WS_GATEWAY_ENABLED: True, CONF_WS_GATEWAY_TOKEN: ""}))
         assert w[1] == "", "空串=不认证是 D-1 合法形态，不得回退"
 
+    def test_form_layer_charset_shared_with_runtime(self):
+        """B-4 补面（v1.7.32 全量审计）：表单层字符集不得自留第二份字面量。
+
+        运行时闸（ws_gateway.py）用 const.WS_TOKEN_CHARSET，而 config_flow
+        的 options 校验曾内联同一串 64 字符——改常量则两层判据静默分叉，
+        与 B-4「运行态防线」同威胁模型。此处双向判：常量必须在场 + 字面量
+        不得回潮。
+        """
+        from custom_components.window_controller_gateway import const as _c
+        cf = (Path(pkg.__file__).parent / "config_flow.py").read_text(encoding="utf-8")
+        assert "WS_TOKEN_CHARSET" in cf, "表单层未引用 const.WS_TOKEN_CHARSET"
+        stale = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-"
+        assert stale not in cf, (
+            "config_flow.py 回潮了内联字面量字符集——改常量将只改到一半"
+        )
+        assert stale == "".join(ch for ch in stale if ch in _c.WS_TOKEN_CHARSET), (
+            "const.WS_TOKEN_CHARSET 已变更，本守卫钉的旧字面量需同步复核"
+        )
+
 
 # ==================== C-2：add_device 条目存活前置门 ====================
 

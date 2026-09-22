@@ -7,7 +7,6 @@ v1.6.25 拆包：代码自 mqtt_handler.py 单文件**逐字原样搬移**，禁
 import logging
 import json
 import math
-import uuid
 from homeassistant.components import mqtt
 from ..const import (
     DOMAIN,
@@ -77,6 +76,13 @@ class _CtypeHandlersMixin:
 
         当 data 为空（无 status 字段）时，不覆盖网关已有的在线状态。
         """
+        # v1.7.33（全量审计）：002 的 ack 提到处理器**最前**（先应答后处理）。
+        # 契约是"002 必 ack"（CLAUDE.md 方向契约），而旧序把 ack 放在全量
+        # 批处理之后：32 台设备含新增（注册表写 + 映射落盘）可跨过 5s 去重窗，
+        # 网关重发的同一条 002 被判新消息整批重跑（双倍设备编号消耗、双倍
+        # ack）。此处只表达"已收到"，与处理结果无关（异常另有日志），
+        # 与 _handle_ctype_001"先应答后更新状态"同构。
+        await self._send_ack("002", payload)
         try:
             # 不使用 "unknown" 作为默认值，避免解绑确认的空 002 消息覆盖网关在线状态
             status = data.get("status")
@@ -163,6 +169,7 @@ class _CtypeHandlersMixin:
                     except Exception as e:
                         _LOGGER.error("处理设备信息异常: %s", e, exc_info=True)
                 
+                # v1.7.33：ack 已在处理器首部下发（先应答后处理），此处不再重复。
                 # 分批执行添加任务，每批10个设备
                 if add_tasks:
                     await self._batch_process_tasks(add_tasks, "添加设备")
@@ -176,9 +183,6 @@ class _CtypeHandlersMixin:
             _LOGGER.error("数据格式错误: %s, data: %s", e, data)
         except Exception as e:
             _LOGGER.error("处理002消息异常: %s", e, exc_info=True)
-        
-        # 回复 002 确认，告知网关已收到状态上报，避免网关重复重发
-        await self._send_ack("002", payload)
 
     async def _quick_add_device(self, device_sn, device_info):
         """快速添加设备 - 自动发现"""

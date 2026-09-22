@@ -12,7 +12,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from custom_components.window_controller_gateway import services
 from custom_components.window_controller_gateway.services import (
     ServiceValidationError,
     handle_check_gateway_status,
@@ -103,7 +102,7 @@ class TestFailFastRaises:
 
     @pytest.mark.asyncio
     async def test_migrate_devices_invalid_args(self):
-        hass = SimpleNamespace(data={}, config_entries=SimpleNamespace(async_entries=lambda: []))
+        hass = SimpleNamespace(data={}, config_entries=SimpleNamespace(async_entries=lambda domain=None: []))
         with pytest.raises(ServiceValidationError):
             await handle_migrate_devices(hass, _call(old_gateway_sn="short", new_gateway_sn="also"))
         with pytest.raises(ServiceValidationError):

@@ -1,7 +1,7 @@
 {
   "domain": "window_controller_gateway",
   "name": "慧尖开窗器网关",
-  "version": "1.7.32",
+  "version": "1.7.33",
   "config_flow": true,
   "documentation": "https://github.com/fangwenyi-dev/ha-gateway-plugin",
   "issue_tracker": "https://github.com/fangwenyi-dev/ha-gateway-plugin/issues",
@@ -16,6 +16,6 @@
     "@fangwenyi-dev"
   ],
   "iot_class": "local_push",
-  "integration_type": "device",
+  "integration_type": "hub",
   "homeassistant": "2024.12.0"
 }

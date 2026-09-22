@@ -26,6 +26,7 @@ from .const import (
     DEFAULT_WS_GATEWAY_TOKEN,
     WS_TOKEN_MAX_LEN,
     WS_TOKEN_MIN_LEN,
+    WS_TOKEN_CHARSET,
     WS_RESERVED_PORTS,
 )
 from .mqtt_handler import WindowControllerMQTTHandler
@@ -153,7 +154,11 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     errors[CONF_GATEWAY_SN] = "invalid_sn_format"
                 else:
                     # unique_id 统一小写，避免大小写不同导致重复添加
-                    await self.async_set_unique_id(gateway_sn.lower())
+                    # v1.7.33（全量审计）：raise_on_progress=False——默认 True 时同 SN
+                    # 有在途发现流（发现卡未点）会直接抛异常，用户侧表现为
+                    # 流莫名消失；本流紧随其后的 already_configured 扫描成死码。
+                    # 与本文件 :208/:420/:437 既有写法对齐。
+                    await self.async_set_unique_id(gateway_sn.lower(), raise_on_progress=False)
                     self._abort_if_unique_id_configured()
                     for entry in self.hass.config_entries.async_entries(DOMAIN):
                         if entry.data.get(CONF_GATEWAY_SN, "").lower() == gateway_sn.lower():
@@ -280,7 +285,11 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 if not gateway_sn:
                     return self.async_abort(reason="invalid_input")
                 # 再次检查唯一性（确认期间可能已被其他流程配置；unique_id 统一小写）
-                await self.async_set_unique_id(gateway_sn.lower())
+                    # v1.7.33（全量审计）：raise_on_progress=False——默认 True 时同 SN
+                    # 有在途发现流（发现卡未点）会直接抛异常，用户侧表现为
+                    # 流莫名消失；本流紧随其后的 already_configured 扫描成死码。
+                    # 与本文件 :208/:420/:437 既有写法对齐。
+                    await self.async_set_unique_id(gateway_sn.lower(), raise_on_progress=False)
                 self._abort_if_unique_id_configured()
                 # 兜底：兼容历史大小写原样的 entry unique_id
                 for entry in self.hass.config_entries.async_entries(DOMAIN):
@@ -333,8 +342,12 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             _LOGGER.warning("发现流程收到非法网关SN，中止: %r", gateway_sn)
             return self.async_abort(reason="invalid_sn_format")
         
-        # 检查是否已配置（unique_id 统一小写，避免大小写不同导致重复添加）
-        await self.async_set_unique_id(gateway_sn.lower())
+                # 检查是否已配置（unique_id 统一小写，避免大小写不同导致重复添加）
+        # v1.7.33（全量审计）：raise_on_progress=False——默认 True 时同 SN
+        # 有在途发现流（发现卡未点）会直接抛异常，用户侧表现为
+        # 流莫名消失；本流紧随其后的 already_configured 扫描成死码。
+        # 与本文件 :208/:420/:437 既有写法对齐。
+        await self.async_set_unique_id(gateway_sn.lower(), raise_on_progress=False)
         self._abort_if_unique_id_configured()
         
         # 检查是否已存在配置的网关
@@ -832,7 +845,7 @@ class OptionsFlow(config_entries.OptionsFlow):
             token = token.strip()
             if token and (
                 not (WS_TOKEN_MIN_LEN <= len(token) < WS_TOKEN_MAX_LEN)
-                or any(c not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-" for c in token)
+                or any(ch not in WS_TOKEN_CHARSET for ch in token)
             ):
                 errors[CONF_WS_GATEWAY_TOKEN] = "invalid_ws_token"
             elif user_input.get(CONF_WS_GATEWAY_PORT) in WS_RESERVED_PORTS:
@@ -883,7 +896,13 @@ class OptionsFlow(config_entries.OptionsFlow):
                         "suggested_value": self._config_entry.options.get(
                             CONF_WS_GATEWAY_TOKEN, DEFAULT_WS_GATEWAY_TOKEN)
                     },
-                    default=DEFAULT_WS_GATEWAY_TOKEN,
+                    # v1.7.33（全量审计）：default 取**当前存储值**——旧实现写死
+                    # 公开的 DEFAULT_WS_GATEWAY_TOKEN，与同组其余 6 个字段
+                    # （一律以存储值作 default）真值源不一致：客户端提交时漏带
+                    # 该键（HA 前端对未改动字段可能不落 key）即把用户自定义令牌
+                    # 静默改回默认——小程序侧永久 401，同时 9001 变成人人可连。
+                    default=self._config_entry.options.get(
+                        CONF_WS_GATEWAY_TOKEN, DEFAULT_WS_GATEWAY_TOKEN),
                 ): str,
             }),
             errors=errors,
