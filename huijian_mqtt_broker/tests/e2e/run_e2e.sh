@@ -17,6 +17,14 @@ diag() {
     echo "!! E2E 编排失败于: ${1:-unknown}"
     docker logs --tail 40 mosq-e2e 2>&1 || true
     docker logs --tail 150 ha-e2e 2>&1 | grep -v "^\s*$" | tail -100 || true
+    # v1.7.34：HA 自带文件日志（bind 挂在 $CFG，不走 docker 的块缓冲）——
+    # 第二轮 CI 实证 `docker logs` 在 05:45:20 后整段空白：python stdout
+    # 非 TTY 时块缓冲，driver 失败那一刻缓冲区还没落盘，连"等待条目 setup"
+    # 必打的 INFO 都看不到，等于没有取证。文件日志每条 flush，是唯一可靠面。
+    echo "── HA 文件日志（$CFG/home-assistant.log 尾 200 行） ──"
+    tail -200 "$CFG/home-assistant.log" 2>/dev/null \
+        | grep -E "window_controller|发现|自动填充|等待模式|ERROR|Traceback" \
+        | tail -80 || true
 }
 trap 'diag "line $LINENO"' ERR
 
@@ -52,8 +60,10 @@ logger:
     custom_components.window_controller_gateway: info
 EOF
 chmod -R 777 "$CFG"
+# PYTHONUNBUFFERED：python stdout 非 TTY 时块缓冲，HA 的日志会卡在缓冲区里
+# 不进 docker logs（第二轮 CI 实证：driver 失败时刻之前的日志整段丢失）。
 docker run -d --name ha-e2e --network host \
-    -e "TZ=Etc/UTC" -v "$CFG:/config" \
+    -e "TZ=Etc/UTC" -e "PYTHONUNBUFFERED=1" -v "$CFG:/config" \
     ghcr.io/home-assistant/home-assistant:stable >/dev/null
 
 echo "==== 3. 驱动器（等待/认证/entry/002/断言/soak 全在其内） ===="

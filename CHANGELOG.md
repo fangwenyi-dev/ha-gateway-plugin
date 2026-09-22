@@ -18,7 +18,7 @@ v1.7.33 发布后的两条现场链路复核批（用户问「新装加载项后
 - **真栈 E2E 补两臂（`ha_e2e_driver.py` K/L 段，随 e2e job 作发布硬门禁）**：
   - K 臂：未配置网关首报 001 → `gateway/{sn}/req` 上**恰好一条**同型代答（head `$SH` / ctype / id / sn 回带 + `data.errcode:0` + `uuid`），且发现卡挂起可确认。计数在凑够后再静置 2s——只等到第一条就返回会漏掉晚几十毫秒的第二个应答者（假绿）。
   - L 臂：空 SN 等待条目（发现代理同款 REST 路径）+ 首报 → SN 自动填进**同一条**等待条目、条目 loaded、子设备真注册进设备注册表、发现卡 **0 张**（"直接添加到集成"零点击契约），且两耳并存（handler 耳 + 心跳耳）时仍 1 请求 1 答（v1.7.30 仲裁在真栈上的第二应答者形态）。
-  - 配套两处真栈取证修正（首轮 CI 实锤后修）：在途发现流改走 WS `config_entries/flow/progress`——`GET /api/config/config_entries/flow` 在 HA 2026.9.3 是 **405**（源码 `ConfigManagerFlowIndexView.get` 显式 `raise HTTPMethodNotAllowed`），恒空列表既让 K 臂假红、也会让 L 臂的"0 张卡"变成假绿，故查询失败一律显式 `die`；`run_e2e.sh` 预置的 `configuration.yaml` 把本集成日志开到 INFO（发现链早退分支全是 DEBUG，成功路径才是 INFO——不开就等于每次红都要再盲跑一轮 CI），并保留 `default_config:`（镜像原本自动生成的那份首行即此，api/auth/onboarding 全靠它拉起）。
+  - 配套的真栈取证修正（两轮 CI 实锤后修）：①在途发现流改走 WS `config_entries/flow/progress`——`GET /api/config/config_entries/flow` 在 HA 2026.9.3 是 **405**（源码 `ConfigManagerFlowIndexView.get` 显式 `raise HTTPMethodNotAllowed`），恒空列表既让 K 臂假红、也会让 L 臂的"0 张卡"变成假绿，故查询失败一律显式 `die`；②L 臂"填充成功"判定改走 **devices 视图**——`GET /api/config/config_entries/entry` 返回 `entry.as_json_fragment`，**不含 data/unique_id**（源码实证），拿它读 `data.gateway_sn` 恒为假（第二轮"填充=None"即此假象），现以等待条目按 entry_id 甄别 + devices 三真（网关 SN identifier／子设备注册／gateway_online）+ 条目数不变共同判定；③取证能力：`run_e2e.sh` 预置 `configuration.yaml` 把本集成日志开到 INFO 并保留 `default_config:`（镜像原本自动生成那份首行即此，api/auth/onboarding 全靠它；漏掉＝REST 整个不存在），diag 追加 **HA 文件日志**（`$CFG/home-assistant.log`，每条 flush）并给容器加 `PYTHONUNBUFFERED=1`——第二轮实证 `docker logs` 在关键时段整段空白（python stdout 非 TTY 时块缓冲），等于没有取证。
 
 ### Tests
 

@@ -49,16 +49,27 @@ class TestArmsPresent:
         seg = SRC[i_l:]
         assert '{"gateway_sn": "", "gateway_name": ""}' in seg, \
             "L 臂必须用发现代理同款空 SN REST 路径建等待条目"
-        assert "if filled_id != awaiting_id:" in seg, \
-            "L 臂必须验 SN 填进的是**同一条**等待条目（新建条目=零点击契约破）"
-        assert 'if filled_state != "loaded":' in seg, \
-            "L 臂必须验填充后条目真 loaded（update listener 单驱动 reload）"
+        assert 'if e.get("entry_id") != entry' in seg, \
+            "等待条目必须按 entry_id 甄别（REST 条目表不含 data，见下）"
+        assert 'if _aw_state != "loaded":' in seg, \
+            "L 臂必须验等待条目真 loaded（心跳耳挂载前提）"
         assert "_stray" in seg and "不得再弹发现卡" in seg, \
             "L 臂必须验零发现卡（弹卡=用户被要求确认已加进来的网关）"
-        assert AUTO_DEV in seg and "config_entry_id={filled_id}" in seg, \
-            "L 臂必须验填充后的条目真接管上报（子设备注册）"
+        assert 'if _n_entries != 2' in seg, \
+            "L 臂必须验零点击路径不新建条目（新建=没走 3.5 填充）"
+        assert "config_entry_id={awaiting_id}" in seg and "含网关SN" in seg, \
+            "L 臂接管证据必须走 devices 视图（产品级真值面）"
         assert "_check_single_ack(_l_acks, AUTO_GW, 7202" in seg, \
             "L 臂必须验两耳并存时仍恰好一答"
+
+    def test_l_arm_does_not_peek_entry_data(self):
+        """反钉（第三轮 CI 假红实锤）：`GET /api/config/config_entries/entry`
+        返回的是 `entry.as_json_fragment`，**不含 data/unique_id**（HA
+        config_entries.py 源码实证）。拿它读 data.gateway_sn 判"填充成功"会
+        恒为假 —— 真栈上表现为"填充明明发生，driver 却报 填充=None"。"""
+        assert 'e.get("data")' not in SRC, \
+            "不得从 REST 条目表读 data（该响应无此字段）；用 devices 视图判接管"
+        assert "as_json_fragment" in SRC, "该实证结论必须写进注释防回退"
 
     def test_arms_run_before_soak(self):
         """顺序钉：两臂必须在 J 段 500 条 soak 之前——否则 req 主题被洪水

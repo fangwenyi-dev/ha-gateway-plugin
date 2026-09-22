@@ -515,19 +515,27 @@ st, res = call("POST", f"/api/config/config_entries/flow/{fl['flow_id']}",
 if not (isinstance(res, dict) and res.get("type") == "create_entry"):
     die(f"空 SN 提交未创建等待条目: {res}")
 
-awaiting_id, awaiting_state = None, "?"
+# 真值面（第三轮 CI 实证）：REST `/api/config/config_entries/entry` 返回的是
+# `entry.as_json_fragment`——**不含 data/unique_id**（HA config_entries.py 源码
+# 实证：只有 entry_id/domain/title/state/source/disabled_by 等）。所以"SN 是否
+# 填进该条目"不能用条目表判（第二轮曾因此假红：填充明明发生，driver 却恒读
+# 不到 data.gateway_sn）——改用**产品级可观测面**：devices 视图里的网关设备
+# 带 (DOMAIN, sn) identifier，且 gateway_online 只有 handler 真处理过上报才真。
+_others = [e for e in _hj_entries() if e.get("entry_id") != entry]
+if len(_others) != 1:
+    die(f"等待条目形态异常：除已配置网关外应恰有 1 个条目，实得 {len(_others)}"
+        f"（id={[str(e.get('entry_id'))[:8] for e in _others]}）")
+awaiting_id = _others[0].get("entry_id")
+_aw_state = "?"
 _dead = time.time() + 60
 while time.time() < _dead:
-    for e in _hj_entries():
-        if not (e.get("data") or {}).get("gateway_sn"):
-            awaiting_id, awaiting_state = e.get("entry_id"), e.get("state")
-    if awaiting_id and awaiting_state == "loaded":
+    _aw_state = next((e.get("state") for e in _hj_entries()
+                      if e.get("entry_id") == awaiting_id), "?")
+    if _aw_state == "loaded":
         break
     time.sleep(2)
-if not awaiting_id:
-    die("空 SN 等待条目未出现（零点击链的第一步就没落地）")
-if awaiting_state != "loaded":
-    die(f"等待条目未 loaded（{awaiting_state}）——心跳耳无从挂载，自动发现必死")
+if _aw_state != "loaded":
+    die(f"等待条目未 loaded（{_aw_state}）——心跳耳无从挂载，自动发现必死")
 step("L", f"等待条目 {awaiting_id} loaded ✓（心跳耳已挂，两耳并存）")
 
 pc.subscribe(f"gateway/{AUTO_GW}/req", qos=1)
@@ -538,31 +546,11 @@ pc.publish("gateway/rpt_rsp", json.dumps(_first_report(AUTO_GW, 7202))) \
 _l_acks = _wait_acks(f"gateway/{AUTO_GW}/req", _l0)
 _check_single_ack(_l_acks, AUTO_GW, 7202, "L 两耳并存首报")
 
-filled_id, filled_state = None, "?"
+# 零点击接管：周期性重发 002（每轮换 id）。单发一条若落在 reload 窗内（旧
+# 订阅已退、新订阅未挂）就会白等——真网关本就是周期上报，重发贴近现场又
+# 消掉这处竞态假红。
+_taken, _rid, _seen = False, 7203, {}
 _dead = time.time() + 90
-while time.time() < _dead:
-    for e in _hj_entries():
-        if str((e.get("data") or {}).get("gateway_sn") or "").lower() == AUTO_GW.lower():
-            filled_id, filled_state = e.get("entry_id"), e.get("state")
-    if filled_id and filled_state == "loaded":
-        break
-    time.sleep(3)
-if filled_id != awaiting_id:
-    die(f"SN 未被填进等待条目（填充={filled_id} 等待={awaiting_id}）——"
-        "零点击自动添加链断（discovery 3.5）")
-if filled_state != "loaded":
-    die(f"自动填充后条目未 loaded（{filled_state}）——update listener 单驱动 reload 断")
-
-_stray = _cards_for(AUTO_GW)
-if _stray:
-    die(f"零点击自动填充不得再弹发现卡，实得 {len(_stray)} 张（用户会被要求"
-        "确认一台已经加进来的网关）")
-
-# 接管证据：周期性重发 002（每轮换 id）。单发一条若正好落在 reload 窗内
-# （旧订阅已退、新订阅未挂）就会白等 60s——真网关本就是周期上报，重发既
-# 贴近现场又消掉这一处竞态假红。
-_taken, _rid = False, 7203
-_dead = time.time() + 60
 while time.time() < _dead and not _taken:
     pc.publish("gateway/rpt_rsp", json.dumps({
         "head": {"cmdid": "002", "id": _rid}, "ctype": "002", "id": _rid,
@@ -573,17 +561,31 @@ while time.time() < _dead and not _taken:
     _t_poll = time.time() + 6
     while time.time() < _t_poll and not _taken:
         st, d2 = call("GET", f"/api/window_controller_gateway/devices"
-                             f"?config_entry_id={filled_id}")
+                             f"?config_entry_id={awaiting_id}")
         if st == 200 and isinstance(d2, list):
-            _sns = {i[1] for d in d2 for i in (d.get("identifiers") or [])
+            _ids = {i[1] for d in d2 for i in (d.get("identifiers") or [])
                     if isinstance(i, list) and len(i) > 1}
-            _taken = (AUTO_DEV in _sns
-                      and any(x.get("gateway_online") is True for x in d2))
+            _seen = {"条目数": len(d2), "含网关SN": AUTO_GW in _ids,
+                     "含子设备": AUTO_DEV in _ids,
+                     "网关在线": any(x.get("gateway_online") is True for x in d2)}
+            _taken = _seen["含网关SN"] and _seen["含子设备"] and _seen["网关在线"]
         if not _taken:
             time.sleep(2)
 if not _taken:
-    die("自动填充后的条目未真正接管上报（子设备未注册/网关未在线）——"
-        "只改了 data 没走完整 setup")
+    _fl = _hj_flows(strict=False) or []
+    _ents = [(str(e.get("entry_id"))[:8], e.get("state")) for e in _hj_entries()]
+    die(f"零点击自动添加链断：等待条目 {str(awaiting_id)[:8]} 未接管 {AUTO_GW}"
+        f"（devices 视图={_seen}，需三真）；条目快照[(id,state)]={_ents}；"
+        f"在途流="
+        f"{[(f.get('handler'), (f.get('context') or {}).get('unique_id')) for f in _fl]}")
+
+_stray = _cards_for(AUTO_GW)
+if _stray:
+    die(f"零点击自动填充不得再弹发现卡，实得 {len(_stray)} 张（用户会被要求"
+        "确认一台已经加进来的网关）")
+_n_entries = len(_hj_entries())
+if _n_entries != 2:
+    die(f"零点击路径不得新建条目（应仍为 网关+等待 两条），实得 {_n_entries} 条")
 step("L", f"零点击自动添加真栈实证 ✓（{AUTO_GW} 填入等待条目→loaded→"
            f"子设备 {AUTO_DEV} 注册；发现卡 0 张；两耳并存仍 1 请求 1 答）")
 
