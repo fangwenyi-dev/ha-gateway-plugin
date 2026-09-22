@@ -40,6 +40,7 @@ HUB_RECONNECT_BASE_S = 5.0
 HUB_RECONNECT_MAX_S = 300.0
 HUB_SLEEP_SLICE_S = 30.0          # 长睡切片（停机时最多 30s 内让出）
 HUB_STATE_DEBOUNCE_S = 0.3        # 状态上行合并窗
+HUB_KEEPALIVE_S = 300.0           # 保活重推：让 hub 侧 updatedAt 反映 agent 存活
 HUB_HTTP_TIMEOUT_S = 15.0
 HUB_IDENTITY_FILE = "huijian_hub_identity.json"
 
@@ -61,6 +62,22 @@ async def interruptible_sleep(seconds: float, is_stopping: Callable[[], bool]) -
             return
         await asyncio.sleep(min(HUB_SLEEP_SLICE_S, remaining))
         remaining -= HUB_SLEEP_SLICE_S
+
+
+def _attr_int(dev: Any, key: str) -> int:
+    """设备属性安全取整（-1=未知约定；bool/None/不可解析/非有限数一律 -1）。
+
+    与 ws_gateway._as_int 同口径：`int(float('inf'))` 抛 OverflowError、
+    JSON 里 `1e999` 就能造出 inf，故必须把 OverflowError 一起接住。
+    """
+    raw = (dev or {}).get("attributes") if isinstance(dev, dict) else None
+    value = (raw or {}).get(key) if isinstance(raw, dict) else None
+    if value is None or isinstance(value, bool):
+        return -1
+    try:
+        return int(value)
+    except (ValueError, TypeError, OverflowError):
+        return -1
 
 
 def cred_brief(value: Any) -> str:
@@ -287,6 +304,7 @@ class HubClient:
             self._logger.info("hub 已连接（instance=%s）", self.instance_id)
             self._state_dirty.set()          # 上线先全量推一次
             flush = asyncio.ensure_future(self._flush_loop(ws))
+            keepalive = asyncio.ensure_future(self._keepalive_loop())
             try:
                 async for msg in ws:
                     if msg.type != aiohttp.WSMsgType.TEXT:
@@ -306,12 +324,22 @@ class HubClient:
                         "err": result.get("err"),
                     })
             finally:
-                flush.cancel()
-                try:
-                    await flush
-                except (asyncio.CancelledError, Exception):  # noqa: BLE001
-                    pass
+                for task in (flush, keepalive):
+                    task.cancel()
+                await asyncio.gather(flush, keepalive, return_exceptions=True)
         return True
+
+    async def _keepalive_loop(self) -> None:
+        """周期标脏重推：状态长时间不变时也要刷新 hub 侧 updatedAt。
+
+        否则"设备一直没人动"与"agent 已死"在云端是同一种形态（updatedAt 越来越旧），
+        小程序侧无法区分。睡眠按 30s 切片（停机时最多 30s 内让出）。
+        """
+        while not self._stopping:
+            await interruptible_sleep(HUB_KEEPALIVE_S, lambda: self._stopping)
+            if self._stopping:
+                return
+            self._state_dirty.set()
 
     # ── 状态上行 ──────────────────────────────────────────────────
     def _on_device_status(self, gateway_sn: str, device_sn: str) -> None:  # noqa: ARG002
@@ -342,6 +370,10 @@ class HubClient:
             except Exception:  # noqa: BLE001
                 continue
             if isinstance(view, dict) and view.get("sn"):
+                # 云通道没有 LAN 那路 device_update 实时推送，锁定模式只能靠
+                # 状态上行带过去——device_ws_view 是 device_list 项视图（不含它），
+                # 这里补上与 LAN `_device_update_payload` 同源的字段。
+                view["windLockMode"] = _attr_int(dev, "wind_lock_mode")
                 items.append(view)
         return items
 

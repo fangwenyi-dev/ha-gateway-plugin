@@ -195,7 +195,7 @@ def test_ws_url_switches_scheme(tmp_path):
 
 
 def test_collect_state_items_uses_injected_view_and_survives_bad_entries(tmp_path):
-    manager = FakeManager(devices={"A1B2": {"x": 1}, "BAD": {}})
+    manager = FakeManager(devices={"A1B2": {"attributes": {"wind_lock_mode": 1}}, "BAD": {}})
 
     def builder(sn, gw, dev):
         if sn == "BAD":
@@ -204,7 +204,43 @@ def test_collect_state_items_uses_injected_view_and_survives_bad_entries(tmp_pat
 
     client, _, _ = make_client(tmp_path, manager=manager, view_builder=builder)
     items = client.collect_state_items()
-    assert items == [{"sn": "A1B2", "gwSn": "GW1", "position": 30}]     # 坏条目被跳过、不炸
+    # 坏条目被跳过、不炸；锁定模式随状态上行带过去（云通道没有 LAN 那路
+    # device_update 实时推送，缺失即小程序永远显示"--"）
+    assert items == [{"sn": "A1B2", "gwSn": "GW1", "position": 30, "windLockMode": 1}]
+
+
+def test_collect_state_items_wind_lock_mode_unknown_stays_minus_one(tmp_path):
+    cases = {
+        "MISS": {},                                     # 无 attributes
+        "NONE": {"attributes": {"wind_lock_mode": None}},
+        "BOOL": {"attributes": {"wind_lock_mode": True}},   # bool 不是固件合法模式值
+        "JUNK": {"attributes": {"wind_lock_mode": "abc"}},
+        "INF": {"attributes": {"wind_lock_mode": float("inf")}},
+        "OK0": {"attributes": {"wind_lock_mode": 0}},
+    }
+    manager = FakeManager(devices=cases)
+    client, _, _ = make_client(tmp_path, manager=manager,
+                               view_builder=lambda sn, gw, dev: {"sn": sn, "gwSn": gw})
+    modes = {it["sn"]: it["windLockMode"] for it in client.collect_state_items()}
+    assert modes == {"MISS": -1, "NONE": -1, "BOOL": -1, "JUNK": -1, "INF": -1, "OK0": 0}
+
+
+def test_keepalive_marks_state_dirty_even_without_status_changes(tmp_path, monkeypatch):
+    monkeypatch.setattr(hc, "HUB_KEEPALIVE_S", 0.03)
+    monkeypatch.setattr(hc, "HUB_SLEEP_SLICE_S", 0.01)
+    client, _, _ = make_client(tmp_path)
+
+    async def run():
+        client._stopping = False
+        client._state_dirty = asyncio.Event()
+        task = asyncio.ensure_future(client._keepalive_loop())
+        await asyncio.sleep(0.08)
+        dirty = client._state_dirty.is_set()
+        client._stopping = True                       # 停机闩锁 → 循环自行退出
+        await asyncio.wait_for(task, timeout=1.0)
+        return dirty
+
+    assert asyncio.run(run()) is True
 
 
 def test_handle_cmd_replies_and_normalizes_value(tmp_path):

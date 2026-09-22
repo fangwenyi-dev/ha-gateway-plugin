@@ -3,6 +3,24 @@
 所有版本变更记录在此文件中。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.7.36] - 2026-09-22
+
+v1.7.35 发布后、真机联调前的**跨仓契约复核批**：把「小程序页面 ↔ 选路层」与「云通道 ↔ LAN 通道」两处接口面/字段逐条对账，修掉 1.7.35 一进真机就会暴露的两处（小程序侧同批的 v1.4.18 修另外两处）。
+
+### Fixed
+
+- **云通道「锁定模式」恒为未知**：锁定模式在 LAN 通道是由 `device_update` 实时推送补齐的（`_device_update_payload` 七键之一），而 `device_ws_view` 只是 device_list 项视图（sn/gwSn/position/battery/state）——云通道只有状态上行这一路，插件不带上它，小程序页面永远显示 "--"。状态条目补 `windLockMode`，取值与 LAN 同源（`attributes.wind_lock_mode`；缺失 / bool / 不可解析 / `1e999` 这种非有限数一律 -1，沿用 `_as_int` 连 OverflowError 一起接住的口径）。
+- **状态上行不保活 ⇒ 云端分不清「一直没人动」与「agent 已死」**：hub 侧每条状态都带 `updatedAt`，但只有状态变化才刷新——网关静置一段时间后，小程序侧的「在线/最后上报」就无从判断（活着与死了同形）。新增 5 分钟保活重推（`_keepalive_loop`，睡眠仍按 30s 切片，不占 HA 停机预算）：agent 活着则 `updatedAt` 恒新鲜，掉线后自然转旧。
+
+### Tests
+
+- `test_hub_client.py` 14 → 16 条：新增「状态条目必带 windLockMode（缺失 / bool / 字符串 / inf 全落 -1，合法 0/1 原样带过）」「保活循环按时标脏、置停机闩锁后自行退出」；原状态条目用例同步改断言（不再只是五键视图）。
+- 全量 851 用例通过（基线 849）；`bash -n` 全部 shell、`compileall` 递归、ruff（F,E9,B）生产 + 测试全清、`node --check` 全部前端 JS、四源版本一致（config.yaml / manifest.json / version.json / index.html）。
+
+### 配套（另一仓）
+
+- `xiaochengxu-mqtt` v1.4.18：选路层 `GwRouter` 补齐页面在调但漏实现的 `getDevice` / `setDeviceName` / `removeDeviceLocal` / `refreshDevices`（并改为按 LAN 客户端原型动态兜底 + 测试钉住两个 API 面相等），云模式 `getGateways()` 补齐 `devices[]` / `lastSeen` / `deviceCount` 形状（页面 `gw.devices.map(...)` 直接崩）、设备名走本地同一套命名、按 `updatedAt` 判在线并剪枝。
+
 ## [1.7.35] - 2026-09-22
 
 P0 远程控制通道（插件侧）：加载项到「慧尖云 hub」的**出站长连**——客户零配置（装加载项即自动注册实例、取 6 位一次性绑定码），小程序扫码绑定后即可在**局域网之外**控制子设备。配套 hub 服务在独立仓 `huijian-cloud-hub`（微信云托管部署，公网 HTTPS + wss 四跳已在真栈验证），本轮只发插件侧。
