@@ -26,6 +26,7 @@ JS = (ROOT / "www" / "js" / "huijian.js").read_text(encoding="utf-8")
 CSS = (ROOT / "www" / "css" / "huijian.css").read_text(encoding="utf-8")
 
 PAYLOAD_SAMPLE = "HUJIAN-BIND:1:123456"      # 两端共同约定的载荷样本（小程序测试用同一串）
+PANEL_BINDCODE_PATH = "/window_controller_gateway/hub/bindcode"   # 换码路由（POST；注册真值钉在 v1737 测试里）
 
 
 def _element(html, marker):
@@ -85,22 +86,43 @@ def test_panel_copy_points_to_the_qr_next_to_it():
     card = _element(HTML, 'id="remoteCard"')
     assert "二维码" in card and "扫一扫" in card, "卡片文案没指示可用扫一扫"
     assert "logo 旁" not in card, "文案仍说二维码在 logo 旁（v1.7.39 已挪位，用户会找不到）"
+    # v1.7.40（用户令）：小程序在微信里叫「小慧语音」——只写"打开小程序"客户搜不到
+    assert "小慧语音" in card, "文案缺可搜索的小程序名「小慧语音」（照文案搜不到＝没有入口）"
 
 
 def test_render_bind_qr_is_called_on_every_exit_path():
-    body = _fn("loadRemoteControl")
-    calls = body.count("renderBindQr(")
-    assert calls == 3, "renderBindQr 只调了 %d 次（有码/未启用/读取失败三条出口都要调，" \
-                       "漏调会残留过期码）" % calls
+    """单一渲染出口：GET 状态与 POST 换码都必须经 applyHubStatus，才不会有路径漏渲染。"""
+    apply_body = _fn("applyHubStatus")
+    assert "renderBindQr('')" in apply_body, "未启用分支没有清掉二维码（会残留上一次的码）"
+    assert "renderBindQr(_bindCode)" in apply_body, "正常分支没有渲染二维码"
+    for name in ("loadRemoteControl", "refreshBindCode"):
+        assert "applyHubStatus(" in _fn(name), "%s 没走统一渲染出口" % name
+    others = [n for n in re.findall(r"function (\w+)", JS)
+              if n not in ("applyHubStatus", "renderBindQr") and "renderBindQr(" in _fn(n)]
+    assert others == [], "除统一出口外还有函数直接渲染二维码（会绕过过期/未启用处理）: %s" % others
     render = _fn("renderBindQr")
     assert "wrap.hidden = true" in render and "wrap.hidden = false" in render, \
         "renderBindQr 没有显式开关显隐"
     assert "HjQr" in render, "renderBindQr 没走自带编码器"
 
 
-def test_click_refetches_not_redraws():
-    body = _fn("refreshBindQr")
-    assert "loadRemoteControl()" in body, "点击二维码没有重新拉码（只重画旧码＝刷新是假的）"
+def test_click_rotates_code_with_get_fallback():
+    """点击＝换新码（POST），不是重读同一个码——过期码只读刷新刷不出可用的码。"""
+    assert "refreshBindCode()" in _fn("refreshBindQr"), "点击二维码没有走换码路径"
+    body = _fn("refreshBindCode")
+    assert "haApi('%s', 'POST')" % PANEL_BINDCODE_PATH in body, "换码没走 POST 路由"
+    assert "loadRemoteControl()" in body, "老集成没有换码路由时缺只读回退（会显示成读取失败）"
+
+
+def test_panel_shows_expiry_and_points_to_the_click_to_renew():
+    """码会过期：必须把"还剩多久/已过期＋点二维码换新码"摆出来，而不是等扫码失败才发现。"""
+    card = _element(HTML, 'id="remoteCard"')
+    assert 'id="hubCodeExp"' in card, "缺有效期提示元素"
+    body = _fn("applyHubStatus")
+    assert "bindCodeExpiresIn" in body and "bindCodeExpired" in body, "未读取过期字段"
+    assert "剩余 " in body, "没有剩余时间文案"
+    assert "已过期" in body and "点右边的二维码" in body, "过期后没有指路（用户只能反复扫死码）"
+    assert re.search(r"\.hub-code-exp\.expired", CSS), "缺过期态样式（过期与正常看不出区别）"
 
 
 def test_payload_contract_and_encoder_capacity():

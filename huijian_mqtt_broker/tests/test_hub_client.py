@@ -1,8 +1,11 @@
 """hub_client 单测：出站客户端的关键语义（重连退避 / 切片睡眠 / 值校验 / 命令回执 /
 身份持久化 / 状态条目不回显凭据）。全部用假对象，不打网络。"""
+import ast
 import asyncio
+import inspect
 import json
 import os
+import time
 
 from custom_components.window_controller_gateway import hub_client as hc
 
@@ -350,3 +353,90 @@ def test_stop_is_idempotent_and_detaches_listener(tmp_path):
     assert manager.listeners == []                                               # 已摘监听
     asyncio.run(client.async_stop())                                    # 幂等
     assert client.connected is False
+
+
+# ── 绑定码：过期判定 / 轮换 / 自动补发（v1.7.41）────────────────────
+def test_bind_code_expiry_math_and_view(tmp_path):
+    client, _, _ = make_client(tmp_path)
+    client.instance_id, client._secret = "abc", "def"
+    client.bind_code, client._bind_code_at = "111111", time.time()
+    assert 0 < client.bind_code_expires_in() <= hc.BIND_CODE_TTL_S
+    view = client.status_view()
+    assert view["bindCodeExpired"] is False and view["bindCodeExpiresIn"] > 0
+
+    client._bind_code_at = time.time() - hc.BIND_CODE_TTL_S - 5      # 已过期
+    assert client.bind_code_expires_in() < 0
+    assert client.status_view()["bindCodeExpired"] is True
+
+    client.bind_code = None                                           # 没码不算"过期"，算没有
+    assert client.bind_code_expires_in() == -1
+    assert client.status_view()["bindCodeExpired"] is False
+
+
+def test_refresh_bind_code_persists_and_degrades(tmp_path, monkeypatch):
+    client, _, _ = make_client(tmp_path)
+    client.instance_id, client._secret = "abc", "def"
+    client._bind_code_at = time.time() - 9999                         # 手上是死码
+    calls = []
+
+    async def ok_http(path, payload):
+        calls.append((path, payload))
+        return {"ok": True, "bindCode": "222222", "expiresInSec": 600}
+
+    monkeypatch.setattr(client, "_http", ok_http)
+    assert asyncio.run(client.refresh_bind_code()) is True
+    assert calls[0][0] == "/agent/bindcode"
+    assert calls[0][1]["instanceId"] == "abc" and calls[0][1].get("secret") == "def"
+    assert client.bind_code == "222222" and client.bind_code_expires_in() > 500
+    saved = hc.load_identity(str(tmp_path))
+    assert saved["bindCode"] == "222222" and saved["bindCodeAt"] > 0   # 签发时刻落盘（重启后能判过期）
+
+    async def reject_http(path, payload):                              # hub 拒绝（bad_secret 等）
+        return {"ok": False, "err": "bad_secret"}
+
+    monkeypatch.setattr(client, "_http", reject_http)
+    assert asyncio.run(client.refresh_bind_code()) is False
+    assert client.bind_code == "222222"                                # 失败不动手上的码
+
+    async def boom_http(path, payload):                                # 旧 hub 没这条路由/网络断
+        raise RuntimeError("net down")
+
+    monkeypatch.setattr(client, "_http", boom_http)
+    assert asyncio.run(client.refresh_bind_code()) is False
+
+
+def test_renew_bind_code_if_stale_only_when_needed(tmp_path, monkeypatch):
+    client, _, _ = make_client(tmp_path)
+    client.instance_id, client._secret = "abc", "def"
+    client.bind_code, client._bind_code_at = "111111", time.time()
+    calls = []
+
+    async def fake_http(path, payload):
+        calls.append(path)
+        return {"ok": True, "bindCode": "333333"}
+
+    monkeypatch.setattr(client, "_http", fake_http)
+    asyncio.run(client._renew_bind_code_if_stale())                    # 新鲜：一次都不该发
+    assert calls == [] and client.bind_code == "111111"
+
+    client._bind_code_at = time.time() - (hc.BIND_CODE_TTL_S - 10)     # 只剩 10s：该换
+    asyncio.run(client._renew_bind_code_if_stale())
+    assert calls == ["/agent/bindcode"] and client.bind_code == "333333"
+
+    client.bind_code, client._bind_code_at = "444444", 0               # 签发时刻未知＝按过期处理
+    asyncio.run(client._renew_bind_code_if_stale())
+    assert calls[-1] == "/agent/bindcode"
+
+
+def test_renew_is_wired_into_session_and_keepalive():
+    """防死码凑数：自动补发必须真接在"上线自检"与"保活 tick"两条活路径上。"""
+    tree = ast.parse(inspect.getsource(hc))
+    want = {"_session_once", "_keepalive_loop"}
+    found = {}
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef)) and node.name in want:
+            found[node.name] = any(
+                isinstance(n, ast.Attribute) and n.attr == "_renew_bind_code_if_stale"
+                for n in ast.walk(node)
+            )
+    assert found == {"_session_once": True, "_keepalive_loop": True}, found

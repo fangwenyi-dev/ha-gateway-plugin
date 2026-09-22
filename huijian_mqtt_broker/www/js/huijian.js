@@ -72,7 +72,21 @@
         let _copyTimer = null;
 
         function refreshBindQr() {
-            loadRemoteControl();
+            refreshBindCode();   // 点击＝换一个新码（旧码过期后"只读刷新"刷不出可用的码）
+        }
+
+        /** 显式换新码（旧码当场作废，所以只能由用户点击触发，不做自动轮换）。
+         *  老版本集成没有这条路由 → 退回只读刷新，别把页面显示成"读取失败"。*/
+        async function refreshBindCode() {
+            try {
+                const resp = await haApi('/window_controller_gateway/hub/bindcode', 'POST');
+                if (!resp.ok) throw new Error('HA API ' + resp.status);
+                const info = await resp.json();
+                if (info && info.refreshOk) { applyHubStatus(info); return }
+                await loadRemoteControl();
+            } catch (e) {
+                await loadRemoteControl();
+            }
         }
 
         function renderBindQr(code) {
@@ -90,6 +104,59 @@
             }
             wrap.hidden = false;
             if (tip) tip.textContent = code;
+        }
+
+        /** 唯一渲染出口：GET 状态与 POST 换码都走这里，任何一条路径都不会漏渲染。*/
+        function applyHubStatus(info, failed) {
+            const dot = document.getElementById('hubDot');
+            const statusEl = document.getElementById('hubStatus');
+            const codeEl = document.getElementById('hubCode');
+            const gwEl = document.getElementById('hubGateway');
+            const gwDot = document.getElementById('hubGwDot');
+            const expEl = document.getElementById('hubCodeExp');
+            if (!dot || !statusEl || !codeEl || !gwEl) return;
+            if (failed || !info || !info.enabled) {
+                // 读取失败与"未启用"必须分开显示：故障伪装成正常态会让排障从第一步就走错
+                dot.className = 'dot ' + (failed ? 'dot-err' : 'dot-unknown');
+                statusEl.textContent = failed ? '读取失败' : '未启用';
+                codeEl.textContent = '------';
+                gwEl.textContent = '—';
+                if (gwDot) gwDot.className = 'dot dot-unknown';
+                if (expEl) { expEl.textContent = ''; expEl.className = 'hub-code-exp'; }
+                _bindCode = '';
+                renderBindQr('');
+                return;
+            }
+            dot.className = 'dot ' + (info.connected ? 'dot-ok' : 'dot-warn');
+            statusEl.textContent = info.connected ? '已连接' : '未连接';
+            _bindCode = info.bindCode || '';
+            codeEl.textContent = _bindCode || '------';
+            gwEl.textContent = info.gatewaySn || '—';
+            if (gwDot) gwDot.className = 'dot ' + (info.gatewaySn ? 'dot-ok' : 'dot-unknown');
+            if (expEl) {
+                // 码会过期：把"还剩多久/已经过期"摆出来，用户不用靠扫码失败来发现
+                const sec = typeof info.bindCodeExpiresIn === 'number' ? info.bindCodeExpiresIn : null;
+                if (!_bindCode) { expEl.textContent = ''; expEl.className = 'hub-code-exp'; }
+                else if (info.bindCodeExpired || (sec !== null && sec <= 0)) {
+                    expEl.textContent = '已过期，点右边的二维码换新码';
+                    expEl.className = 'hub-code-exp expired';
+                } else if (sec !== null) {
+                    expEl.textContent = '剩余 ' + Math.max(1, Math.round(sec / 60)) + ' 分钟';
+                    expEl.className = 'hub-code-exp';
+                } else { expEl.textContent = ''; expEl.className = 'hub-code-exp'; }
+            }
+            renderBindQr(_bindCode);
+        }
+
+        async function loadRemoteControl() {
+            try {
+                const resp = await haApi('/window_controller_gateway/hub');
+                if (!resp.ok) throw new Error('HA API ' + resp.status);
+                applyHubStatus(await resp.json());
+            } catch (e) {
+                applyHubStatus(null, true);
+                console.log('远程控制状态获取失败:', e);
+            }
         }
 
         async function copyBindCode() {

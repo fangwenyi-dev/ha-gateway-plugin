@@ -87,19 +87,33 @@ def test_panel_route_matches_registered_view():
     urls = re.findall(r'url\s*=\s*"([^"]+)"', API)
     assert VIEW_URL in urls, f"api.py 未注册 {VIEW_URL}：{urls}"
     # 真值从面板源码里抽，不是再抄一遍常量——否则这条钉只证明了常量等于自己
-    m = re.search(r"haApi\('([^']+)'\)", _func("loadRemoteControl"))
+    m = re.search(r"haApi\('([^']+)'", _func("loadRemoteControl"))
     assert m, "loadRemoteControl 里找不到 haApi 调用锚点"
     assert m.group(1) == VIEW_URL[len("/api"):], \
         f"面板路径 {m.group(1)} 与 api.py 注册路由 {VIEW_URL} 漂移"
 
 
+def test_bindcode_route_matches_registered_view():
+    """换码路由（v1.7.41）：面板 POST 的路径必须等于 api.py 注册的换码视图 url。"""
+    urls = re.findall(r'url\s*=\s*"([^"]+)"', API)
+    want = "/api/window_controller_gateway/hub/bindcode"
+    assert want in urls, f"api.py 未注册换码路由：{urls}"
+    m = re.search(r"haApi\('([^']+)'", _func("refreshBindCode"))
+    assert m, "refreshBindCode 里找不到 haApi 调用锚点"
+    assert m.group(1) == want[len("/api"):], f"换码路径 {m.group(1)} 与注册路由漂移"
+
+
 def test_panel_handles_disabled_and_error_states():
-    body = _func("loadRemoteControl")
-    assert "!info.enabled" in body and "未启用" in body, "老集成没有该路由时未降级为「未启用」"
-    assert "读取失败" in body, "读取失败态缺失（页面会一直显示检测中）"
+    # v1.7.41：渲染分支收进统一出口 applyHubStatus（GET 与 POST 都走它）
+    body = _func("applyHubStatus")
+    assert "!info || !info.enabled" in body and "未启用" in body, "老集成没有该路由时未降级为「未启用」"
     assert "dot-ok" in body and "dot-warn" in body, "连接状态未区分已连接/未连接"
+    assert "读取失败" in body, "读取失败态缺失（页面会一直显示检测中）"
+    assert "读取失败" in body and "failed ? " in body, "读取失败未与未启用区分（故障会伪装成正常态）"
+    load_body = _func("loadRemoteControl")
+    assert "applyHubStatus(null, true)" in load_body, "抓取异常没走失败态分支"
     # secret 绝不出现在前端：视图本就不下发，前端更不该有渲染点
-    assert "secret" not in body.lower(), "前端出现 secret 字段引用（凭据面收口纪律）"
+    assert "secret" not in (body + load_body).lower(), "前端出现 secret 字段引用（凭据面收口纪律）"
     assert "secret" not in HTML.lower(), "页面 HTML 出现 secret 字样"
 
 

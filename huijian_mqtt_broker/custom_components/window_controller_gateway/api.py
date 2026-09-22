@@ -26,6 +26,7 @@ def async_setup_api(hass: HomeAssistant) -> None:
     hass.http.register_view(WindowGatewayDevicesView())
     hass.http.register_view(WindowGatewaySecurityView())
     hass.http.register_view(WindowGatewayHubView())
+    hass.http.register_view(WindowGatewayHubBindCodeView())
 
 
 class WindowGatewaySecurityView(http.HomeAssistantView):
@@ -161,3 +162,29 @@ class WindowGatewayHubView(http.HomeAssistantView):
                 view["enabled"] = True
                 return self.json(view)
         return self.json({"enabled": False})
+
+
+class WindowGatewayHubBindCodeView(http.HomeAssistantView):
+    """v1.7.41: 换一个新绑定码（面板点二维码/刷新走这条）。
+
+    为什么必须是 POST：hub 侧轮换会**当场作废旧码**（一次性语义不变），不能让
+    "看一眼状态"这种读操作顺手把用户手抄到一半的码弄失效——只有用户显式点刷新才换。
+    """
+
+    url = "/api/window_controller_gateway/hub/bindcode"
+    name = "api:window_controller_gateway:hub:bindcode"
+
+    async def post(self, request):
+        """换码并回新状态；集成里没有 hub 客户端（或换码失败）时如实回 refreshOk=False。"""
+        hass = request.app["hass"]
+        for data in list(hass.data.get(DOMAIN, {}).values()):
+            if not isinstance(data, dict):
+                continue
+            client = data.get("hub_client")
+            if client is not None:
+                ok = await client.refresh_bind_code()
+                view = client.status_view()
+                view["enabled"] = True
+                view["refreshOk"] = bool(ok)
+                return self.json(view)
+        return self.json({"enabled": False, "refreshOk": False})

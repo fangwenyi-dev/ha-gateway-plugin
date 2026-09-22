@@ -25,6 +25,7 @@ import json
 import logging
 import os
 import re
+import time
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 import aiohttp
@@ -41,6 +42,8 @@ HUB_RECONNECT_MAX_S = 300.0
 HUB_SLEEP_SLICE_S = 30.0          # 长睡切片（停机时最多 30s 内让出）
 HUB_STATE_DEBOUNCE_S = 0.3        # 状态上行合并窗
 HUB_KEEPALIVE_S = 300.0           # 保活重推：让 hub 侧 updatedAt 反映 agent 存活
+BIND_CODE_TTL_S = 600             # 绑定码有效期（与 hub 侧 bindTtlMs 同口径；过期即作废）
+BIND_CODE_RENEW_BEFORE_S = 120    # 剩余不足这么久就自动换新码（用户不必自己发现过期）
 HUB_HTTP_TIMEOUT_S = 15.0
 HUB_IDENTITY_FILE = "huijian_hub_identity.json"
 
@@ -169,6 +172,7 @@ class HubClient:
         self.instance_id: Optional[str] = None
         self._secret: Optional[str] = None
         self.bind_code: Optional[str] = None
+        self._bind_code_at: float = 0.0      # 当前码的签发时刻（epoch 秒；0=未知）
         self.connected = False
         self.last_error: Optional[str] = None
 
@@ -254,6 +258,11 @@ class HubClient:
         self.instance_id = ident.get("instanceId") or None
         self._secret = ident.get("secret") or None
         self.bind_code = self.bind_code or ident.get("bindCode") or None
+        if not self._bind_code_at:
+            try:
+                self._bind_code_at = float(ident.get("bindCodeAt") or 0)
+            except (TypeError, ValueError):
+                self._bind_code_at = 0.0
 
     async def _ensure_registered(self) -> None:
         """有身份则直接连；无身份（或上次被拒）则注册一次拿 instanceId/secret/绑定码。"""
@@ -276,14 +285,62 @@ class HubClient:
         self.instance_id = data["instanceId"]
         self._secret = data["secret"]
         self.bind_code = data.get("bindCode")
+        self._bind_code_at = time.time()
+        self._save_identity()
+        # 绑定码要让用户看得到，但日志只记摘要（凭据不回显纪律）
+        self._logger.info("hub 注册成功 instance=%s 绑定码=%s（请在插件页查看完整码）",
+                          self.instance_id, cred_brief(self.bind_code))
+
+    def _save_identity(self) -> None:
+        """落盘实例身份（含绑定码签发时刻——否则重启后无从判断码是否已过期）。"""
         save_identity(self.config_dir, {
             "instanceId": self.instance_id,
             "secret": self._secret,
             "bindCode": self.bind_code,
+            "bindCodeAt": round(self._bind_code_at, 3),
         })
-        # 绑定码要让用户看得到，但日志只记摘要（凭据不回显纪律）
-        self._logger.info("hub 注册成功 instance=%s 绑定码=%s（请在插件页查看完整码）",
-                          self.instance_id, cred_brief(self.bind_code))
+
+    def bind_code_expires_in(self) -> int:
+        """当前绑定码剩余秒数（负数=已过期；0 是签发时刻未知＝按过期处理）。"""
+        if not self.bind_code or not self._bind_code_at:
+            return -1
+        return int(BIND_CODE_TTL_S - (time.time() - self._bind_code_at))
+
+    async def refresh_bind_code(self) -> bool:
+        """向 hub 换一个新绑定码（旧码当场作废）。
+
+        面板"点二维码/刷新"与自动补发都走这里。失败只记日志回 False——绑定码拿不到
+        不影响本地控制与云通道本身。
+        """
+        if not (self.instance_id and self._secret):
+            self._load_identity()
+        if not (self.instance_id and self._secret):
+            return False
+        try:
+            data = await self._http("/agent/bindcode", {
+                "instanceId": self.instance_id,
+                "secret": self._secret,
+            })
+        except Exception as e:  # noqa: BLE001 - 网络/旧 hub 无此端点都只降级
+            self._logger.warning("hub 换绑定码失败（%s）", type(e).__name__)
+            return False
+        if not data.get("ok") or not data.get("bindCode"):
+            self._logger.warning("hub 换绑定码被拒：%s", data.get("err"))
+            return False
+        self.bind_code = data["bindCode"]
+        self._bind_code_at = time.time()
+        self._save_identity()
+        self._logger.info("hub 绑定码已更新（%s）", cred_brief(self.bind_code))
+        return True
+
+    async def _renew_bind_code_if_stale(self) -> None:
+        """快到期/已过期就自动换新码——面板上显示的码因此始终可用。"""
+        if self.bind_code_expires_in() >= BIND_CODE_RENEW_BEFORE_S:
+            return
+        if await self.refresh_bind_code():
+            self._logger.info("绑定码自动补发完成（原码已作废，请以面板显示为准）")
+        else:
+            self._logger.warning("绑定码已过期且自动补发失败——面板点一下二维码可重试")
 
     def _ws_url(self) -> str:
         base = self.base
@@ -303,6 +360,7 @@ class HubClient:
             self.last_error = None
             self._logger.info("hub 已连接（instance=%s）", self.instance_id)
             self._state_dirty.set()          # 上线先全量推一次
+            await self._renew_bind_code_if_stale()   # 上线自检：过期码当场换新
             flush = asyncio.ensure_future(self._flush_loop(ws))
             keepalive = asyncio.ensure_future(self._keepalive_loop())
             try:
@@ -339,6 +397,7 @@ class HubClient:
             await interruptible_sleep(HUB_KEEPALIVE_S, lambda: self._stopping)
             if self._stopping:
                 return
+            await self._renew_bind_code_if_stale()
             self._state_dirty.set()
 
     # ── 状态上行 ──────────────────────────────────────────────────
@@ -418,10 +477,13 @@ class HubClient:
             gateway_sn = getattr(self.device_manager, "gateway_sn", "") or ""
         except Exception:  # noqa: BLE001 - 视图绝不因取 SN 抛错
             gateway_sn = ""
+        expires_in = self.bind_code_expires_in()
         return {
             "connected": bool(self.connected),
             "instanceId": self.instance_id,
             "bindCode": self.bind_code,
+            "bindCodeExpiresIn": expires_in,
+            "bindCodeExpired": bool(self.bind_code) and expires_in <= 0,
             "gatewaySn": gateway_sn,
             "hub": self.base,
             "lastError": self.last_error,
