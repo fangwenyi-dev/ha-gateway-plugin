@@ -35,6 +35,22 @@ rm -rf "$CFG"; mkdir -p "$CFG/custom_components"
 cp -r "$DIR/../../custom_components/window_controller_gateway" \
     "$CFG/custom_components/"
 cp "$DIR/ha_e2e_driver.py" "$CFG/"
+# v1.7.34：本集成日志开到 INFO——发现链的早退分支全是 DEBUG，成功路径
+# （"发现新网关"/"已使用标准发现流程发现网关"）是 INFO。默认 warning 下
+# driver 失败时 diag 只能看到 WARNING+，K/L 两臂一旦红就得再盲跑一轮 CI
+# 才能定位（首轮 405 假红即栽在这）。default 仍 warning，噪声不涨。
+# 必须自带 default_config：镜像原本会自动生成 configuration.yaml（HA 源码
+# config.py DEFAULT_CONFIG 实证首行就是 `default_config:`，api/auth/onboarding/
+# frontend 全由它拉起）；预置文件后 HA 不再生成，漏掉它＝REST API 整个不存在。
+# 模板里的 themes/automation/script/scene !include 不抄——对应文件不会随之
+# 生成，缺文件的 !include 会让配置校验失败、HA 起不来（driver 也不用它们）。
+cat > "$CFG/configuration.yaml" <<'EOF'
+default_config:
+logger:
+  default: warning
+  logs:
+    custom_components.window_controller_gateway: info
+EOF
 chmod -R 777 "$CFG"
 docker run -d --name ha-e2e --network host \
     -e "TZ=Etc/UTC" -v "$CFG:/config" \

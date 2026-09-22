@@ -11,14 +11,21 @@ L 臂：空 SN 等待条目 + 首报 → SN 自动填进**同一条目**、条�
 不是空转——把 `_check_single_ack` / `_wait_acks` 从 driver 源文本抽出真跑，
 多答/错形/漏 uuid 必须真 die（否则 CI 绿是假的）。
 """
+import asyncio
 import json
 import pathlib
+import re
+import socket
+import threading
 import time
 from types import SimpleNamespace
+
+import pytest
 
 HERE = pathlib.Path(__file__).resolve().parent
 DRIVER = HERE / "e2e" / "ha_e2e_driver.py"
 SRC = DRIVER.read_text(encoding="utf-8")
+SH = (HERE / "e2e" / "run_e2e.sh").read_text(encoding="utf-8")
 
 NEW_GW = "E2EGW0000002"
 AUTO_GW = "E2EGW0000003"
@@ -34,7 +41,7 @@ class TestArmsPresent:
             in SRC[i_k:], "K 臂必须真发首报 001（不是只订不发的空转臂）"
         assert "_check_single_ack(_k_acks, NEW_GW, 7101" in SRC[i_k:], \
             "K 臂必须走恰好一答判定"
-        assert "_cards_for(NEW_GW)" in SRC[i_k:], "K 臂必须验发现卡挂起"
+        assert "_cards_for(NEW_GW" in SRC[i_k:], "K 臂必须验发现卡挂起"
 
     def test_arm_l_zero_click(self):
         assert f'AUTO_GW = "{AUTO_GW}"' in SRC
@@ -69,6 +76,47 @@ class TestArmsPresent:
     def test_summary_reports_both_arms(self):
         i = SRC.index("GITHUB_STEP_SUMMARY")
         assert "首报 001 代答" in SRC[i:] and "零点击自动添加" in SRC[i:]
+
+    def test_l_arm_takeover_republishes(self):
+        """接管证据必须周期重发 002（每轮换 id）：单发一条落在 reload 窗内
+        （旧订阅已退、新订阅未挂）就白等 60s——真栈竞态假红。"""
+        i_l = SRC.index(f'AUTO_GW = "{AUTO_GW}"')
+        seg = SRC[i_l:]
+        assert "while time.time() < _dead and not _taken:" in seg
+        assert "_rid += 1" in seg, "重发必须换 id（同 id 会被 5s 去重层吃掉）"
+
+
+# ============ ①b 在途流查询：WS 而非 405 的 REST 端点 ============
+class TestFlowQueryContract:
+    """首轮真栈实锤（run 35690049138）：K 臂代答断言通过、卡片断言假红——
+    `GET /api/config/config_entries/flow` 在 HA 2026.9.3 是 405（源码
+    ConfigManagerFlowIndexView.get 显式 raise HTTPMethodNotAllowed），恒空
+    列表既让 K 臂假红，也会让 L 臂的"发现卡 0 张"变成假绿。"""
+
+    def test_uses_ws_progress_command(self):
+        assert '"config_entries/flow/progress"' in SRC
+        assert '"auth_required"' in SRC and '"access_token"' in SRC, \
+            "WS 认证契约（首帧 auth_required → auth+access_token → auth_ok）"
+        assert "/api/websocket" in SRC
+
+    def test_never_queries_the_405_rest_index(self):
+        """反钉：不得回退到 REST 的流索引（405，恒空 ⇒ 两种断言都失真）。"""
+        assert 'call("GET", "/api/config/config_entries/flow")' not in SRC
+        assert "HTTPMethodNotAllowed" in SRC and "405" in SRC, \
+            "405 的实证结论必须写进注释（防下次再猜同一个端点）"
+
+    def test_query_failure_is_loud(self):
+        """strict 路径查询失败必须 die——静默返回空＝"0 张卡"假绿。"""
+        i = SRC.index("def _hj_flows(")
+        seg = SRC[i:SRC.index("def _wait_acks(")]
+        assert "die(" in seg, "strict 查询失败必须显式失败"
+        assert "last_err" in seg, "非 strict 路径要把错误带回给最终 die 文案"
+        i_l = SRC.index("_stray = _cards_for(AUTO_GW")
+        assert "strict=False" not in SRC[i_l:i_l + 60], \
+            "L 臂的\"0 张卡\"断言必须走 strict（查询失败即红，不得当 0 张）"
+        i_k = SRC.index("_c = _cards_for(NEW_GW")
+        assert "strict=False" in SRC[i_k:i_k + 80] and "last_err=" in SRC[i_k:i_k + 80], \
+            "K 臂轮询期容错、最终 die 带出末次错误"
 
 
 # ============ ② 判定助手真跑（防空转绿） ============
@@ -166,3 +214,210 @@ class TestWaitAcksSettles:
     def test_settle_constant_is_nonzero(self):
         """静置窗不得被调成 0（调 0 = 本臂退化为"只等第一答"的假绿）。"""
         assert "def _wait_acks(topic, since, want=1, timeout=30, settle=2.0):" in SRC
+
+
+# ============ ③ 真栈取证配置（run_e2e.sh） ============
+def _e2e_configuration_yaml():
+    """抽出 run_e2e.sh 预置给 HA 容器的 configuration.yaml 正文。"""
+    m = re.search(r'cat > "\$CFG/configuration\.yaml" <<\'EOF\'\n(.*?)\nEOF\n',
+                  SH, re.S)
+    assert m, "run_e2e.sh 不再预置 configuration.yaml（取证锚丢失）"
+    return m.group(1)
+
+
+class TestE2EStackDiagnostics:
+    def test_integration_logger_at_info(self):
+        """发现链的早退分支全是 DEBUG、成功路径才是 INFO——不开 INFO，K/L 红时
+        diag 只能看到 WARNING+，等于再盲跑一轮 CI（首轮 405 假红的教训）。"""
+        assert "custom_components.window_controller_gateway: info" in SH
+
+    def test_default_config_kept(self):
+        """反钉：预置的 configuration.yaml 必须自带 `default_config:`。镜像原本
+        自动生成那份（HA config.py DEFAULT_CONFIG 首行即此），api/auth/
+        onboarding/frontend 全靠它拉起；漏掉＝REST API 整个不存在，driver A 段
+        就死，且现象是"HA 端口活着但 /api/ 404"，极难归因。"""
+        body = _e2e_configuration_yaml()
+        assert re.search(r"^default_config:\s*$", body, re.M), \
+            "缺 default_config（REST API/onboarding 全不加载）"
+
+    def test_no_dangling_includes(self):
+        """反钉：预置正文里不得出现 !include——automations/scripts/scenes/themes
+        那些文件不会随之生成，缺文件的 include 会让配置校验失败、HA 起不来。
+        （只看正文，注释里谈这条教训是允许且必要的。）"""
+        assert "!include" not in _e2e_configuration_yaml()
+
+    def test_local_and_ci_share_the_driver(self):
+        """契约同源不得破：本地 harness 与 CI 跑同一份 driver。"""
+        rl = (HERE / "e2e" / "run_local.sh").read_text(encoding="utf-8")
+        assert "ha_e2e_driver.py" in rl and "ha_e2e_driver.py" in SH
+
+
+# ============ ④ WS 客户端台架（真 aiohttp 服务端 + 真握手/真帧） ============
+# 首轮 CI 假红就出在这段代码的 API 假设上（REST 405），所以它必须有行为级
+# 台架：本地起一个最小 HA /api/websocket，按 2026.9.3 源码的 auth 契约应答，
+# 真跑 driver 切片出来的 _ws_call/_hj_flows/_cards_for。
+try:
+    import aiohttp
+    from aiohttp import web
+    _HAS_AIOHTTP = True
+except ImportError:  # pragma: no cover - CI lint 步骤显式装 aiohttp
+    _HAS_AIOHTTP = False
+
+_CARD = {"flow_id": "f1", "handler": "window_controller_gateway",
+         "context": {"source": "discovery", "unique_id": NEW_GW.lower()},
+         "step_id": "user"}
+_FOREIGN_CARD = {"flow_id": "f2", "handler": "mqtt",
+                 "context": {"source": "user"}}
+
+
+class _MockHA:
+    """最小 HA WS 端：auth_required → auth(access_token) → auth_ok → result。"""
+
+    def __init__(self, flows=(), auth_ok=True, cmd_ok=True):
+        self.flows = list(flows)
+        self.auth_ok = auth_ok
+        self.cmd_ok = cmd_ok
+        self.seen = {"auth": None, "cmds": []}
+        self.url = None
+        self._loop = None
+        self._runner = None
+        self._thread = None
+
+    async def _handler(self, request):
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        await ws.send_json({"type": "auth_required", "ha_version": "2026.9.3"})
+        first = await ws.receive_json()
+        self.seen["auth"] = first
+        if (not self.auth_ok or first.get("type") != "auth"
+                or not first.get("access_token")):
+            await ws.send_json({"type": "auth_invalid", "message": "令牌无效"})
+            await ws.close()
+            return ws
+        await ws.send_json({"type": "auth_ok", "ha_version": "2026.9.3"})
+        async for msg in ws:
+            if msg.type != aiohttp.WSMsgType.TEXT:
+                continue
+            req = json.loads(msg.data)
+            self.seen["cmds"].append(req.get("type"))
+            ok = self.cmd_ok and req.get("type") == "config_entries/flow/progress"
+            body = {"id": req.get("id"), "type": "result", "success": ok}
+            if ok:
+                body["result"] = self.flows
+            else:
+                body["error"] = {"code": "unknown_command", "message": "n/a"}
+            await ws.send_json(body)
+        return ws
+
+    def __enter__(self):
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+        app = web.Application()
+        app.router.add_get("/api/websocket", self._handler)
+        self._loop = asyncio.new_event_loop()
+        ready = threading.Event()
+
+        def serve():
+            asyncio.set_event_loop(self._loop)
+            self._runner = web.AppRunner(app)
+            self._loop.run_until_complete(self._runner.setup())
+            self._loop.run_until_complete(
+                web.TCPSite(self._runner, "127.0.0.1", port).start())
+            ready.set()
+            self._loop.run_forever()
+
+        self._thread = threading.Thread(target=serve, daemon=True)
+        self._thread.start()
+        assert ready.wait(10), "台架 WS 服务未起来"
+        self.url = f"http://127.0.0.1:{port}"
+        return self
+
+    def __exit__(self, *exc):
+        """停 loop → 清 runner → 关 loop。只 stop 不清理会把在途 accept 协程
+        丢给 GC，Windows proactor 下刷一屏 "Task was destroyed but it is
+        pending!"，把真问题的日志埋掉。"""
+        if self._loop is None:
+            return False
+        self._loop.call_soon_threadsafe(self._loop.stop)
+        if self._thread is not None:
+            self._thread.join(timeout=5)
+        try:
+            if self._runner is not None:
+                self._loop.run_until_complete(self._runner.cleanup())
+        finally:
+            self._loop.close()
+        return False
+
+
+def _load_flow_helpers(ha_url, token="tok-e2e", die_calls=None):
+    """切出 driver 的 WS 查询三件套真跑（HA/TOKEN/die 注入）。"""
+    start = SRC.index("def _ws_call(")
+    end = SRC.index("def _wait_acks(")
+    ns = {"json": json, "HA": ha_url, "TOKEN": token}
+
+    def die(msg):
+        if die_calls is not None:
+            die_calls.append(msg)
+        raise SystemExit(msg)
+
+    ns["die"] = die
+    exec(compile(SRC[start:end], str(DRIVER), "exec"), ns)  # noqa: S102
+    return ns
+
+
+@pytest.mark.skipif(not _HAS_AIOHTTP, reason="WS 台架需 aiohttp（HA/CI 自带）")
+class TestWsFlowQuery:
+    def test_progress_query_finds_card(self):
+        with _MockHA(flows=[_CARD, _FOREIGN_CARD]) as ha:
+            ns = _load_flow_helpers(ha.url)
+            flows = ns["_hj_flows"]()
+            assert [f["flow_id"] for f in flows] == ["f1"], \
+                "只取本集成 handler 的在途流"
+            assert len(ns["_cards_for"](NEW_GW)) == 1
+            assert ns["_cards_for"](AUTO_GW) == []
+            assert ha.seen["auth"] == {"type": "auth", "access_token": "tok-e2e"}
+            assert set(ha.seen["cmds"]) == {"config_entries/flow/progress"}, \
+                "每次查询一条 WS 命令（连接 per 查询），不得夹带别的命令"
+            assert len(ha.seen["cmds"]) == 3, "上面三次查询各开一条连接"
+
+    def test_auth_invalid_dies(self):
+        calls = []
+        with _MockHA(auth_ok=False) as ha:
+            ns = _load_flow_helpers(ha.url, die_calls=calls)
+            with pytest.raises(SystemExit):
+                ns["_hj_flows"]()
+        assert calls and "认证被拒" in calls[0]
+
+    def test_command_failure_dies_in_strict_mode(self):
+        """strict 下命令失败必须 die——不得把失败当"0 张卡"。"""
+        calls = []
+        with _MockHA(cmd_ok=False) as ha:
+            ns = _load_flow_helpers(ha.url, die_calls=calls)
+            with pytest.raises(SystemExit):
+                ns["_hj_flows"]()
+        assert calls and "失败" in calls[0]
+
+    def test_command_failure_returns_none_when_lenient(self):
+        """轮询期（strict=False）返回 None 并把错误带回，供最终 die 文案引用。"""
+        errs = []
+        with _MockHA(cmd_ok=False) as ha:
+            ns = _load_flow_helpers(ha.url)
+            assert ns["_hj_flows"](strict=False, last_err=errs) is None
+            assert ns["_cards_for"](AUTO_GW, strict=False, last_err=errs) is None
+        assert errs and len(errs) == 2
+
+    def test_unreachable_server_is_loud_not_empty(self):
+        """端口不通（HA 重启窗/URL 错）也必须显式失败，不得静默空列表。"""
+        calls = []
+        ns = _load_flow_helpers("http://127.0.0.1:1", die_calls=calls)
+        with pytest.raises(SystemExit):
+            ns["_hj_flows"]()
+        assert calls and "取在途发现流失败" in calls[0]
+
+    def test_zero_cards_is_a_real_empty_result(self):
+        """L 臂"发现卡 0 张"必须建立在查通了的空结果上（与失败区分开）。"""
+        with _MockHA(flows=[]) as ha:
+            ns = _load_flow_helpers(ha.url)
+            assert ns["_hj_flows"]() == []
+            assert ns["_cards_for"](AUTO_GW) == []

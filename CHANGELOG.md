@@ -18,13 +18,14 @@ v1.7.33 发布后的两条现场链路复核批（用户问「新装加载项后
 - **真栈 E2E 补两臂（`ha_e2e_driver.py` K/L 段，随 e2e job 作发布硬门禁）**：
   - K 臂：未配置网关首报 001 → `gateway/{sn}/req` 上**恰好一条**同型代答（head `$SH` / ctype / id / sn 回带 + `data.errcode:0` + `uuid`），且发现卡挂起可确认。计数在凑够后再静置 2s——只等到第一条就返回会漏掉晚几十毫秒的第二个应答者（假绿）。
   - L 臂：空 SN 等待条目（发现代理同款 REST 路径）+ 首报 → SN 自动填进**同一条**等待条目、条目 loaded、子设备真注册进设备注册表、发现卡 **0 张**（"直接添加到集成"零点击契约），且两耳并存（handler 耳 + 心跳耳）时仍 1 请求 1 答（v1.7.30 仲裁在真栈上的第二应答者形态）。
+  - 配套两处真栈取证修正（首轮 CI 实锤后修）：在途发现流改走 WS `config_entries/flow/progress`——`GET /api/config/config_entries/flow` 在 HA 2026.9.3 是 **405**（源码 `ConfigManagerFlowIndexView.get` 显式 `raise HTTPMethodNotAllowed`），恒空列表既让 K 臂假红、也会让 L 臂的"0 张卡"变成假绿，故查询失败一律显式 `die`；`run_e2e.sh` 预置的 `configuration.yaml` 把本集成日志开到 INFO（发现链早退分支全是 DEBUG，成功路径才是 INFO——不开就等于每次红都要再盲跑一轮 CI），并保留 `default_config:`（镜像原本自动生成的那份首行即此，api/auth/onboarding 全靠它拉起）。
 
 ### Tests
 
 - 新增 `test_v1734_gate_states.py`（38 条）：四态门单元判定（含三种状态形态归一、禁用优先于未加载、同 SN 多条目只要一个在飞即 configured）；两只耳朵的**行为级**证据——心跳耳经真 `async_setup_entry` 的 awaiting 分支真抓 `_heartbeat_listener`、`_protocol` 耳经真 `WindowControllerMQTTHandler._do_subscribe_topics` 真抓 `handle_gateway_response`，判定逻辑不打桩；风暴下"每请求必答（6 请求 6 答）+ 留痕只放一条"；setup 重试成功后同一条耳朵立刻转静默（状态实时读、无缓存）。反钉：健康条目零代答零留痕、未配置仍走发现链、禁用态文案优先、状态未知不倒退、加载态判定不得在耳朵文件里各写一份。
-- 新增 `test_v1734_e2e_arms.py`（15 条）：两臂不被悄悄删掉或断言被稀释（含"两臂必须跑在 J 段 500 条 soak 之前，否则 req 主题被洪水污染"的顺序钉、settle 窗不得调 0）；并把 driver 的 `_check_single_ack` / `_wait_acks` 从源文本切片抽出真跑——多答、错 id、漏 uuid、errcode≠0 必须真 `die`，晚到的第二答必须被计入（否则 CI 绿是假的）。
+- 新增 `test_v1734_e2e_arms.py`（29 条）：两臂不被悄悄删掉或断言被稀释（含"两臂必须跑在 J 段 500 条 soak 之前，否则 req 主题被洪水污染"的顺序钉、settle 窗不得调 0、不得回退到 405 的 REST 流索引）；把 driver 的 `_check_single_ack` / `_wait_acks` 从源文本切片抽出真跑——多答、错 id、漏 uuid、errcode≠0 必须真 `die`，晚到的第二答必须被计入；并起一个**最小 HA WS 台架**（真 aiohttp 服务端、真 TCP，按 2026.9.3 源码的 auth_required→auth→auth_ok 契约应答）真跑 `_ws_call`/`_hj_flows`/`_cards_for`——认证被拒、命令失败、端口不通一律显式失败，"发现卡 0 张"只能来自查通了的空结果（否则 CI 绿是假的）。
 - 变异核验（影子树）：把 `ENTRY_STATES_UNANSWERED` 清空＝退回 v1.7.33 盲区 → 新守卫 13 条红，其中双耳行为面直接呈现"零代答 + 零留痕"，而全部反向钉仍绿（证明红的正是被修的那一面）。
-- 全量 820 用例通过（基线 767）；`bash -n` 全部 shell、`compileall` 递归、`py_compile` driver、`node --check` 两份 JS、ruff（F,E9,B）生产+测试全清。
+- 全量 834 用例通过（基线 767）；`bash -n` 全部 shell、`compileall` 递归、`py_compile` driver、`node --check` 两份 JS、ruff（F,E9,B）生产+测试全清。
 
 ## [1.7.33] - 2026-09-22
 

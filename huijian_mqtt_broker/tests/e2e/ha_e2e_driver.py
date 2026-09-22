@@ -359,15 +359,67 @@ def _hj_entries():
     return [e for e in items if e.get("domain") == "window_controller_gateway"]
 
 
-def _hj_flows():
-    """本集成在途流程（发现卡）。"""
-    _st, flows = call("GET", "/api/config/config_entries/flow")
-    return [f for f in (flows if isinstance(flows, list) else [])
+def _ws_call(cmd_type, timeout=20):
+    """经 HA WS API 发一条命令取 result（认证契约读 2026.9.3 源码实证）。
+
+    为什么不用 REST：`GET /api/config/config_entries/flow` 在 HA 2026.9.3 是
+    **405 Method Not Allowed**（`components/config/config_entries.py`
+    `ConfigManagerFlowIndexView.get` 显式 `raise HTTPMethodNotAllowed`，真栈
+    实锤）——在途发现流只有 WS `config_entries/flow/progress` 一个口子，且该
+    命令会剔除 source=reconfigure/user 的流（发现流 source=discovery 在内）。
+    WS 认证：首帧 `auth_required` → 发 `{"type":"auth","access_token":…}` →
+    `auth_ok`（websocket_api/auth.py AUTH_MESSAGE_SCHEMA）。
+    aiohttp 与 paho 同为 HA 自带依赖，零新增环境要求。
+    """
+    import asyncio
+
+    try:
+        import aiohttp
+    except ImportError as e:
+        die(f"WS 查询需要 aiohttp（HA 自带依赖）: {e}")
+
+    async def _run():
+        async with aiohttp.ClientSession() as sess:
+            async with sess.ws_connect(f"{HA}/api/websocket") as ws:
+                first = json.loads(await ws.receive_str())
+                if first.get("type") != "auth_required":
+                    raise RuntimeError(f"WS 首帧非 auth_required: {first}")
+                await ws.send_json({"type": "auth", "access_token": TOKEN})
+                auth = json.loads(await ws.receive_str())
+                if auth.get("type") != "auth_ok":
+                    raise RuntimeError(f"WS 认证被拒: {auth}")
+                await ws.send_json({"id": 1, "type": cmd_type})
+                res = json.loads(await ws.receive_str())
+                if not res.get("success"):
+                    raise RuntimeError(f"WS 命令 {cmd_type} 失败: {res}")
+                return res.get("result")
+
+    return asyncio.run(asyncio.wait_for(_run(), timeout=timeout))
+
+
+def _hj_flows(strict=True, last_err=None):
+    """在途发现流列表；strict=False 时查询失败返回 None（轮询期容错）。
+
+    失败**不得**静默当成"没有卡"——那会让 L 臂的"发现卡 0 张"变成假绿
+    （K 臂首轮的 405 假红正是这么来的：REST 端点不通 ⇒ 恒空 ⇒ 两种断言都失真）。
+    """
+    try:
+        flows = _ws_call("config_entries/flow/progress")
+    except Exception as e:  # noqa: BLE001
+        if isinstance(last_err, list):
+            last_err.append(str(e))
+        if strict:
+            die(f"取在途发现流失败（WS config_entries/flow/progress）: {e}")
+        return None
+    return [f for f in (flows or [])
             if f.get("handler") == "window_controller_gateway"]
 
 
-def _cards_for(sn):
-    return [f for f in _hj_flows()
+def _cards_for(sn, strict=True, last_err=None):
+    flows = _hj_flows(strict=strict, last_err=last_err)
+    if flows is None:
+        return None
+    return [f for f in flows
             if str((f.get("context") or {}).get("unique_id") or "").lower()
             == sn.lower()]
 
@@ -432,16 +484,18 @@ pc.publish("gateway/rpt_rsp", json.dumps(_first_report(NEW_GW, 7101))) \
 _k_acks = _wait_acks(f"gateway/{NEW_GW}/req", _k0)
 _check_single_ack(_k_acks, NEW_GW, 7101, "K 未配置网关首报")
 
-_card = None
-_dead = time.time() + 30
+_card, _errs = None, []
+_dead = time.time() + 40
 while time.time() < _dead and _card is None:
-    _c = _cards_for(NEW_GW)
+    _c = _cards_for(NEW_GW, strict=False, last_err=_errs)
     _card = _c[0] if _c else None
     if _card is None:
         time.sleep(2)
 if _card is None:
-    die(f"未配置网关 {NEW_GW} 的发现卡未在 30s 内出现（discovery 链断，"
-        f"在途流={[(f.get('context') or {}).get('unique_id') for f in _hj_flows()]}）")
+    _live = _hj_flows(strict=False, last_err=_errs) or []
+    die(f"未配置网关 {NEW_GW} 的发现卡未在 40s 内出现（discovery 链断）；"
+        f"在途流={[(f.get('context') or {}).get('unique_id') for f in _live]}；"
+        f"WS 查询末两次错误={_errs[-2:]}")
 step("K", f"首报 001 真栈实证 ✓（1 请求 1 答·含 uuid；发现卡 {_card.get('flow_id')[:8]} 已挂起）")
 
 # ---------- L. 空 SN 等待条目 + 首报 → 零点击「直接添加到集成」 ----------
@@ -504,21 +558,29 @@ if _stray:
     die(f"零点击自动填充不得再弹发现卡，实得 {len(_stray)} 张（用户会被要求"
         "确认一台已经加进来的网关）")
 
-pc.publish("gateway/rpt_rsp", json.dumps({
-    "head": {"cmdid": "002", "id": 7203}, "ctype": "002", "id": 7203,
-    "sn": AUTO_GW, "data": {"status": 1, "devices": [
-        {"sn": AUTO_DEV, "model": "5007", "battery": 1210,
-         "r_travel": 60}]}})).wait_for_publish(timeout=5)
-_taken = False
+# 接管证据：周期性重发 002（每轮换 id）。单发一条若正好落在 reload 窗内
+# （旧订阅已退、新订阅未挂）就会白等 60s——真网关本就是周期上报，重发既
+# 贴近现场又消掉这一处竞态假红。
+_taken, _rid = False, 7203
 _dead = time.time() + 60
 while time.time() < _dead and not _taken:
-    st, d2 = call("GET", f"/api/window_controller_gateway/devices"
-                         f"?config_entry_id={filled_id}")
-    if st == 200 and isinstance(d2, list):
-        _sns = {i[1] for d in d2 for i in (d.get("identifiers") or [])
-                if isinstance(i, list) and len(i) > 1}
-        _taken = AUTO_DEV in _sns and any(x.get("gateway_online") is True for x in d2)
-    time.sleep(3)
+    pc.publish("gateway/rpt_rsp", json.dumps({
+        "head": {"cmdid": "002", "id": _rid}, "ctype": "002", "id": _rid,
+        "sn": AUTO_GW, "data": {"status": 1, "devices": [
+            {"sn": AUTO_DEV, "model": "5007", "battery": 1210,
+             "r_travel": 60}]}})).wait_for_publish(timeout=5)
+    _rid += 1
+    _t_poll = time.time() + 6
+    while time.time() < _t_poll and not _taken:
+        st, d2 = call("GET", f"/api/window_controller_gateway/devices"
+                             f"?config_entry_id={filled_id}")
+        if st == 200 and isinstance(d2, list):
+            _sns = {i[1] for d in d2 for i in (d.get("identifiers") or [])
+                    if isinstance(i, list) and len(i) > 1}
+            _taken = (AUTO_DEV in _sns
+                      and any(x.get("gateway_online") is True for x in d2))
+        if not _taken:
+            time.sleep(2)
 if not _taken:
     die("自动填充后的条目未真正接管上报（子设备未注册/网关未在线）——"
         "只改了 data 没走完整 setup")
