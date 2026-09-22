@@ -66,7 +66,13 @@ jobs:
           # v1.6.15 起再加 aiohttp：ws_gateway.py 模块级 from aiohttp import
           # （生产 HA 环境自带，CI 最小环境不带）——缺它 test_ws_gateway 收集
           # 期 ImportError，整个 lint 炸掉（首推 CI 实锤）。
-          pip install -q pytest pytest-asyncio voluptuous aiohttp
+          # v1.7.38：再加 qrcode——面板二维码编码器（www/js/qr.js）的正确性
+          # 靠"与独立实现逐格对账"，test_v1738_qr.py 模块级 import qrcode，
+          # 缺它收集期就红（不允许静默跳过，那等于没有这条门）。
+          pip install -q pytest pytest-asyncio voluptuous aiohttp qrcode
+          # zxing-cpp/pillow 只用于"真解码回读"那一条（矩阵对账之外的独立解码器），
+          # 装不上不影响其它用例——测试里显式 skip 并写明原因。
+          pip install -q zxing-cpp pillow || true
           # v1.6.26（第八轮审计 A-2）：py_compile `*.py` glob 只匹配顶层——
           # v1.6.25 mqtt_handler 拆包后整个子包（~1900 行核心）脱离语法门
           # 覆盖。改 compileall 递归编译，永不复现"目录变子包→门静默缩窄"。

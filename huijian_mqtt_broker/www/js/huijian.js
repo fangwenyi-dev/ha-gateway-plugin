@@ -63,6 +63,60 @@
         // v1.7.37：只读集成侧视图 GET /api/window_controller_gateway/hub。取不到
         // 一律降级成"—"而不是留"检测中"——老的集成版本（<1.7.35）没有这条路由，
         // 主流程不能因此显示得像坏了；用户看到的应当是"未启用"。
+        // v1.7.38：同一份数据顺带驱动 logo 旁的二维码（自动出现 / 点击刷新）。
+        // 二维码载荷：HUJIAN-BIND:<载荷版本>:<6 位码>——小程序侧解析同一格式（对不认识的
+        // 版本只提示不绑定），所以版本位以后换协议时老版本不会误解。
+        const BIND_PAYLOAD_PREFIX = 'HUJIAN-BIND:1:';
+        let _bindCode = '';
+        let _copyTimer = null;
+
+        function refreshBindQr() {
+            loadRemoteControl();
+        }
+
+        function renderBindQr(code) {
+            const wrap = document.getElementById('brandQr');
+            const box = document.getElementById('brandQrBox');
+            const tip = document.getElementById('brandQrTip');
+            if (!wrap || !box) return;
+            if (!code || !window.HjQr) { wrap.hidden = true; return; }
+            try {
+                window.HjQr.render(box, BIND_PAYLOAD_PREFIX + code, { ecc: 'M' });
+            } catch (e) {
+                wrap.hidden = true;          // 生成失败宁可不摆——扫不出来的码比没有码更坏
+                console.log('绑定码二维码生成失败:', e);
+                return;
+            }
+            wrap.hidden = false;
+            if (tip) tip.textContent = code;
+        }
+
+        async function copyBindCode() {
+            const btn = document.getElementById('copyCodeBtn');
+            const codeEl = document.getElementById('hubCode');
+            if (!_bindCode) return;
+            let done = false;
+            try {
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    await navigator.clipboard.writeText(_bindCode);
+                    done = true;
+                }
+            } catch (e) { done = false; }
+            if (!done && codeEl && window.getSelection) {
+                // 退路：剪贴板 API 在非安全上下文/权限策略下会被拒——选中文本让用户自己复制
+                const range = document.createRange();
+                range.selectNodeContents(codeEl);
+                const sel = window.getSelection();
+                sel.removeAllRanges();
+                sel.addRange(range);
+            }
+            if (btn) {
+                btn.textContent = done ? '已复制' : '按 Ctrl+C';
+                if (_copyTimer) clearTimeout(_copyTimer);
+                _copyTimer = setTimeout(function () { btn.textContent = '复制'; }, 1800);
+            }
+        }
+
         async function loadRemoteControl() {
             const dot = document.getElementById('hubDot');
             const statusEl = document.getElementById('hubStatus');
@@ -80,19 +134,25 @@
                     codeEl.textContent = '------';
                     gwEl.textContent = '—';
                     if (gwDot) gwDot.className = 'dot dot-unknown';
+                    _bindCode = '';
+                    renderBindQr('');
                     return;
                 }
                 dot.className = 'dot ' + (info.connected ? 'dot-ok' : 'dot-warn');
                 statusEl.textContent = info.connected ? '已连接' : '未连接';
-                codeEl.textContent = info.bindCode || '------';
+                _bindCode = info.bindCode || '';
+                codeEl.textContent = _bindCode || '------';
                 gwEl.textContent = info.gatewaySn || '—';
                 if (gwDot) gwDot.className = 'dot ' + (info.gatewaySn ? 'dot-ok' : 'dot-unknown');
+                renderBindQr(_bindCode);
             } catch (e) {
                 dot.className = 'dot dot-err';
                 statusEl.textContent = '读取失败';
                 codeEl.textContent = '------';
                 gwEl.textContent = '—';
                 if (gwDot) gwDot.className = 'dot dot-unknown';
+                _bindCode = '';
+                renderBindQr('');
                 console.log('远程控制状态获取失败:', e);
             }
         }
