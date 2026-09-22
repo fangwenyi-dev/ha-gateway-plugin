@@ -25,6 +25,7 @@ def async_setup_api(hass: HomeAssistant) -> None:
     """Register the device-list REST view."""
     hass.http.register_view(WindowGatewayDevicesView())
     hass.http.register_view(WindowGatewaySecurityView())
+    hass.http.register_view(WindowGatewayHubView())
 
 
 class WindowGatewaySecurityView(http.HomeAssistantView):
@@ -135,3 +136,28 @@ class WindowGatewayDevicesView(http.HomeAssistantView):
             if vid and vid in parent_ids and d["id"] not in parent_ids:
                 result.append(d)
         return self.json(result)
+
+
+class WindowGatewayHubView(http.HomeAssistantView):
+    """v0.1(P0): 慧尖云 hub 绑定状态只读视图——插件页展示"扫码绑定"用。
+
+    只回 instanceId / 绑定码 / 连接状态；**绝不回显 secret**（hub 长连凭据）。
+    绑定码本身就是给用户看的（扫一次完成"HA 实例 ↔ 微信账号"绑定），
+    但日志侧只记摘要（见 hub_client.cred_brief）。
+    """
+
+    url = "/api/window_controller_gateway/hub"
+    name = "api:window_controller_gateway:hub"
+
+    async def get(self, request):
+        """返回首个已启动 hub 客户端的状态；未启用/未启动回 enabled=False。"""
+        hass = request.app["hass"]
+        for data in list(hass.data.get(DOMAIN, {}).values()):
+            if not isinstance(data, dict):
+                continue
+            client = data.get("hub_client")
+            if client is not None:
+                view = client.status_view()
+                view["enabled"] = True
+                return self.json(view)
+        return self.json({"enabled": False})

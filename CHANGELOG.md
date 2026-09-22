@@ -3,6 +3,32 @@
 所有版本变更记录在此文件中。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.7.35] - 2026-09-22
+
+P0 远程控制通道（插件侧）：加载项到「慧尖云 hub」的**出站长连**——客户零配置（装加载项即自动注册实例、取 6 位一次性绑定码），小程序扫码绑定后即可在**局域网之外**控制子设备。配套 hub 服务在独立仓 `huijian-cloud-hub`（微信云托管部署，公网 HTTPS + wss 四跳已在真栈验证），本轮只发插件侧。
+
+### Added
+
+- **`hub_client.py`（新增；模块不 import HA，可独立测）**：
+  - 注册/身份：`POST /agent/register` → instanceId / secret 落盘 `huijian_hub_identity.json`（原子替换、损坏改名 `.bad` 留证）；secret 全程不进日志——`cred_brief` 只留长度 + 首字节（沿用三端凭据不回显口径）；绑定码只在 `status_view` 里给用户看。
+  - 长连：`wss://…/agent/ws`（`http→ws` / `https→wss` 自动换 scheme），心跳 25s，断线指数退避 5s×2^(n-1) 封顶 300s，睡眠按 30s 切片（不占 HA 停机预算）。
+  - 上行：设备状态变更（`device_manager.add_status_listener`）debounce 0.3s 后推与 `GET /state` 同构的快照（懒 import `device_ws_view`，与侧边栏/HTTP 视图同源，避免出现第二份状态真相）；命令执行结果回 `cmd_result`。
+  - 下行：`{action:'control', sn, attribute, value}` 先过**与局域网 `_cmd_control` 同口径**的值校验（拒空属性 / 空串 / bool / 容器 / nan / inf / 科学计数）→ 只向「设备所属条目」发布 `send_ws_raw_004`，命中即止（不广播，防多条目重复控制）。
+  - 控制语义三端一致：ok = **004 已发布到 broker**（不代表设备已执行）；命令**不重发**。
+- **装载与卸载**（`__init__.py`）：`async_setup_entry` 创建并 `async_create_task(hub.async_start())` 入 `_bg_tasks`；**启动失败只降级重连**、不影响本地功能（对齐 WS 网关「启动失败只记 error」的既定语义）。`async_unload_entry` 新增「1.4 hub 客户端先行停」——先摘状态监听、关长连，避免卸载后仍收命令。端点/密钥可用 `entry.options` 的 `hub_base` / `hub_install_key` 覆盖（P1 再进 config_flow 表单）。
+- **只读 REST 视图** `GET /api/window_controller_gateway/hub`（`api.py`）：回 instanceId / 6 位绑定码 / 连接状态 / `enabled`，**绝不回显 secret**；插件页「扫码绑定」用它。
+
+### Known limitations（P0，P1 收）
+
+- 共享 install key（写在加载项默认值与 hub 仓 Dockerfile 里）：够用但不够严，P1 换每实例一次性密钥。
+- hub 默认域名 `*.sh.run.tcloudbase.com` **仅限开发测试**：生产需给云托管绑自定义备案域名（只影响「加载项→hub」这一跳；小程序侧走 `callContainer` 免白名单）。
+- 绑定关系现落 hub 本地 JSON（`data/store.json`）：P1 迁云开发数据库并上 `watch()` 实时状态推送（协议不变）。
+
+### Tests
+
+- 新增 `test_hub_client.py`（14 条）：退避序列 / 切片睡眠 / 凭据摘要形态 / 值校验与 LAN 同口径 / 身份往返与损坏留证（断言日志中不出现绑定码与 secret）/ 已有身份不重复注册 / ws 地址换 scheme / 坏状态条目跳过 / 命令三类错误与无 `control_fn` / `_session_once` 回执 + 上线即全量推状态（FakeWS 保持窗口）/ `status_view` 不含 secret / 启停幂等。
+- 全量 849 用例通过（基线 835）；`bash -n` 全部 shell、`compileall` 递归、ruff（F,E9,B）生产 + 测试全清、`node --check` 全部前端 JS、四源版本一致（config.yaml / manifest.json / version.json / index.html）。
+
 ## [1.7.34] - 2026-09-22
 
 v1.7.33 发布后的两条现场链路复核批（用户问「新装加载项后第一台网关直接进集成」与「新网关首报 001」是否仍有问题）：

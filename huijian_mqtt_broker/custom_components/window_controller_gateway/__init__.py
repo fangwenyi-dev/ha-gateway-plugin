@@ -27,6 +27,7 @@ from .const import (
 from .persist import load_persistent_data, save_persistent_data
 from .services import register_services
 from .api import async_setup_api
+from .hub_client import HUB_DEFAULT_BASE, HUB_DEFAULT_INSTALL_KEY, HubClient
 from .utils import is_mqtt_loaded, iter_devices
 
 _LOGGER = logging.getLogger(__name__)
@@ -105,6 +106,29 @@ def _clamp_discovery_interval(raw) -> int:
         seconds = min(max(seconds, DISCOVERY_INTERVAL_MIN_SECONDS),
                       DISCOVERY_INTERVAL_MAX_SECONDS)
     return seconds
+
+
+def _make_hub_control(hass: HomeAssistant):
+    """hub 下行命令 → 本仓 004 控制路径。
+
+    语义与 LAN WS 网关 `_cmd_control` 一致：ok = QoS1 已发布到 broker，
+    不代表设备已执行（执行实据靠状态上报）；命令不重发。仅向"设备所属条目"
+    发布（映射命中即止），避免多条目广播造成重复控制。
+    """
+
+    async def _control(dev_sn: str, attribute: str, value: str) -> bool:
+        for data in list(hass.data.get(DOMAIN, {}).values()):
+            if not isinstance(data, dict):
+                continue
+            manager = data.get("device_manager")
+            handler = data.get("mqtt_handler")
+            if manager is None or handler is None:
+                continue
+            if dev_sn in getattr(manager, "devices", {}):
+                return bool(await handler.send_ws_raw_004(dev_sn, attribute, value))
+        return False
+
+    return _control
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -540,6 +564,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         )
         hass.data[DOMAIN][entry.entry_id].setdefault("_bg_tasks", []).append(_bg_task)
 
+        # 慧尖云 hub 出站长连（P0，客户零配置的远程控制通道）：启动失败只降级
+        # 重连、不影响本地功能（对齐 WS 网关"启动失败只记 error"的既定语义）。
+        # 端点/密钥可用 entry.options 的 hub_base / hub_install_key 覆盖（P1 再进
+        # config_flow 表单）。
+        hub = HubClient(
+            device_manager,
+            config_dir=hass.config.config_dir,
+            base=entry.options.get("hub_base") or HUB_DEFAULT_BASE,
+            install_key=entry.options.get("hub_install_key") or HUB_DEFAULT_INSTALL_KEY,
+            control_fn=_make_hub_control(hass),
+        )
+        hass.data[DOMAIN][entry.entry_id]["hub_client"] = hub
+        _hub_start = hass.async_create_task(
+            hub.async_start(),
+            name=f"{DOMAIN}_hub_start_{entry.entry_id}",
+        )
+        hass.data[DOMAIN][entry.entry_id].setdefault("_bg_tasks", []).append(_hub_start)
+
         # ============ 自动设备迁移（替换网关流程）暂禁用 ============
         # 迁移功能先不使用：即使 entry.data 中带 migration_info（替换网关流程
         # 创建的 entry），也不再自动触发设备迁移。重新启用时取消下面注释。
@@ -648,6 +690,15 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _LOGGER.debug("心跳监听器已取消")
         except Exception as e:
             _LOGGER.debug("取消心跳监听器时出错: %s", e)
+
+    # 1.4 慧尖云 hub 客户端先行停（摘状态监听 + 关长连，避免卸载后仍收命令）
+    _hub = data.get("hub_client")
+    if _hub is not None:
+        try:
+            await _hub.async_stop()
+        except Exception as e:  # noqa: BLE001
+            _LOGGER.warning("停止 hub 客户端失败: %s", e)
+        data.pop("hub_client", None)
 
     # 1.5 取消后台任务（_bg_tasks），避免任务在卸载后继续执行
     for bg_task in data.get("_bg_tasks", []):
