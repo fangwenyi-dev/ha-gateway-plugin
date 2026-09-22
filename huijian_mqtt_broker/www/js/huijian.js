@@ -63,7 +63,8 @@
         // v1.7.37：只读集成侧视图 GET /api/window_controller_gateway/hub。取不到
         // 一律降级成"—"而不是留"检测中"——老的集成版本（<1.7.35）没有这条路由，
         // 主流程不能因此显示得像坏了；用户看到的应当是"未启用"。
-        // v1.7.38：同一份数据顺带驱动 logo 旁的二维码（自动出现 / 点击刷新）。
+        // v1.7.38：同一份数据顺带驱动本卡右侧的二维码（自动出现 / 点击刷新）。
+        // v1.7.39（用户令）：二维码从页头 logo 旁挪进「远程控制」卡右侧（页头摆白底码太突兀）。
         // 二维码载荷：HUJIAN-BIND:<载荷版本>:<6 位码>——小程序侧解析同一格式（对不认识的
         // 版本只提示不绑定），所以版本位以后换协议时老版本不会误解。
         const BIND_PAYLOAD_PREFIX = 'HUJIAN-BIND:1:';
@@ -75,9 +76,9 @@
         }
 
         function renderBindQr(code) {
-            const wrap = document.getElementById('brandQr');
-            const box = document.getElementById('brandQrBox');
-            const tip = document.getElementById('brandQrTip');
+            const wrap = document.getElementById('hubQr');
+            const box = document.getElementById('hubQrBox');
+            const tip = document.getElementById('hubQrTip');
             if (!wrap || !box) return;
             if (!code || !window.HjQr) { wrap.hidden = true; return; }
             try {

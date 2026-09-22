@@ -28,9 +28,24 @@ PANEL_PATH = "/window_controller_gateway/hub"            # haApi() 前缀 /api/h
 
 
 def _card():
-    m = re.search(r'id="remoteCard".*?</div>\s*</div>\s*</div>', HTML, re.S)
-    assert m, "远程控制卡（#remoteCard）整体丢失"
-    return m.group(0)
+    """按 <div …> 配平抽取 #remoteCard 整块（定宽窗/锚点式切片会被新嵌套顶掉）。"""
+    marker = 'id="remoteCard"'
+    i = HTML.index(marker)
+    start = HTML.rindex("<div", 0, i)
+    depth, j = 0, start
+    while j < len(HTML):
+        if HTML.startswith("<div", j):
+            depth += 1
+            j += 4
+            continue
+        if HTML.startswith("</div>", j):
+            depth -= 1
+            j += 6
+            if depth == 0:
+                return HTML[start:j]
+            continue
+        j += 1
+    raise AssertionError("远程控制卡未闭合（#remoteCard）")
 
 
 def _func(name):

@@ -774,27 +774,30 @@ details[open] > summary.card-title::before {
     transform: rotate(90deg);
 }
 
-/* ===== v1.7.38 绑定码二维码（logo 旁）+ 复制按钮 ===== */
-.brand-qr {
-    display: flex; flex-direction: column; align-items: center; gap: 4px;
-    margin-left: 8px; padding: 6px; border-radius: 10px; cursor: pointer;
+/* ===== v1.7.38 绑定码二维码 + 复制按钮（v1.7.39 用户令：从页头挪进「远程控制」卡右侧）===== */
+.hub-row { display: flex; gap: 16px; align-items: flex-start; }
+.hub-main { flex: 1 1 auto; min-width: 0; }
+.hub-qr {
+    flex: 0 0 auto; display: flex; flex-direction: column; align-items: center; gap: 6px;
+    padding: 10px; border-radius: 12px; cursor: pointer;
     background: rgba(255, 255, 255, .93); border: 1px solid rgba(255, 255, 255, .55);
     box-shadow: 0 2px 12px rgba(14, 165, 233, .25);
     transition: transform .12s, box-shadow .15s;
 }
 /* hidden 属性必须显式复位：本类自带 display:flex，不写这条 hidden 会被吃掉
    （没码时仍会摆一个空白方块） */
-.brand-qr[hidden] { display: none; }
-.brand-qr:hover { transform: translateY(-1px); box-shadow: 0 4px 16px rgba(14, 165, 233, .42); }
-.brand-qr:focus-visible { outline: 2px solid var(--primary-light); outline-offset: 2px; }
-.brand-qr-box { width: 76px; height: 76px; line-height: 0; }
-.brand-qr-tip {
-    font-family: "SF Mono", Consolas, monospace; font-size: 10.5px; font-weight: 700;
-    letter-spacing: 2px; color: #0f172a; font-variant-numeric: tabular-nums;
+.hub-qr[hidden] { display: none; }
+.hub-qr:hover { transform: translateY(-1px); box-shadow: 0 4px 16px rgba(14, 165, 233, .42); }
+.hub-qr:focus-visible { outline: 2px solid var(--primary-light); outline-offset: 2px; }
+.hub-qr-box { width: 132px; height: 132px; line-height: 0; }
+.hub-qr-tip {
+    font-family: "SF Mono", Consolas, monospace; font-size: 13px; font-weight: 700;
+    letter-spacing: 3px; color: #0f172a; font-variant-numeric: tabular-nums;
 }
-@media (max-width: 560px) {
-    .brand-qr-box { width: 58px; height: 58px; }
-    .brand-qr-tip { font-size: 9.5px; letter-spacing: 1px; }
+@media (max-width: 720px) {
+    .hub-row { flex-direction: column; align-items: stretch; }
+    .hub-qr { align-self: center; }
+    .hub-qr-box { width: 160px; height: 160px; }
 }
 
 .btn-ghost { background: rgba(255, 255, 255, .10); color: var(--text-primary); border-color: var(--card-border); }
