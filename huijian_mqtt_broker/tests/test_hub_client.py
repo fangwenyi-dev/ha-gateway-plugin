@@ -328,6 +328,17 @@ def test_status_view_exposes_bind_code_but_never_secret(tmp_path):
     assert view["bindCode"] == "654321"
     assert "S" * 48 not in json.dumps(view, ensure_ascii=False)          # secret 绝不外露
     assert view["connected"] is False and view["instanceId"] == "abc"
+    assert view["gatewaySn"] == "GW1"                                    # 插件页"本机网关"用
+
+
+def test_status_view_survives_missing_gateway_sn(tmp_path):
+    class _Boom:
+        @property
+        def gateway_sn(self):
+            raise RuntimeError("boom")
+
+    client, _, _ = make_client(tmp_path, manager=_Boom())
+    assert client.status_view()["gatewaySn"] == ""                        # 取 SN 抛错不得带崩视图
 
 
 def test_stop_is_idempotent_and_detaches_listener(tmp_path):

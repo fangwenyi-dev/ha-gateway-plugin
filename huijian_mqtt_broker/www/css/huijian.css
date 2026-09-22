@@ -603,6 +603,15 @@ input[type="range"]:focus-visible { outline: 2px solid var(--primary-light); }
     border: 1px solid var(--card-border);
 }
 
+/* v1.7.37 远程控制卡：6 位绑定码要"一眼能读、手抄不出错"——等比宽数字 +
+   字距。用户是照着它往手机里敲，字号小了/字距挤了都会抄错。 */
+.hub-code {
+    font-family: "SF Mono", Consolas, monospace; font-size: 20px; font-weight: 700;
+    letter-spacing: 5px; font-variant-numeric: tabular-nums;
+    color: var(--text-primary); padding: 2px 6px 2px 11px; border-radius: 6px;
+    background: rgba(255, 255, 255, .07); border: 1px solid var(--card-border);
+}
+
 /* ===== Connection info grid ===== */
 .conn-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 4px; }
 .conn-item {

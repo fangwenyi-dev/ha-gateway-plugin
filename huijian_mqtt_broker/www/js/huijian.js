@@ -53,8 +53,47 @@
             try {
                 await checkServiceStatus();
                 await loadGateways();
+                await loadRemoteControl();
             } finally {
                 _refreshAllBusy = false;
+            }
+        }
+
+        // ========== 远程控制（慧尖云）绑定信息 ==========
+        // v1.7.37：只读集成侧视图 GET /api/window_controller_gateway/hub。取不到
+        // 一律降级成"—"而不是留"检测中"——老的集成版本（<1.7.35）没有这条路由，
+        // 主流程不能因此显示得像坏了；用户看到的应当是"未启用"。
+        async function loadRemoteControl() {
+            const dot = document.getElementById('hubDot');
+            const statusEl = document.getElementById('hubStatus');
+            const codeEl = document.getElementById('hubCode');
+            const gwEl = document.getElementById('hubGateway');
+            const gwDot = document.getElementById('hubGwDot');
+            if (!dot || !statusEl || !codeEl || !gwEl) return;
+            try {
+                const resp = await haApi('/window_controller_gateway/hub');
+                if (!resp.ok) throw new Error('HA API ' + resp.status);
+                const info = await resp.json();
+                if (!info || !info.enabled) {
+                    dot.className = 'dot dot-unknown';
+                    statusEl.textContent = '未启用';
+                    codeEl.textContent = '------';
+                    gwEl.textContent = '—';
+                    if (gwDot) gwDot.className = 'dot dot-unknown';
+                    return;
+                }
+                dot.className = 'dot ' + (info.connected ? 'dot-ok' : 'dot-warn');
+                statusEl.textContent = info.connected ? '已连接' : '未连接';
+                codeEl.textContent = info.bindCode || '------';
+                gwEl.textContent = info.gatewaySn || '—';
+                if (gwDot) gwDot.className = 'dot ' + (info.gatewaySn ? 'dot-ok' : 'dot-unknown');
+            } catch (e) {
+                dot.className = 'dot dot-err';
+                statusEl.textContent = '读取失败';
+                codeEl.textContent = '------';
+                gwEl.textContent = '—';
+                if (gwDot) gwDot.className = 'dot dot-unknown';
+                console.log('远程控制状态获取失败:', e);
             }
         }
 

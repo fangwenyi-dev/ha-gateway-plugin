@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#071426">
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='0.9em' font-size='90'%3E%F0%9F%93%A1%3C/text%3E%3C/svg%3E">
     <title>慧尖 LoRa 网关</title>
-    <link rel="stylesheet" href="css/huijian.css?v=1.7.36">
+    <link rel="stylesheet" href="css/huijian.css?v=1.7.37">
 </head>
 <body>
     <!-- v1.6.27「星辰大海」背景层（对齐小程序 UI 标准 0d2200c5）：
@@ -25,7 +25,7 @@
     <div class="page">
     <div class="header">
         <div class="brand">
-            <span class="brand-logo"><img src="img/logo.png?v=1.7.36" alt="慧尖 logo"></span>
+            <span class="brand-logo"><img src="img/logo.png?v=1.7.37" alt="慧尖 logo"></span>
             <div class="brand-text">
                 <h1>慧尖 LoRa 网关</h1>
                 <span class="ver" id="addonVersion"></span>
@@ -74,6 +74,34 @@
         <div class="card-title">网关与子设备</div>
         <div id="gatewayContainer">
             <div class="loading"><div class="spinner"></div><p>正在加载网关信息...</p></div>
+        </div>
+    </div>
+
+    <!-- v1.7.37（P0 远程控制）：绑定码 + 云通道状态。数据源是集成侧只读视图
+         GET /api/window_controller_gateway/hub（经 /api/ha 代理）——长连凭据只留在
+         加载项与 hub 之间，页面拿到的字段只有 instanceId / 绑定码 / 连接状态。
+         绑定码让用户在小程序里输一次，之后不在同一局域网也能控制本机网关。 -->
+    <div class="card" id="remoteCard">
+        <div class="card-title">远程控制（慧尖云）</div>
+        <div class="status-grid">
+            <div class="status-item">
+                <span class="dot dot-warn" id="hubDot"></span>
+                <span class="label">云端连接</span>
+                <span class="value" id="hubStatus">检测中</span>
+            </div>
+            <div class="status-item">
+                <span class="dot dot-unknown" id="hubGwDot"></span>
+                <span class="label">本机网关</span>
+                <span class="value" id="hubGateway">—</span>
+            </div>
+        </div>
+        <div class="info-box">
+            <h3>绑定码 <span class="hub-code" id="hubCode">------</span></h3>
+            <p>
+                手机打开小程序 →「<b>LoRa 网关</b>」页 →「<b>绑定微信远程控制</b>」→ 输入上面 6 位数字。<br>
+                绑定后手机<b>不在同一局域网</b>（出门、用流量）也能控制本机网关的子设备。<br>
+                绑定码 <b>10 分钟内有效</b>；过期或换了新码，刷新本页即可看到当前码。
+            </p>
         </div>
     </div>
 
@@ -133,8 +161,8 @@
     <!-- v1.6.25 Web UI 三文件化：css/js 外置（相对路径，兼容 HA ingress 前缀）。
          CURRENT_VERSION 按测试锚留在本文件；huijian.js 复用此全局 let 绑定。
          v1.6.27 新增 starsky.js：纯装饰星野生成器（固定种子，零依赖零网络）。 -->
-    <script>let CURRENT_VERSION = '1.7.36';</script>
-    <script src="js/starsky.js?v=1.7.36"></script>
-    <script src="js/huijian.js?v=1.7.36"></script>
+    <script>let CURRENT_VERSION = '1.7.37';</script>
+    <script src="js/starsky.js?v=1.7.37"></script>
+    <script src="js/huijian.js?v=1.7.37"></script>
 </body>
 </html>

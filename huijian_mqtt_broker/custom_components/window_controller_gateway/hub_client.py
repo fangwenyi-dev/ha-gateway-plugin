@@ -413,10 +413,16 @@ class HubClient:
     # ── 视图（供插件页展示）──────────────────────────────────────
     def status_view(self) -> Dict[str, Any]:
         """给插件页/排障用：**不回显 secret**；绑定码本就是给用户看的，可回显。"""
+        gateway_sn = ""
+        try:
+            gateway_sn = getattr(self.device_manager, "gateway_sn", "") or ""
+        except Exception:  # noqa: BLE001 - 视图绝不因取 SN 抛错
+            gateway_sn = ""
         return {
             "connected": bool(self.connected),
             "instanceId": self.instance_id,
             "bindCode": self.bind_code,
+            "gatewaySn": gateway_sn,
             "hub": self.base,
             "lastError": self.last_error,
         }
