@@ -1,6 +1,6 @@
 """慧尖小程序局域网 WS 网关（v1.6.15，路线 A）
 
-让微信「慧尖」小程序（weichat-huijian-hz）的「Matter 网关」入口在局域网
+让微信「慧尖」小程序（weichat-huijian-hz）的「LoRa 网关」入口在局域网
 直连 HA：小程序经 mDNS `_mqtt._tcp`（由慧尖加载项广播）发现本机后，固定
 拨 `ws://<IP>:<port>/ws` 并只讲 JSON-over-WebSocket——插件此前只有
 Mosquitto@2022 与 nginx@8099，"能看到但连不上"即因 9001 无监听者。

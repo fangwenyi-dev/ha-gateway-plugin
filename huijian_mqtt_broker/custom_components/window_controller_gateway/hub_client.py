@@ -46,6 +46,12 @@ BIND_CODE_TTL_S = 600             # 绑定码有效期（与 hub 侧 bindTtlMs �
 BIND_CODE_RENEW_BEFORE_S = 120    # 剩余不足这么久就自动换新码（用户不必自己发现过期）
 HUB_HTTP_TIMEOUT_S = 15.0
 HUB_IDENTITY_FILE = "huijian_hub_identity.json"
+# 长连握手被这些状态明确拒了＝"云端不认识本机身份"（hub 重新部署抹了注册表的主形态），
+# 值得重注册；其余失败一律按网络问题处理，继续抱身份退避重试。
+IDENTITY_REJECTED_HTTP = (401, 403)
+# 连续多少次【被拒 - 重注册 - 再被拒】就熔断（不再自动重注册）。病态形态＝云托管多副本
+# 且注册表不共享：register 落到 A、握手落到 B，每轮退避都会白造一个新实例。
+HUB_REREGISTER_FUSE = 3
 
 _VALUE_RE = re.compile(r"-?\d+(\.\d+)?")
 
@@ -173,6 +179,7 @@ class HubClient:
         self._secret: Optional[str] = None
         self.bind_code: Optional[str] = None
         self._bind_code_at: float = 0.0      # 当前码的签发时刻（epoch 秒；0=未知）
+        self._rereg_streak: int = 0        # 连续【被拒 - 重注册】计数（见 HUB_REREGISTER_FUSE）
         self.connected = False
         self.last_error: Optional[str] = None
 
@@ -350,14 +357,62 @@ class HubClient:
             base = "ws://" + base[len("http://"):]
         return "%s/agent/ws?instanceId=%s&secret=%s" % (base, self.instance_id, self._secret)
 
+    async def _open_ws(self, session: aiohttp.ClientSession):
+        """建长连；云端明确"不认识这个身份"时当场重注册再连一次（只补一次）。
+
+        为什么必须显式判 HTTP 状态：hub 抹掉注册表（云托管重新部署 ⇒ /data 是容器本地盘）
+        后，本机身份对它而言就是陌生凭据。旧版 hub 是裸 destroy，客户端只能看到
+        ServerDisconnectedError＝与"网络抖一下"同形 ⇒ 抱着死身份无限退避重连，
+        面板显示的码是当前 hub 从未签发过的，小程序侧必然 code_invalid 且永不自愈。
+        现在 hub 被拒时回 401（见 huijian-cloud-hub src/server.js），据此才敢重注册：
+        **网络层失败一律不清身份**，否则每次抖动都多发一次 register、把用户手上的活码换掉。
+        """
+        try:
+            return await session.ws_connect(self._ws_url(), heartbeat=25.0)
+        except aiohttp.WSServerHandshakeError as e:
+            if e.status not in IDENTITY_REJECTED_HTTP:
+                raise
+            if self._rereg_streak >= HUB_REREGISTER_FUSE:
+                # 连续被拒不是"hub 忘了我"这一件事，而是每次 register 落到另一个容器：
+                # 云托管多副本且注册表不共享（没配存储挂载）时正是这个形态。继续重注册只会
+                # 无限造孤儿实例 + 反复作废用户手上的绑定码 ⇒ 停在熔断上，把根因写给运维。
+                self.last_error = "identity_rejected_loop"
+                self._logger.error(
+                    "hub 连续 %d 次拒本机身份，已停止自动重注册。根因几乎总是云端注册表不共享："
+                    "①确认云托管「存储挂载」已挂到 /mnt（否则每次部署即抹）；"
+                    "②确认服务实例数固定为 1（/cmd 按容器内存里的长连表转发，多副本必然随机 offline）",
+                    self._rereg_streak)
+                raise
+            self._invalidate_identity("云端拒绝身份（HTTP %s）" % e.status)
+            await self._ensure_registered()
+            return await session.ws_connect(self._ws_url(), heartbeat=25.0)
+
+    def _invalidate_identity(self, reason: str) -> None:
+        """清空本地身份并落盘：下次连接必然重新注册（换新 instanceId + 新绑定码）。
+
+        代价要说清：注册表没了意味着**绑定关系也没了**，各微信号都要重新扫一次码——
+        这一步不能替用户偷偷完成，所以只记 WARNING 指路，不假装什么都没发生。
+        """
+        self.instance_id = None
+        self._secret = None
+        self.bind_code = None
+        self._bind_code_at = 0.0
+        self._save_identity()
+        self._rereg_streak += 1
+        self.last_error = "identity_rejected"
+        self._logger.warning(
+            "hub 身份失效（%s）：已清空本地身份并将重新注册，绑定码随之换发——"
+            "云端注册表重置会同时丢掉绑定关系，请在小程序重新绑定一次", reason)
+
     async def _session_once(self) -> bool:
         """建一次长连，收消息直到断开；返回 True 表示"干净断开可立即重连"。"""
         await self._ensure_registered()
         session = await self._ensure_session()
         self._logger.info("hub 连接中：%s（凭据 %s）", self.base, cred_brief(self.instance_id))
-        async with session.ws_connect(self._ws_url(), heartbeat=25.0) as ws:
+        async with await self._open_ws(session) as ws:
             self.connected = True
             self.last_error = None
+            self._rereg_streak = 0        # 连上过＝云端确实认识当前身份，熔断计数归零
             self._logger.info("hub 已连接（instance=%s）", self.instance_id)
             self._state_dirty.set()          # 上线先全量推一次
             await self._renew_bind_code_if_stale()   # 上线自检：过期码当场换新

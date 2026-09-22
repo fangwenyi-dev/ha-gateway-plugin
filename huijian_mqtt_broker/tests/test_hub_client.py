@@ -109,8 +109,16 @@ class FakeWS:
 
 
 class FakeCM:
+    """真 aiohttp 的 ws_connect() 是 awaitable 且返回值本身可 async with——桩不能比真实现窄
+    （`_open_ws` 先 await 再 async with，只实现 CM 就会 TypeError）。"""
+
     def __init__(self, ws):
         self.ws = ws
+
+    def __await__(self):
+        async def self_await():
+            return self
+        return self_await().__await__()
 
     async def __aenter__(self):
         return self.ws
@@ -440,3 +448,160 @@ def test_renew_is_wired_into_session_and_keepalive():
                 for n in ast.walk(node)
             )
     assert found == {"_session_once": True, "_keepalive_loop": True}, found
+
+
+# ── 身份被云端拒绝后的自愈（v1.7.42）────────────────────────────────
+# 线上事故形态：云托管重新部署 ⇒ HUB_STORE=/data/store.json（容器本地盘）被抹，
+# hub 不再认识本机 instanceId/secret。此前客户端只能看到 ServerDisconnectedError
+# ＝与网络抖动同形 ⇒ 抱着死身份无限重连，面板显示的是当前 hub 从未签发的码，
+# 小程序侧必然 code_invalid 且永不自愈。判据只认握手返回的 HTTP 状态。
+import aiohttp
+
+
+class ScriptedSession(FakeSession):
+    """ws_connect 按脚本失败；注册响应逐次不同（才能证明"换了新身份"）。"""
+
+    def __init__(self, script, payloads=None):
+        super().__init__()
+        self.script = list(script)
+        self.payloads = list(payloads or [])
+        self.ws_attempts = 0
+
+    def post(self, url, json=None):                                    # noqa: ARG002
+        self.posted.append((url, json))
+        if "register" in url and self.payloads:
+            return FakeResp(self.payloads.pop(0))
+        return FakeResp(self.register_payload)
+
+    def ws_connect(self, url, heartbeat=None):                         # noqa: ARG002
+        self.ws_attempts += 1
+        self.ws_url = url
+        kind = self.script.pop(0) if self.script else None
+        if kind is None:
+            return FakeCM(self.ws)
+        raise kind
+
+
+def _hs(status):
+    return aiohttp.WSServerHandshakeError(
+        request_info=None, history=(), status=status, message=str(status), headers=None)
+
+
+def _ident(payload):
+    return {"ok": True, "instanceId": payload, "secret": payload * 2, "bindCode": payload[-6:]}
+
+
+def test_401_on_handshake_clears_identity_and_reregisters(tmp_path):
+    s = ScriptedSession([_hs(401)], payloads=[_ident("i0000000aaaa"), _ident("i1111111bbbb")])
+    client, _, _ = make_client(tmp_path, session=s)
+    assert asyncio.run(client._session_once()) is True
+    assert len(s.posted) == 2 and s.ws_attempts == 2, "被拒后应重注册一次再连，且只补一次"
+    assert client.instance_id == "i1111111bbbb", "仍抱旧身份＝线上永不自愈的那条路"
+    assert client.bind_code == "i1111111bbbb"[-6:], "换身份后必须带出新绑定码"
+    # 真文件面：清过身份要落盘，否则 HA 重启又把死身份捡回来
+    assert hc.load_identity(str(tmp_path))["instanceId"] == "i1111111bbbb"
+
+
+def test_403_clears_identity_too(tmp_path):
+    s = ScriptedSession([_hs(403)], payloads=[_ident("i0000000aaaa"), _ident("i2222222cccc")])
+    client, _, _ = make_client(tmp_path, session=s)
+    assert asyncio.run(client._session_once()) is True
+    assert client.instance_id == "i2222222cccc"
+    assert hc.IDENTITY_REJECTED_HTTP == (401, 403), "状态集合与实现脱钩＝判据漂移"
+
+
+def test_non_identity_http_failure_keeps_identity(tmp_path):
+    """503/500 一类"云端还在但没答上"绝不能触发重注册：每次抖动都换码＝用户手上的活码被作废。"""
+    for status in (429, 500, 502, 503):
+        cfg = tmp_path / ("st%s" % status)          # 各自一份身份盘：上一轮的落盘会让本轮直接复用身份
+        cfg.mkdir(parents=True, exist_ok=True)
+        s = ScriptedSession([_hs(status)], payloads=[_ident("i0000000aaaa"), _ident("i9999999zzzz")])
+        client, _, _ = make_client(cfg, session=s)
+        try:
+            asyncio.run(client._session_once())
+        except aiohttp.WSServerHandshakeError:
+            pass
+        assert client.instance_id == "i0000000aaaa", "状态 %s 竟清了身份" % status
+        assert len(s.posted) == 1, "状态 %s 竟多发了注册请求" % status
+
+
+def test_transport_level_failure_keeps_identity(tmp_path):
+    """裸断/连不上（旧 hub 或网络故障）：只能继续抱身份退避，不能猜成"被拒"。"""
+    for n, err in enumerate((aiohttp.ServerDisconnectedError(message="reset"),
+                             aiohttp.ClientOSError(113, "No route to host"))):
+        cfg = tmp_path / ("net%s" % n)
+        cfg.mkdir(parents=True, exist_ok=True)
+        s = ScriptedSession([err], payloads=[_ident("i0000000aaaa"), _ident("i9999999zzzz")])
+        client, _, _ = make_client(cfg, session=s)
+        try:
+            asyncio.run(client._session_once())
+        except Exception:  # noqa: BLE001 - 交给外层退避，正是期望行为
+            pass
+        assert client.instance_id == "i0000000aaaa", "%s 竟清了身份" % type(err).__name__
+        assert len(s.posted) == 1
+
+
+def test_invalidate_identity_writes_cleared_file(tmp_path):
+    hc.save_identity(str(tmp_path), {"instanceId": "old", "secret": "s" * 32, "bindCode": "123456",
+                                     "bindCodeAt": 111.0})
+    client, _, _ = make_client(tmp_path)
+    client.instance_id, client._secret, client.bind_code, client._bind_code_at = "old", "s" * 32, "123456", 111.0
+    client._invalidate_identity("测试")
+    assert (client.instance_id, client.bind_code, client._bind_code_at) == (None, None, 0.0)
+    assert not hc.load_identity(str(tmp_path)).get("instanceId"), "死身份还在盘上＝重启后复活"
+    assert client.status_view()["bindCodeExpired"] is False, "无码时不得渲染成『刚过期』"
+
+
+def test_open_ws_is_the_only_reject_site_and_reconnects_once():
+    """接线钉：握手只允许经 _open_ws（旁路 ws_connect＝自愈失效），且重注册后只再连一次。"""
+    src = inspect.getsource(hc.HubClient._session_once)
+    assert "self._open_ws(session)" in src, "_session_once 又直连 ws_connect 了"
+    assert "session.ws_connect" not in src, "_session_once 里出现旁路握手"
+    body = inspect.getsource(hc.HubClient._open_ws)
+    assert body.count("session.ws_connect") == 2, "首连 + 被拒后重连，多一次就是重试风暴"
+
+
+# ── 重注册熔断（防止无限造孤儿实例）───────────────────────────────
+def _hs401():
+    return _hs(401)
+
+
+def test_reregister_fuse_stops_after_consecutive_rejections(tmp_path, caplog):
+    """病态形态：register 落到容器 A、握手落到容器 B（云托管多副本且注册表不共享）。
+    不熔断就是每轮退避白造一个新实例 + 反复作废用户手上的绑定码。"""
+    import logging
+    s = ScriptedSession([_hs401()] * 20, payloads=[_ident("i%07d%d" % (n, n)) for n in range(20)])
+    client, _, _ = make_client(tmp_path, session=s)
+    for _ in range(6):
+        try:
+            asyncio.run(client._session_once())
+        except Exception:  # noqa: BLE001 - 交给外层退避
+            pass
+    assert len(s.posted) == 4, "注册次数 %d＝熔断没生效，会无限造孤儿实例" % len(s.posted)
+    assert client._rereg_streak == hc.HUB_REREGISTER_FUSE
+    errs = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
+    assert any("停止自动重注册" in m for m in errs), "熔断没有可见的 ERROR（现场只会看到反复换码）"
+    joined = " ".join(errs)
+    assert "存储挂载" in joined and "实例数" in joined, "熔断话术没给出两个真根因，运维还得自己猜"
+
+
+def test_fuse_counter_resets_after_a_successful_session(tmp_path):
+    """连上过就等于"云端确实认识当前身份"，计数必须归零——否则一次故障永久废掉自愈能力。"""
+    s = ScriptedSession([_hs401()] * 20, payloads=[_ident("i%07da" % n) for n in range(20)])
+    client, _, _ = make_client(tmp_path, session=s)
+    for _ in range(4):
+        try:
+            asyncio.run(client._session_once())
+        except Exception:  # noqa: BLE001
+            pass
+    assert client._rereg_streak == hc.HUB_REREGISTER_FUSE
+    del s.script[:]                          # 接下来握手一律成功
+    assert asyncio.run(client._session_once()) is True
+    assert client._rereg_streak == 0, "连上后没清零＝熔断只许触发一次"
+    s.script.append(_hs401())
+    before = len(s.posted)
+    try:
+        asyncio.run(client._session_once())
+    except Exception:  # noqa: BLE001
+        pass
+    assert len(s.posted) == before + 1, "清零后仍不再自愈＝回到 v1.7.41 那个永不恢复的状态"

@@ -3,6 +3,39 @@
 所有版本变更记录在此文件中。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.7.42] - 2026-09-22
+
+v1.7.41 发完后真机仍绑不上（用户第二条日志：`[bind] 载荷解析: 命中` → `绑定返回: code_invalid`）。
+线上取证 `GET /healthz` 回 `{"instances":0,"uptime":104}` —— **hub 刚重启过、注册表是空的**：
+`HUB_STORE=/data/store.json` 落在云托管容器本地盘上，每次部署即抹。于是当前 hub 根本不认识
+本机 instanceId/secret，而面板显示的正是它从未签发过的码。
+
+- **自愈路径补上**：`_open_ws()` 统一握手，握手返回 401/403 ＝ "云端不认识本机身份" ⇒
+  `_invalidate_identity()` 清空并落盘身份（重启进程也不会复活死身份）→ 立即重注册 → 换发新码。
+  只补这一次，再失败交给外层退避。
+- **判据刻意收窄**：网络层失败（ServerDisconnectedError / ClientOSError / 连不上）**一律不清身份**。
+  旧 hub 被拒时是裸 `socket.destroy()`，客户端只能看到 ServerDisconnectedError＝与"网络抖一下"
+  同形 ⇒ 必须配套 hub v0.2.1（被拒时先回 `HTTP/1.1 401` 再断）。若在这里也清身份，每次断网都会
+  多发一次 register、把用户手上正在扫的活码作废。
+- **重注册熔断**：连续 3 次【被拒→重注册→再被拒】后停止自动重注册并打 ERROR。病态形态是云托管
+  多副本且注册表不共享（register 落到 A、握手落到 B）——不熔断就是每轮退避白造一个孤儿实例、
+  反复作废用户手上的绑定码。连上任何一次即清零计数（否则一次故障永久废掉自愈能力）。
+- **新增真栈回归 `tests/e2e/hub_lifecycle_e2e.sh`**（真 node hub 进程 + 真 HubClient + 真 /bind，
+  跨 huijian-cloud-hub 仓）三臂 12 条：A 注册即绑 / B 保盘重启（instanceId 不变、原绑定仍活着）/
+  C **抹盘重启**（换新身份、换新码、新码真能被 /bind 接受、/cmd 真下发到本机）。
+  修复前 C 臂 5 条全红，复现的就是线上那条链。另有 3 条**跨仓常量对账**（installKey 逐字相等、
+  hub 被拒状态码 ∈ 插件可判集合、HUB_STORE 落在 /mnt）——这类"两边各写一份"的契约不一致时
+  只在真机第一次注册才暴露。hub 仓不可见时 loud skip（exit 3），不静默放行。
+- 测试：`test_hub_client.py` 21→29（401/403 清身份并重注册、429/500/502/503 与裸断**不**清身份、
+  清过身份必须落盘、握手只能经 `_open_ws` 且只补连一次、熔断触发与计数复位）
+  + `test_v1742_hub_identity.py` 7 条（三臂防删防稀释、skip 必须非 0 且真跑一次、
+  `/cmd` 臂不得被 forbidden 蒙过）；`ws_gateway.py` 文档串里的「Matter 网关」→「LoRa 网关」（命名口径）。
+  桩修正：真 `session.ws_connect()` 既 awaitable 又可 async-CM，`FakeCM` 只实现了后者＝桩比真实现窄。
+- **部署侧配套（huijian-cloud-hub v0.2.1）**：`HUB_STORE` 默认改 `/mnt/store.json`（云托管的持久化
+  形态是「存储挂载→对象存储」，不是块盘），`_save()` 不再让 IO 异常串进请求路径，
+  `/healthz` 自证 `storeFile`/`storeSaved`/`storeFailures`。**且服务实例数必须固定为 1**——
+  `/cmd` 靠容器内存里的长连表转发，多副本必然随机 `offline`（共享存储救不了这件事）。
+
 ## [1.7.41] - 2026-09-22
 
 两条现场问题一批收：**绑定码 10 分钟后永久失效、且面板没有换新路径**（用户真机"扫码绑定失败"的直接原因），以及卡内文案补上"去哪儿找小程序"。
