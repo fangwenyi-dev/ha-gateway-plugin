@@ -11,7 +11,7 @@ latest=1.7.24 installed=1.7.24`）→ 1.7.25 及以后对这批机器**永久不
 "有可用更新"提示静默失效。故此后每次发版必须：
 
 ```bash
-# 1. 推 GitHub
+# 1. 推 GitHub（SSH 通道，见下方「GitHub 推送通道」，勿改回 HTTPS）
 git push origin main
 
 # 2. 推 Gitee（main 必推；商店读的是仓库内 config.yaml 的 version，
@@ -76,6 +76,26 @@ v1.6.0 的 "entity" 字面量回归曾骗过全部 38 个测试，教训记录�
 
 ---
 
+### GitHub 推送通道：SSH（2026-09-22 定案，实测通过）
+**origin 已切 SSH**：`git@github.com:fangwenyi-dev/ha-gateway-plugin.git`。
+本机 `~/.ssh/config` 把 `github.com` 指向 `ssh.github.com:443`（22 端口被本网络
+拒，必须走 443）。**禁止把 origin 改回 HTTPS**。
+
+GitHub 侧一律 `git push origin main`，**Qoder 内置 git 2.52 也能推**（SSH 不经
+schannel），Qoder IDE 源代码管理面板同样适用。2026-09-22 实测：系统 git 与
+`/mingw64/bin/git` 直推 SSH 均得 `Everything up-to-date`；`ssh -T -p 443
+git@ssh.github.com` 回 `Hi fangwenyi-dev!`。
+
+**HTTPS 仅作后备**，且必须同时满足两条，缺一即挂：
+1. `gh auth setup-git` 已配（`credential.https://github.com.helper` → gh 的
+   `auth git-credential`；GCM 里本来没有 github.com 条目，单走 GCM 会卡在
+   要用户名密码）；
+2. 用**系统 git 2.55**（`D:/progrem/git/Git/cmd/git.exe`）——内置 2.52 走
+   schannel 推 GitHub 恒撞 `CRYPT_E_NO_REVOCATION_CHECK`（Gitee 不受影响）。
+   Qoder Bash 不读 `~/.bashrc`，故本机以 `~/bin/git` wrapper 兜底。
+
+---
+
 ### Gitee 凭据（现行生效：2026-09-17 恢复双推；remote 仍不带 token）
 ```bash
 # remote 保持干净 URL（.git/config 不落任何密钥）
@@ -91,7 +111,8 @@ git remote set-url gitee https://gitee.com/fangwenyi-dev/ha-gateway-plugin.git
    TOK=$(cat /mnt/c/Users/fangwenyi/.gitee_token | tr -d '\r\n')
    GIT_TERMINAL_PROMPT=0 git push "https://oauth2:${TOK}@gitee.com/fangwenyi-dev/ha-gateway-plugin.git" main
    ```
-GitHub 同理走 `gh auth token` 注入一次性 URL（WSL 无 GCM 交互）。
+GitHub 侧现已改 SSH（见上节「GitHub 推送通道」，Windows 与 WSL 均优先 SSH）；
+仅在确实要走 HTTPS 时才用 `gh auth token` 注入一次性 URL（WSL 无 GCM 交互）。
 禁止再把 token 写回 `git remote set-url`——历史做法会让明文 token 长期驻留
 `.git/config`，任何读取该文件的工具/日志/备份都可能带出。
 `git push gitee --tags` 对已存在 tag 会逐条报 `! [rejected] ... (already exists)`
