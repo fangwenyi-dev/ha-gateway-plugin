@@ -4,6 +4,7 @@ import ast
 import asyncio
 import inspect
 import json
+import logging
 import os
 import time
 
@@ -436,9 +437,142 @@ def test_renew_bind_code_if_stale_only_when_needed(tmp_path, monkeypatch):
     asyncio.run(client._renew_bind_code_if_stale())
     assert calls == ["/agent/bindcode"] and client.bind_code == "333333"
 
-    client.bind_code, client._bind_code_at = "444444", 0               # 签发时刻未知＝按过期处理
+    # 签发时刻未知＝按过期处理（v1.7.45 起换码尝试有最小间隔，这里要放行才能测到本意）
+    client.bind_code, client._bind_code_at = "444444", 0
+    client._bind_renew_at = 0.0
     asyncio.run(client._renew_bind_code_if_stale())
-    assert calls[-1] == "/agent/bindcode"
+    assert len(calls) == 2 and calls[-1] == "/agent/bindcode"
+
+
+def test_bindcode_failure_logs_the_actual_reason(tmp_path, caplog):
+    """v1.7.45：这条告警曾只打 type(e).__name__，而消息里带的正是 HTTP 状态。
+
+    真机 32s 内 8 条"hub 换绑定码失败（RuntimeError）"没人说得出是云端发布中（该重试）、
+    凭据不认（该重注册）还是被墙（该看网络）——判据必须落到日志里。
+    """
+    client, _, _ = make_client(tmp_path)
+    client.instance_id, client._secret = "abc", "def"
+    client.bind_code, client._bind_code_at = "111111", 0
+
+    async def bad_gateway(path, payload):
+        raise RuntimeError("hub /agent/bindcode -> 502")
+
+    client._http = bad_gateway
+    caplog.set_level(logging.WARNING, logger=client._logger.name)
+    assert asyncio.run(client.refresh_bind_code()) is False
+    logs = " ".join(r.getMessage() for r in caplog.records)
+    assert "502" in logs, "失败原因（HTTP 状态）必须进日志：%s" % logs
+    assert client.last_error == "bindcode_failed"
+
+
+def test_bindcode_failure_never_echoes_credentials(tmp_path, caplog):
+    """凭据不回显纪律：万一异常消息里带上含 secret 的 URL，也只能打类型名。"""
+    client, _, _ = make_client(tmp_path)
+    client.instance_id, client._secret = "abc", "SUPERSECRETVALUE"
+    client.bind_code, client._bind_code_at = "111111", 0
+
+    async def leaky(path, payload):
+        raise RuntimeError("POST /agent/bindcode?secret=SUPERSECRETVALUE failed")
+
+    client._http = leaky
+    caplog.set_level(logging.WARNING, logger=client._logger.name)
+    asyncio.run(client.refresh_bind_code())
+    logs = " ".join(r.getMessage() for r in caplog.records)
+    assert "SUPERSECRETVALUE" not in logs, "日志回显了凭据：%s" % logs
+
+
+def test_renew_throttles_after_failure(tmp_path):
+    """失败后不得连击：自动补发挂在"上线自检 + 每个保活 tick"上，云端发布中的几十秒里
+    会话会重连很多次（真机实发 8 次/32s），节流后同一窗口只发一次。"""
+    client, _, _ = make_client(tmp_path)
+    client.instance_id, client._secret = "abc", "def"
+    client.bind_code, client._bind_code_at = "111111", 0
+    n = {"calls": 0}
+
+    async def failing(path, payload):
+        n["calls"] += 1
+        raise RuntimeError("hub /agent/bindcode -> 502")
+
+    client._http = failing
+    asyncio.run(client._renew_bind_code_if_stale())
+    asyncio.run(client._renew_bind_code_if_stale())
+    asyncio.run(client._renew_bind_code_if_stale())
+    assert n["calls"] == 1, "失败后没节流＝对付费端点连击 + 同一条告警刷屏（%d 次）" % n["calls"]
+
+    client._bind_renew_at = time.time() - hc.BIND_CODE_RENEW_MIN_INTERVAL_S - 1
+    asyncio.run(client._renew_bind_code_if_stale())
+    assert n["calls"] == 2, "超过最小间隔后必须还能再试（否则一次故障永久废掉补发）"
+
+
+def test_panel_click_is_not_throttled(tmp_path):
+    """节流只管自动补发：用户点二维码是显式意图，必须当场换码（旧码作废是刻意的）。"""
+    client, _, _ = make_client(tmp_path)
+    client.instance_id, client._secret = "abc", "def"
+    client._bind_renew_at = time.time()          # 刚刚"自动试过"
+    calls = []
+
+    async def ok(path, payload):
+        calls.append(path)
+        return {"ok": True, "bindCode": "654321"}
+
+    client._http = ok
+    assert asyncio.run(client.refresh_bind_code()) is True
+    assert calls == ["/agent/bindcode"] and client.bind_code == "654321"
+
+
+def test_clean_close_reconnects_at_the_floor_not_zero(tmp_path, monkeypatch):
+    """连上过又被对端干净关掉 ⇒ 阶梯归零（证明端点是通的），但**不是零间隔**。
+
+    旧实现是 `attempt=0; continue`＝立即重连：遇到"接受后立刻关"（被 replaced /
+    网关抽风 / 云端发布中）就是无间隔风暴。反过来把退避按会话时长升级也会坏——
+    跨仓 e2e 的 C 臂（hub 反复重启）会因此一路涨到 300s，把恢复拖成几分钟不可用。
+    """
+    client, _, _ = make_client(tmp_path)
+    delays = []
+    rounds = {"i": 0}
+
+    async def fake_session():
+        rounds["i"] += 1
+        if rounds["i"] >= 4:
+            client._stopping = True
+        return True
+
+    async def fake_sleep(seconds, is_stopping):
+        delays.append(seconds)
+
+    monkeypatch.setattr(client, "_session_once", fake_session)
+    monkeypatch.setattr(hc, "interruptible_sleep", fake_sleep)
+    asyncio.run(client._run_forever())
+    assert delays == [hc.HUB_RECONNECT_FLOOR_S] * 3, \
+        "干净断开应按地板间隔重连且不升级阶梯，实得 %s" % delays
+
+
+def test_connect_failure_still_escalates(tmp_path, monkeypatch):
+    """连都没连上（异常）⇒ 必须走指数阶梯，不能享受地板。"""
+    client, _, _ = make_client(tmp_path)
+    delays = []
+    rounds = {"i": 0}
+
+    async def boom_session():
+        rounds["i"] += 1
+        if rounds["i"] >= 3:
+            client._stopping = True
+        raise OSError("connection refused")
+
+    async def fake_sleep(seconds, is_stopping):
+        delays.append(seconds)
+
+    monkeypatch.setattr(client, "_session_once", boom_session)
+    monkeypatch.setattr(hc, "interruptible_sleep", fake_sleep)
+    asyncio.run(client._run_forever())
+    assert delays == [hc.HUB_RECONNECT_BASE_S, hc.HUB_RECONNECT_BASE_S * 2], \
+        "连不上必须指数退避，实得 %s" % delays
+
+
+def test_reconnect_floor_is_positive():
+    """地板钉：防"风暴保护"被一句 `FLOOR_S = 0` 静默取消（那等于回到旧行为）。"""
+    assert hc.HUB_RECONNECT_FLOOR_S > 0
+    assert hc.HUB_RECONNECT_FLOOR_S < hc.HUB_RECONNECT_BASE_S
 
 
 def test_renew_is_wired_into_session_and_keepalive():

@@ -39,11 +39,13 @@ HUB_DEFAULT_INSTALL_KEY = "c019cee1ef3c68ceea68cfdbcc121b6f"
 
 HUB_RECONNECT_BASE_S = 5.0
 HUB_RECONNECT_MAX_S = 300.0
-HUB_SLEEP_SLICE_S = 30.0          # 长睡切片（停机时最多 30s 内让出）
-HUB_STATE_DEBOUNCE_S = 0.3        # 状态上行合并窗
-HUB_KEEPALIVE_S = 300.0           # 保活重推：让 hub 侧 updatedAt 反映 agent 存活
-BIND_CODE_TTL_S = 600             # 绑定码有效期（与 hub 侧 bindTtlMs 同口径；过期即作废）
-BIND_CODE_RENEW_BEFORE_S = 120    # 剩余不足这么久就自动换新码（用户不必自己发现过期）
+HUB_RECONNECT_FLOOR_S = 1.0         # "连上过又被干净关掉"的最小间隔（防零间隔风暴，见 _run_forever）
+HUB_SLEEP_SLICE_S = 30.0            # 长睡切片（停机时最多 30s 内让出）
+HUB_STATE_DEBOUNCE_S = 0.3          # 状态上行合并窗
+HUB_KEEPALIVE_S = 300.0             # 保活重推：让 hub 侧 updatedAt 反映 agent 存活
+BIND_CODE_TTL_S = 600               # 绑定码有效期（与 hub 侧 bindTtlMs 同口径；过期即作废）
+BIND_CODE_RENEW_BEFORE_S = 120      # 剩余不足这么久就自动换新码（用户不必自己发现过期）
+BIND_CODE_RENEW_MIN_INTERVAL_S = 120.0   # 两次换码尝试的最小间隔（失败后不连击，见 _renew_bind_code_if_stale）
 HUB_HTTP_TIMEOUT_S = 15.0
 HUB_IDENTITY_FILE = "huijian_hub_identity.json"
 # 长连握手被这些状态明确拒了＝"云端不认识本机身份"（hub 重新部署抹了注册表的主形态），
@@ -185,6 +187,7 @@ class HubClient:
         self._secret: Optional[str] = None
         self.bind_code: Optional[str] = None
         self._bind_code_at: float = 0.0      # 当前码的签发时刻（epoch 秒；0=未知）
+        self._bind_renew_at: float = 0.0     # 上一次"换码尝试"时刻（成功失败都记，用于节流）
         self._rereg_streak: int = 0        # 连续【被拒 - 重注册】计数（见 HUB_REREGISTER_FUSE）
         self.connected = False
         self.last_error: Optional[str] = None
@@ -257,10 +260,9 @@ class HubClient:
     async def _run_forever(self) -> None:
         attempt = 0
         while not self._stopping:
+            connected = False
             try:
-                if await self._session_once():
-                    attempt = 0
-                    continue
+                connected = await self._session_once()
             except asyncio.CancelledError:
                 raise
             except Exception as e:  # noqa: BLE001 - 任何异常都只降级重连
@@ -270,8 +272,17 @@ class HubClient:
                 self.connected = False
             if self._stopping:
                 return
-            attempt += 1
-            delay = hub_reconnect_delay(attempt)
+            # `_session_once` 只在**真的连上过**之后正常返回才为 True——所以"连上后被
+            # 对端关掉"证明端点是通的，退避阶梯必须归零（否则 hub 反复重启时阶梯会一路
+            # 涨到 300s，把恢复拖成几分钟不可用；跨仓 e2e 的 C 臂就是这么红的）。
+            # 但仍留 HUB_RECONNECT_FLOOR_S 地板：旧实现此时零间隔立即重连，遇到
+            # "接受后立刻关"（被 replaced / 网关抽风 / 云端发布中）就是无间隔风暴。
+            if connected:
+                attempt = 0
+                delay = HUB_RECONNECT_FLOOR_S
+            else:
+                attempt += 1
+                delay = hub_reconnect_delay(attempt)
             self._logger.info("hub 重连退避 %.0fs（第 %d 次）", delay, attempt)
             await interruptible_sleep(delay, lambda: self._stopping)
 
@@ -351,15 +362,24 @@ class HubClient:
             self._load_identity()
         if not (self.instance_id and self._secret):
             return False
+        self._bind_renew_at = time.time()     # 成功失败都算一次尝试（自动补发侧的节流基准）
         try:
             data = await self._http("/agent/bindcode", {
                 "instanceId": self.instance_id,
                 "secret": self._secret,
             })
         except Exception as e:  # noqa: BLE001 - 网络/旧 hub 无此端点都只降级
-            self._logger.warning("hub 换绑定码失败（%s）", type(e).__name__)
+            # 原因必须进日志：这里曾只打 type(e).__name__，而 RuntimeError 的消息带的
+            # 正是 "hub /agent/bindcode -> 502"——真机 32s 内 8 条同样的告警，却没人说得出
+            # 是云端发布中（该重试）、凭据不认（该重注册）还是被墙（该看网络）。
+            why = str(e) or type(e).__name__
+            if self._secret and self._secret in why:
+                why = type(e).__name__        # 万一消息里带上 URL，绝不回显凭据
+            self.last_error = "bindcode_failed"
+            self._logger.warning("hub 换绑定码失败：%s", why)
             return False
         if not data.get("ok") or not data.get("bindCode"):
+            self.last_error = "bindcode_rejected"
             self._logger.warning("hub 换绑定码被拒：%s", data.get("err"))
             return False
         self.bind_code = data["bindCode"]
@@ -369,8 +389,16 @@ class HubClient:
         return True
 
     async def _renew_bind_code_if_stale(self) -> None:
-        """快到期/已过期就自动换新码——面板上显示的码因此始终可用。"""
+        """快到期/已过期就自动换新码——面板上显示的码因此始终可用。
+
+        失败后按 BIND_CODE_RENEW_MIN_INTERVAL_S 节流：这条挂在"上线自检 + 每个保活
+        tick"上，云端发布中的几十秒里会话会重连很多次，不节流就是同一告警刷屏
+        （真机实发 32s 内 8 条）+ 对付费端点的无意义连击。面板上用户点二维码那条
+        （api.py → refresh_bind_code）**不受此节流**——那是显式意图。
+        """
         if self.bind_code_expires_in() >= BIND_CODE_RENEW_BEFORE_S:
+            return
+        if time.time() - self._bind_renew_at < BIND_CODE_RENEW_MIN_INTERVAL_S:
             return
         if await self.refresh_bind_code():
             self._logger.info("绑定码自动补发完成（原码已作废，请以面板显示为准）")
