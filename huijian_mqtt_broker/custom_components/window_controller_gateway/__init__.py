@@ -511,16 +511,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         except Exception as e:
             _LOGGER.error("小程序 WS 网关检查失败（不影响其余功能）: %s", e, exc_info=True)
 
-        try:
-            await async_ensure_hub_client(hass)
-        except Exception as e:  # noqa: BLE001 - 云通道故障不得拖累本地与 WS
-            _LOGGER.error("慧尖云 hub 通道状态同步失败: %s", e)
-
-        try:
-            await async_ensure_hub_client(hass)
-        except Exception as e:  # noqa: BLE001 - 云通道故障不得拖累本地与 WS
-            _LOGGER.error("慧尖云 hub 通道状态同步失败: %s", e)
-
+        # hub 长连**不在这里** ensure：awaiting 条目没有 device_manager，
+        # `_hub_managers()` 对本条目恒为空，在此调用的净效果只剩"把别的条目
+        # 已经拉起来的安装级长连停掉"。拉起/收拢只发生在完整设置分支与
+        # unload/remove 三处（v1.7.44 修的就是这条落点）。
         return True
 
     # ---- 有网关 SN：完整设置 ----
@@ -692,10 +686,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         )
         hass.data[DOMAIN][entry.entry_id].setdefault("_bg_tasks", []).append(_bg_task)
 
-        # 慧尖云 hub 出站长连（P0，客户零配置的远程控制通道）：启动失败只降级
-        # 重连、不影响本地功能（对齐 WS 网关"启动失败只记 error"的既定语义）。
-        # 端点/密钥可用 entry.options 的 hub_base / hub_install_key 覆盖（P1 再进
-        # config_flow 表单）。
         # ============ 自动设备迁移（替换网关流程）暂禁用 ============
         # 迁移功能先不使用：即使 entry.data 中带 migration_info（替换网关流程
         # 创建的 entry），也不再自动触发设备迁移。重新启用时取消下面注释。
@@ -714,6 +704,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             await async_ensure_ws_gateway(hass)
         except Exception as e:
             _LOGGER.error("小程序 WS 网关检查失败（不影响其余功能）: %s", e, exc_info=True)
+
+        # 慧尖云 hub 出站长连（P0，客户零配置的远程控制通道）：**一个 HA 安装一条**，
+        # 本条目只是"聚合触发点"（见 async_ensure_hub_client 的归属说明）。启动失败
+        # 只降级重连、不影响本地功能（对齐 WS 网关"启动失败只记 error"的既定语义）。
+        # 端点/密钥可用 entry.options 的 hub_base / hub_install_key 覆盖（P1 再进
+        # config_flow 表单）。落点必须在**本分支**：awaiting 条目无 manager，
+        # 挂在那边等于远程控制永不启动（v1.7.43 的实发回归，v1.7.44 修回）。
+        try:
+            await async_ensure_hub_client(hass)
+        except Exception as e:  # noqa: BLE001 - 云通道故障不得拖累本地与 WS
+            _LOGGER.error("慧尖云 hub 通道启动失败（不影响本地功能）: %s", e, exc_info=True)
 
         _LOGGER.info("开窗器网关 [%s] 设置完成", gateway_name)
         return True

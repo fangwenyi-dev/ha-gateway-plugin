@@ -3,6 +3,34 @@
 所有版本变更记录在此文件中。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.7.44] - 2026-09-23
+
+热修：1.7.43 的多网关改造把 hub 单例的**接线落点**放错了分支 ⇒ 远程控制整条不启动。
+真机证据：插件页「远程控制（慧尖云）」显示 `云端连接=未启用`、`纳管网关=—`、绑定码为空。
+
+根因：`async_ensure_hub_client` 只挂在 `async_setup_entry` 的 **awaiting（无网关 SN）分支**
+（还重复两次），生产真实路径的**完整设置分支一次都没调**——1.7.42 里那段按条目建实例的
+代码被删掉后没在新位置补回。⇒ HA 重启后 `hass.data[DOMAIN]` 里没有单例键，
+`/api/window_controller_gateway/hub` 回 `enabled:false`，hub 侧 `agentsOnline:0`。
+awaiting 分支那两处同样有害：该支 `_hub_managers()` 恒空，调用的净效果只剩"把长连停掉"。
+
+- 完整设置分支在 `async_ensure_ws_gateway` 之后补一处 ensure（与 WS 单例同批落点）；
+- awaiting 分支两处全删；
+- 「hub 长连在此启动」那段失效注释挪到真调用处（注释不是证据——1.7.42 同型教训）。
+
+测试（新增 `tests/test_v1744_hub_wiring.py` 8 条）。本批根因也是**测试形态**：46 条 hub
+单测全部直接调 `async_ensure_hub_client(hass)`、真栈 e2e 直接 `HubClient(...)`，接线层零
+覆盖，而"反钉 setup 里不得按条目建 client"只判**不存在**（单侧钉，挡不住"该在的没了"）。
+两条腿一起补：
+
+- 行为：真跑 `async_setup_entry` 完整分支（外部依赖打桩、hub 接线不打桩），断言 setup 完
+  单例已建且 `started==1`；第二条网关注册后仍是**一个**实例挂两条 manager；起不来不留半个注册。
+- 结构：按 `if not gateway_sn:` 把 setup 切两支分别判计数（完整支 ==1、awaiting 支 ==0），
+  配「两支 WS 计数各 ==1」元钉作锚点存活证据，另加全仓调用点总数 ==3 的计数钉。
+
+变异 M17（影子树删掉完整支的 ensure＝还原 1.7.43 形态）：新钉 5 条红，老 46 条 hub 测试
+**全绿**——盲区就此复现，也正是它能发布出去的原因。
+
 ## [1.7.43] - 2026-09-23
 
 用户报"只把一台网关给了小程序"。根因是**归属粒度错**：`HubClient` 按 config entry 各建一个
