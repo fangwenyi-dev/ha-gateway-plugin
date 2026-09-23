@@ -15,7 +15,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 
-from .const import DOMAIN
+from .const import DOMAIN, HUB_DATA_KEY
 from .utils import iter_devices
 
 _LOGGER = logging.getLogger(__name__)
@@ -139,6 +139,14 @@ class WindowGatewayDevicesView(http.HomeAssistantView):
         return self.json(result)
 
 
+def _hub_client(hass):
+    """取安装级 hub 单例（**不是**"遍历条目取第一个"——那正是只看到一台网关的根因）。"""
+    domain_data = hass.data.get(DOMAIN)
+    if not isinstance(domain_data, dict):
+        return None
+    return domain_data.get(HUB_DATA_KEY)
+
+
 class WindowGatewayHubView(http.HomeAssistantView):
     """v0.1(P0): 慧尖云 hub 绑定状态只读视图——插件页展示"扫码绑定"用。
 
@@ -151,17 +159,14 @@ class WindowGatewayHubView(http.HomeAssistantView):
     name = "api:window_controller_gateway:hub"
 
     async def get(self, request):
-        """返回首个已启动 hub 客户端的状态；未启用/未启动回 enabled=False。"""
+        """返回安装级 hub 的状态；没长连（无网关/未起）如实回 enabled=False。"""
         hass = request.app["hass"]
-        for data in list(hass.data.get(DOMAIN, {}).values()):
-            if not isinstance(data, dict):
-                continue
-            client = data.get("hub_client")
-            if client is not None:
-                view = client.status_view()
-                view["enabled"] = True
-                return self.json(view)
-        return self.json({"enabled": False})
+        client = _hub_client(hass)
+        if client is None:
+            return self.json({"enabled": False})
+        view = client.status_view()
+        view["enabled"] = True
+        return self.json(view)
 
 
 class WindowGatewayHubBindCodeView(http.HomeAssistantView):
@@ -177,14 +182,11 @@ class WindowGatewayHubBindCodeView(http.HomeAssistantView):
     async def post(self, request):
         """换码并回新状态；集成里没有 hub 客户端（或换码失败）时如实回 refreshOk=False。"""
         hass = request.app["hass"]
-        for data in list(hass.data.get(DOMAIN, {}).values()):
-            if not isinstance(data, dict):
-                continue
-            client = data.get("hub_client")
-            if client is not None:
-                ok = await client.refresh_bind_code()
-                view = client.status_view()
-                view["enabled"] = True
-                view["refreshOk"] = bool(ok)
-                return self.json(view)
-        return self.json({"enabled": False, "refreshOk": False})
+        client = _hub_client(hass)
+        if client is None:
+            return self.json({"enabled": False, "refreshOk": False})
+        ok = await client.refresh_bind_code()
+        view = client.status_view()
+        view["enabled"] = True
+        view["refreshOk"] = bool(ok)
+        return self.json(view)

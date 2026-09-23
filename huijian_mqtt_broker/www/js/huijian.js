@@ -106,6 +106,23 @@
             if (tip) tip.textContent = code;
         }
 
+        /** 网关口径文案（纯函数，便于真跑）。
+         *  一台时直接给 SN（沿用旧面板"一眼看到本机网关"的好处）；多台时给计数 +
+         *  全部 SN——写单个 SN 会让人以为远程控制只管一台。 */
+        function hubGatewayText(info) {
+            const gws = (info && Array.isArray(info.gateways)) ? info.gateways : null;
+            if (!gws || !gws.length) {
+                const one = info && info.gatewaySn;
+                return one ? String(one) : '—';
+            }
+            const devs = gws.reduce((n, g) => n + (g && g.deviceCount ? g.deviceCount : 0), 0);
+            if (gws.length === 1) {
+                return gws[0].sn + ' · ' + devs + ' 个子设备';
+            }
+            return gws.length + ' 台 · ' + devs + ' 个子设备（' +
+                gws.map((g) => g.sn).join('、') + '）';
+        }
+
         /** 唯一渲染出口：GET 状态与 POST 换码都走这里，任何一条路径都不会漏渲染。*/
         function applyHubStatus(info, failed) {
             const dot = document.getElementById('hubDot');
@@ -131,8 +148,10 @@
             statusEl.textContent = info.connected ? '已连接' : '未连接';
             _bindCode = info.bindCode || '';
             codeEl.textContent = _bindCode || '------';
-            gwEl.textContent = info.gatewaySn || '—';
-            if (gwDot) gwDot.className = 'dot ' + (info.gatewaySn ? 'dot-ok' : 'dot-unknown');
+            gwEl.textContent = hubGatewayText(info);
+            const gwCount = (Array.isArray(info.gateways) && info.gateways.length) ||
+                (info.gatewaySn ? 1 : 0);
+            if (gwDot) gwDot.className = 'dot ' + (gwCount ? 'dot-ok' : 'dot-unknown');
             if (expEl) {
                 // 码会过期：把"还剩多久/已经过期"摆出来，用户不用靠扫码失败来发现
                 const sec = typeof info.bindCodeExpiresIn === 'number' ? info.bindCodeExpiresIn : null;

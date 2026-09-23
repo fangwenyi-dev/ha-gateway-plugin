@@ -3,6 +3,36 @@
 所有版本变更记录在此文件中。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.7.43] - 2026-09-23
+
+用户报"只把一台网关给了小程序"。根因是**归属粒度错**：`HubClient` 按 config entry 各建一个
+（`__init__.py` 原 :571），N 台网关就注册 N 个实例、各拿一个绑定码，而身份文件
+`huijian_hub_identity.json` 本来就落在全局 config_dir ⇒ 多条目**互相覆盖同一份身份**；
+HA 重启后它们又各自读回同一个 instanceId 去连，hub 的 `onAgent` 用
+`close(4000,'replaced')` 顶掉前一条 ⇒ N 台网关抢一条长连（重连战争），小程序只看到其中一台。
+
+- **归属改成"一个 HA 安装一个实例"**：新增 DOMAIN 级 `async_ensure_hub_client()` /
+  `async_stop_hub_client()`，挂在 `async_ensure_ws_gateway` 的同一批调用点
+  （条目 setup 尾部两处、unload、删除条目后），照抄 WS 单例三条纪律：幂等、
+  **判等再 pop**（`async_stop` 有真实让出点，无条件 pop 会删掉别人刚登记的实例）、
+  STOP 监听只注册一次（v1.7.33 那条"句柄不存不摘"教训）。
+- **状态上行跨条目聚合**：`collect_state_items()` 遍历全部 manager，每条设备带自己的
+  `gwSn`——小程序云模式本来就按 `gwSn` 分桶（`gw-router._cloudCache`），所以
+  **小程序与 hub 协议零改动**就能看到全部网关。
+- **命令下行**：`_make_hub_control(hass)` 早就是安装级（遍历条目、按设备 SN 命中所属
+  条目才发 004），本批只把它钉住：非所属条目的 handler 必须一次都不被调用
+  （广播＝同一台子设备收到两条重复控制）。
+- **面板不再说谎**：标签「本机网关」→「纳管网关」，值改为 `N 台 · M 个子设备（SN…）`；
+  纯函数 `hubGatewayText()` 用 node **真跑**验证（含老集成只回 `gatewaySn` 的兼容路径、
+  `deviceCount` 缺失不得出 NaN）。
+- 测试：新增 `test_v1743_hub_singleton.py` 12 条（单例幂等/换挂不重建/最后条目撤走须停并摘键/
+  单例键不被当成条目/命令归属/面板文案真跑/反钉"setup 里不得再按条目建 client"、
+  "api 不得遍历条目取第一个"）；`test_hub_client.py` 29→34（多网关 items、监听挂满并可摘、
+  `gateways[]` 视图、注册 sn 取首个、空 manager 不得抛）；真栈 e2e 加 **D 臂** 3 条
+  （一次长连带两台网关的设备、gwSn 不串、第二台也能被控制）→ 18/18。
+- 运维可见性：多条目老用户升级后会**合并成一个实例 ⇒ 绑定码换发，需重扫一次**；
+  hub 侧会留下 N-1 个孤儿实例（不影响功能，`/healthz` 的 `instances` 会虚高）。
+
 ## [1.7.42] - 2026-09-22
 
 v1.7.41 发完后真机仍绑不上（用户第二条日志：`[bind] 载荷解析: 命中` → `绑定返回: code_invalid`）。

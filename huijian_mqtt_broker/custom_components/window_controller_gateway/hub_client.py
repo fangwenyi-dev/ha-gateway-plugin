@@ -151,11 +151,17 @@ def validate_control_params(attribute: Any, value: Any) -> Optional[str]:
 
 
 class HubClient:
-    """出站长连客户端（一 entry 一实例；由 __init__.py 的 _bg_tasks 拉起与取消）。"""
+    """出站长连客户端（**一个 HA 安装一个实例**，聚合该安装下全部网关条目）。
+
+    为什么不是"每条目一个实例"：身份文件 `huijian_hub_identity.json` 落在全局
+    config_dir，N 个条目会互相覆盖同一份身份；HA 重启后它们又各自读回**同一个**
+    instanceId 去连，而 hub 的 onAgent 会 `close(4000,'replaced')` 顶掉前一条 ⇒
+    N 台网关抢一条长连（重连战争），且小程序只看到其中一台。
+    """
 
     def __init__(
         self,
-        device_manager: Any,
+        managers: Optional[List[Any]] = None,
         *,
         config_dir: str,
         base: str = HUB_DEFAULT_BASE,
@@ -165,7 +171,7 @@ class HubClient:
         session: Optional[aiohttp.ClientSession] = None,
         logger: Optional[logging.Logger] = None,
     ) -> None:
-        self.device_manager = device_manager
+        self._managers: List[Any] = list(managers or [])
         self.config_dir = config_dir
         self.base = (base or HUB_DEFAULT_BASE).rstrip("/")
         self.install_key = install_key or HUB_DEFAULT_INSTALL_KEY
@@ -188,6 +194,32 @@ class HubClient:
         self._state_dirty = asyncio.Event()
         self._send_lock: Optional[asyncio.Lock] = None
 
+    # ── 网关集合（条目增删/重载时由 __init__.py 重新聚合）───────────
+    @property
+    def managers(self) -> List[Any]:
+        return list(self._managers)
+
+    def attach_managers(self, managers: List[Any]) -> None:
+        """把状态监听挂到**当前全部** device_manager 上，并摘掉已不存在的。
+
+        幂等：重复 ensure（条目 reload、多处调用点）只会得到"每个 manager 一个回调"。
+        照抄 ws_gateway._attach_listeners 的语义——漏摘会让回调继续持有已卸载条目的
+        manager（死对象），漏挂则第二台网关的状态变化永远不上行。
+        """
+        incoming = list(managers or [])
+        for gone in [m for m in self._managers if m not in incoming]:
+            try:
+                gone.remove_status_listener(self._on_device_status)
+            except Exception:  # noqa: BLE001
+                pass
+        self._managers = incoming
+        self.mark_state_dirty()
+        for m in self._managers:
+            try:
+                m.add_status_listener(self._on_device_status)
+            except Exception as e:  # noqa: BLE001
+                self._logger.warning("hub 状态监听注册失败：%s", type(e).__name__)
+
     # ── 生命周期 ──────────────────────────────────────────────────
     async def async_start(self) -> None:
         """在运行中的事件循环里拉起（HA setup 路径；测试用 asyncio.run 驱动）。"""
@@ -196,18 +228,16 @@ class HubClient:
         self._stopping = False
         self._send_lock = asyncio.Lock()
         self._load_identity()
-        try:
-            self.device_manager.add_status_listener(self._on_device_status)
-        except Exception as e:  # noqa: BLE001
-            self._logger.warning("hub 状态监听注册失败：%s", type(e).__name__)
+        self.attach_managers(self._managers)
         self._task = asyncio.ensure_future(self._run_forever())
 
     async def async_stop(self) -> None:
         self._stopping = True
-        try:
-            self.device_manager.remove_status_listener(self._on_device_status)
-        except Exception:  # noqa: BLE001
-            pass
+        for m in self._managers:
+            try:
+                m.remove_status_listener(self._on_device_status)
+            except Exception:  # noqa: BLE001
+                pass
         task, self._task = self._task, None
         if task and not task.done():
             task.cancel()
@@ -277,11 +307,9 @@ class HubClient:
             self._load_identity()
         if self.instance_id and self._secret:
             return
-        sn = ""
-        try:
-            sn = getattr(self.device_manager, "gateway_sn", "") or ""
-        except Exception:  # noqa: BLE001
-            sn = ""
+        # 注册载荷的 sn 只是 hub 侧展示字段（协议不变）：取首个网关，
+        # 完整网关列表靠状态上行的 gwSn 体现——不让 hub 变成网关拓扑的权威。
+        sn = self._first_gateway_sn()
         data = await self._http("/agent/register", {
             "installKey": self.install_key,
             "sn": sn,
@@ -456,39 +484,53 @@ class HubClient:
             self._state_dirty.set()
 
     # ── 状态上行 ──────────────────────────────────────────────────
-    def _on_device_status(self, gateway_sn: str, device_sn: str) -> None:  # noqa: ARG002
-        """device_manager 状态监听（同步回调）→ 只标脏 + 唤醒上行协程。"""
+    def mark_state_dirty(self) -> None:
+        """标脏并唤醒上行协程（任一网关的状态变化都要重推**全量**）。"""
         if self._stopping:
             return
         if self._state_dirty is not None:
             self._state_dirty.set()
 
-    def collect_state_items(self) -> List[Dict[str, Any]]:
-        """按 LAN 同源视图构造状态条目（跟小程序 LAN 通道看到的字段一字不差）。"""
-        items: List[Dict[str, Any]] = []
-        manager = self.device_manager
-        try:
-            devices = getattr(manager, "devices", {}) or {}
-            gateway_sn = getattr(manager, "gateway_sn", "") or ""
+    def _on_device_status(self, gateway_sn: str, device_sn: str) -> None:  # noqa: ARG002
+        """device_manager 状态监听（同步回调）→ 只标脏 + 唤醒上行协程。"""
+        self.mark_state_dirty()
+
+    def _resolve_builder(self):
+        if self.view_builder is not None:
+            return self.view_builder
+        try:  # 懒 import：模块本体不依赖 HA，注入缺省时才碰 ws_gateway
+            from .ws_gateway import device_ws_view
+            return device_ws_view
         except Exception:  # noqa: BLE001
-            return items
-        builder = self.view_builder
+            return None
+
+    def collect_state_items(self) -> List[Dict[str, Any]]:
+        """按 LAN 同源视图构造状态条目——**遍历全部网关条目**。
+
+        小程序云模式按 `gwSn` 分桶渲染网关列表，所以每台网关的设备都必须带自己的
+        gwSn；只推第一条＝用户报障的"只添加了一个网关给小程序"。
+        """
+        items: List[Dict[str, Any]] = []
+        builder = self._resolve_builder()
         if builder is None:
-            try:  # 懒 import：模块本体不依赖 HA，注入缺省时才碰 ws_gateway
-                from .ws_gateway import device_ws_view as builder  # type: ignore
-            except Exception:  # noqa: BLE001
-                return items
-        for dev_sn, dev in list(devices.items()):
+            return items
+        for manager in self._managers:
             try:
-                view = builder(dev_sn, gateway_sn, dev or {})
-            except Exception:  # noqa: BLE001
+                devices = getattr(manager, "devices", {}) or {}
+                gateway_sn = getattr(manager, "gateway_sn", "") or ""
+            except Exception:  # noqa: BLE001 - 单条目异常不拖垮整批上行
                 continue
-            if isinstance(view, dict) and view.get("sn"):
-                # 云通道没有 LAN 那路 device_update 实时推送，锁定模式只能靠
-                # 状态上行带过去——device_ws_view 是 device_list 项视图（不含它），
-                # 这里补上与 LAN `_device_update_payload` 同源的字段。
-                view["windLockMode"] = _attr_int(dev, "wind_lock_mode")
-                items.append(view)
+            for dev_sn, dev in list(devices.items()):
+                try:
+                    view = builder(dev_sn, gateway_sn, dev or {})
+                except Exception:  # noqa: BLE001
+                    continue
+                if isinstance(view, dict) and view.get("sn"):
+                    # 云通道没有 LAN 那路 device_update 实时推送，锁定模式只能靠
+                    # 状态上行带过去——device_ws_view 是 device_list 项视图（不含它），
+                    # 这里补上与 LAN `_device_update_payload` 同源的字段。
+                    view["windLockMode"] = _attr_int(dev, "wind_lock_mode")
+                    items.append(view)
         return items
 
     async def _flush_loop(self, ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -525,13 +567,33 @@ class HubClient:
         return {"ok": bool(ok), "data": {"published": bool(ok)}}
 
     # ── 视图（供插件页展示）──────────────────────────────────────
+    def gateway_summary(self) -> List[Dict[str, Any]]:
+        """当前聚合到的网关清单（面板要显示"N 个网关 · M 个子设备"）。"""
+        out: List[Dict[str, Any]] = []
+        for m in self._managers:
+            try:
+                sn = getattr(m, "gateway_sn", "") or ""
+                count = len(getattr(m, "devices", {}) or {})
+            except Exception:  # noqa: BLE001 - 视图绝不因取字段抛错
+                continue
+            if sn:
+                out.append({"sn": sn, "deviceCount": count})
+        return out
+
+    def _first_gateway_sn(self) -> str:
+        for m in self._managers:
+            try:
+                sn = getattr(m, "gateway_sn", "") or ""
+            except Exception:  # noqa: BLE001
+                continue
+            if sn:
+                return sn
+        return ""
+
     def status_view(self) -> Dict[str, Any]:
         """给插件页/排障用：**不回显 secret**；绑定码本就是给用户看的，可回显。"""
-        gateway_sn = ""
-        try:
-            gateway_sn = getattr(self.device_manager, "gateway_sn", "") or ""
-        except Exception:  # noqa: BLE001 - 视图绝不因取 SN 抛错
-            gateway_sn = ""
+        gateways = self.gateway_summary()
+        gateway_sn = gateways[0]["sn"] if gateways else ""
         expires_in = self.bind_code_expires_in()
         return {
             "connected": bool(self.connected),
@@ -540,6 +602,7 @@ class HubClient:
             "bindCodeExpiresIn": expires_in,
             "bindCodeExpired": bool(self.bind_code) and expires_in <= 0,
             "gatewaySn": gateway_sn,
+            "gateways": gateways,
             "hub": self.base,
             "lastError": self.last_error,
         }

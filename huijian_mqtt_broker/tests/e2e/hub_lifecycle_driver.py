@@ -61,11 +61,11 @@ def check(name, cond, detail=""):
 
 
 class FakeDeviceManager:
-    """最小 device_manager 替身：HubClient 只用 gateway_sn / add_status_listener。"""
+    """最小 device_manager 替身：HubClient 只用 gateway_sn / devices / 监听注册。"""
 
-    def __init__(self):
-        self.gateway_sn = "GW-E2E-001"
-        self.devices = {}
+    def __init__(self, gateway_sn="GW-E2E-001", devices=None):
+        self.gateway_sn = gateway_sn
+        self.devices = devices if devices is not None else {}
 
     def add_status_listener(self, _cb):
         return None
@@ -167,7 +167,8 @@ async def main():
 
     if not await restart_hub(label="A"):
         return
-    client = hc.HubClient(FakeDeviceManager(), config_dir=str(CFG), base=BASE, install_key=INSTALL_KEY)
+    client = hc.HubClient([FakeDeviceManager()], config_dir=str(CFG), base=BASE,
+                         install_key=INSTALL_KEY)
     await client.async_start()
     try:
         # ── A 注册即绑 ────────────────────────────────────────────
@@ -212,6 +213,32 @@ async def main():
             check("C 自愈后 /cmd 真下发到本机（回执来自长连那侧）",
                   body.get("err") in (None, "control_unavailable") and st == 200,
                   "%s %s" % (st, json.dumps(body, ensure_ascii=False)))
+            # ── D 多网关：一个实例必须扛下全部网关（用户报障的那条）────────
+            # 只证"端到端带得过去"：命令按条目路由是集成侧的事，由
+            # tests/test_v1743_hub_singleton.py 的归属钉负责。
+            d1 = FakeDeviceManager("GW-D1", {"D1A": {"state": 1}})
+            d2 = FakeDeviceManager("GW-D2", {"D2B": {"state": 2}})
+            client.view_builder = lambda sn, gw, dev: {
+                "sn": sn, "gwSn": gw, "state": (dev or {}).get("state", 0)}
+            client.attach_managers([d1, d2])
+            client.mark_state_dirty()
+            await asyncio.sleep(1.2)
+            st, body = await http_json("POST", "/state", {
+                "instanceId": client.instance_id, "openid": OPENID})
+            states = (body or {}).get("states") or {}
+            got = {k: v.get("gwSn") for k, v in states.items()}
+            check("D 一次长连把两台网关的子设备都上行到 hub",
+                  body.get("ok") and set(got) == {"D1A", "D2B"},
+                  "%s %s" % (st, json.dumps(body, ensure_ascii=False)[:200]))
+            check("D 每条设备带自己的 gwSn（小程序按 gwSn 分桶，串了就合成一台）",
+                  got.get("D1A") == "GW-D1" and got.get("D2B") == "GW-D2", str(got))
+            st, body = await http_json("POST", "/cmd", {
+                "instanceId": client.instance_id, "openid": OPENID, "sn": "D2B",
+                "action": "control", "params": {"attribute": "position", "value": "100"}})
+            check("D 第二台网关的设备也能被远程控制（不再只有第一条）",
+                  body.get("err") not in ("offline", "forbidden"),
+                  "%s %s" % (st, json.dumps(body, ensure_ascii=False)[:160]))
+
     finally:
         await client.async_stop()
         _kill_hub()

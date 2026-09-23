@@ -2,7 +2,7 @@
 import logging
 import asyncio
 from datetime import timedelta
-from typing import Any, Dict, Final
+from typing import Any, Dict, Final, List
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -127,8 +127,126 @@ def _make_hub_control(hass: HomeAssistant):
             if dev_sn in getattr(manager, "devices", {}):
                 return bool(await handler.send_ws_raw_004(dev_sn, attribute, value))
         return False
-
     return _control
+
+
+# 慧尖云 hub 出站长连：**一个 HA 安装一个实例**（不是每网关条目一个）。
+# 归属放在 DOMAIN 级，是因为身份文件本来就在全局 config_dir——每条目各建实例会
+# 互相覆盖同一份身份，HA 重启后全部用同一个 instanceId 去连，hub 的 onAgent 把
+# 前一条顶掉 ⇒ N 台网关抢一条长连，且小程序只看到其中一台（用户报障原形）。
+from .const import HUB_DATA_KEY, HUB_STOP_LISTENER_KEY  # noqa: E402
+
+
+def _hub_managers(hass: HomeAssistant) -> List[Any]:
+    """当前已完成设置的全部条目的 device_manager（聚合口径同 WS 网关）。"""
+    out: List[Any] = []
+    for data in list(hass.data.get(DOMAIN, {}).values()):
+        if not isinstance(data, dict) or not data.get("_setup_complete"):
+            continue
+        manager = data.get("device_manager")
+        if manager is not None:
+            out.append(manager)
+    return out
+
+
+def _hub_option(hass: HomeAssistant, key: str) -> str:
+    """取"任一条目里非空的那个覆盖值"（只有一个实例，不存在改了不生效）。"""
+    try:
+        entries = list(hass.config_entries.async_entries(DOMAIN))
+    except Exception:  # noqa: BLE001 - 无 config_entries（测试桩）时退回内置默认
+        entries = []
+    for ent in entries:
+        try:
+            val = (ent.options or {}).get(key)
+        except Exception:  # noqa: BLE001
+            val = None
+        if val:
+            return str(val)
+    return ""
+
+
+async def async_ensure_hub_client(hass: HomeAssistant) -> None:
+    """按当前条目集合聚合 hub 长连：拉起 / 换挂 manager / 无网关则停。
+
+    幂等：在任一 config entry setup/unload 尾部与 HA STOP 时调用（与
+    async_ensure_ws_gateway 同一批调用点）。失败只记日志——远程控制通道
+    不得影响本地功能（对齐 WS 网关既定语义）。
+    """
+    if DOMAIN not in hass.data:
+        return
+    domain_data = hass.data[DOMAIN]
+    managers = _hub_managers(hass)
+    current = domain_data.get(HUB_DATA_KEY)
+
+    if not managers:
+        await async_stop_hub_client(hass)
+        return
+
+    if current is None:
+        client = HubClient(
+            managers,
+            config_dir=hass.config.config_dir,
+            base=_hub_option(hass, "hub_base") or HUB_DEFAULT_BASE,
+            install_key=_hub_option(hass, "hub_install_key") or HUB_DEFAULT_INSTALL_KEY,
+            control_fn=_make_hub_control(hass),
+        )
+        domain_data[HUB_DATA_KEY] = client
+        try:
+            await client.async_start()
+        except Exception as e:  # noqa: BLE001 - 起不来就别留半个注册
+            _LOGGER.error("慧尖云 hub 长连启动失败（不影响本地功能）: %s", e, exc_info=True)
+            if domain_data.get(HUB_DATA_KEY) is client:
+                domain_data.pop(HUB_DATA_KEY, None)
+            try:
+                await client.async_stop()
+            except Exception:  # noqa: BLE001
+                pass
+            return
+        _register_hub_stop_listener(hass, domain_data)
+        return
+
+    current.attach_managers(managers)
+
+
+def _register_hub_stop_listener(hass: HomeAssistant, domain_data: Dict[str, Any]) -> None:
+    """STOP 监听只注册一次（照抄 v1.7.33 对 ws_gateway"句柄不存不摘"那条教训）。"""
+    if domain_data.get(HUB_STOP_LISTENER_KEY):
+        return
+    from homeassistant.const import EVENT_HOMEASSISTANT_STOP
+
+    async def _on_ha_stop(_event) -> None:
+        await async_stop_hub_client(hass)
+
+    try:
+        domain_data[HUB_STOP_LISTENER_KEY] = hass.bus.async_listen_once(
+            EVENT_HOMEASSISTANT_STOP, _on_ha_stop)
+    except Exception:  # noqa: BLE001 - 无 bus 环境（测试桩）不应阻断通道
+        domain_data[HUB_STOP_LISTENER_KEY] = None
+
+
+async def async_stop_hub_client(hass: HomeAssistant) -> None:
+    """停掉安装级长连并摘键；幂等，二次调用不炸。"""
+    domain_data = hass.data.get(DOMAIN)
+    if not isinstance(domain_data, dict):
+        return
+    current = domain_data.get(HUB_DATA_KEY)
+    unsub = domain_data.pop(HUB_STOP_LISTENER_KEY, None)
+    if callable(unsub):
+        try:
+            unsub()
+        except Exception:  # noqa: BLE001
+            pass
+    if current is None:
+        return
+    try:
+        await current.async_stop()
+    except Exception as e:  # noqa: BLE001
+        _LOGGER.warning("停止 hub 客户端失败: %s", e)
+    finally:
+        # 判等再 pop：async_stop 有真实让出点，期间并发 ensure 可能已登记新实例
+        if domain_data.get(HUB_DATA_KEY) is current:
+            domain_data.pop(HUB_DATA_KEY, None)
+
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -393,6 +511,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         except Exception as e:
             _LOGGER.error("小程序 WS 网关检查失败（不影响其余功能）: %s", e, exc_info=True)
 
+        try:
+            await async_ensure_hub_client(hass)
+        except Exception as e:  # noqa: BLE001 - 云通道故障不得拖累本地与 WS
+            _LOGGER.error("慧尖云 hub 通道状态同步失败: %s", e)
+
+        try:
+            await async_ensure_hub_client(hass)
+        except Exception as e:  # noqa: BLE001 - 云通道故障不得拖累本地与 WS
+            _LOGGER.error("慧尖云 hub 通道状态同步失败: %s", e)
+
         return True
 
     # ---- 有网关 SN：完整设置 ----
@@ -568,20 +696,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # 重连、不影响本地功能（对齐 WS 网关"启动失败只记 error"的既定语义）。
         # 端点/密钥可用 entry.options 的 hub_base / hub_install_key 覆盖（P1 再进
         # config_flow 表单）。
-        hub = HubClient(
-            device_manager,
-            config_dir=hass.config.config_dir,
-            base=entry.options.get("hub_base") or HUB_DEFAULT_BASE,
-            install_key=entry.options.get("hub_install_key") or HUB_DEFAULT_INSTALL_KEY,
-            control_fn=_make_hub_control(hass),
-        )
-        hass.data[DOMAIN][entry.entry_id]["hub_client"] = hub
-        _hub_start = hass.async_create_task(
-            hub.async_start(),
-            name=f"{DOMAIN}_hub_start_{entry.entry_id}",
-        )
-        hass.data[DOMAIN][entry.entry_id].setdefault("_bg_tasks", []).append(_hub_start)
-
         # ============ 自动设备迁移（替换网关流程）暂禁用 ============
         # 迁移功能先不使用：即使 entry.data 中带 migration_info（替换网关流程
         # 创建的 entry），也不再自动触发设备迁移。重新启用时取消下面注释。
@@ -691,15 +805,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         except Exception as e:
             _LOGGER.debug("取消心跳监听器时出错: %s", e)
 
-    # 1.4 慧尖云 hub 客户端先行停（摘状态监听 + 关长连，避免卸载后仍收命令）
-    _hub = data.get("hub_client")
-    if _hub is not None:
-        try:
-            await _hub.async_stop()
-        except Exception as e:  # noqa: BLE001
-            _LOGGER.warning("停止 hub 客户端失败: %s", e)
-        data.pop("hub_client", None)
-
     # 1.5 取消后台任务（_bg_tasks），避免任务在卸载后继续执行
     for bg_task in data.get("_bg_tasks", []):
         if bg_task and not bg_task.done():
@@ -788,6 +893,11 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await async_ensure_ws_gateway(hass)
     except Exception as e:
         _LOGGER.warning("小程序 WS 网关状态同步失败: %s", e)
+
+    try:
+        await async_ensure_hub_client(hass)
+    except Exception as e:  # noqa: BLE001 - 云通道故障不得拖累本地与 WS
+        _LOGGER.warning("慧尖云 hub 通道状态同步失败: %s", e)
 
     # v1.7.34：服务注销**不在此处**（v1.7.33 曾误放这里）——reload 也走
     # unload，而 reload 时条目仍留在 config_entries 里（"剩余条目为空"恒真），
@@ -953,6 +1063,11 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
         await async_ensure_ws_gateway(hass)
     except Exception as e:
         _LOGGER.warning("小程序 WS 网关状态同步失败（删除条目后）: %s", e)
+
+    try:
+        await async_ensure_hub_client(hass)
+    except Exception as e:  # noqa: BLE001 - 云通道故障不得拖累本地与 WS
+        _LOGGER.warning("慧尖云 hub 通道状态同步失败（删除条目后）: %s", e)
 
 
 async def _background_initialization(hass, entry_id, mqtt_handler):

@@ -258,3 +258,9 @@ def get_device_display_name(gateway_sn: str, device_sn: str, device_number: int 
     if device_number is not None:
         return f"开窗器 {short_gw}-{short_dev} (#{device_number:02d})"
     return f"开窗器 {short_gw}-{short_dev}"
+
+# ── 慧尖云 hub：安装级单例在 hass.data[DOMAIN] 里的键 ─────────────────
+# 放这里而不是 __init__.py，是因为 api.py 也要读同一个键；两处各写一份字面量
+# 早晚漂移成"视图永远取不到单例"。
+HUB_DATA_KEY = "_hub_client"
+HUB_STOP_LISTENER_KEY = "_hub_stop_listener"

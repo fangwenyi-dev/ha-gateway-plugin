@@ -165,10 +165,15 @@ class FakeSession:
 
 
 def make_client(tmp_path, **kw):
-    manager = kw.pop("manager", None) or FakeManager()
+    manager = kw.pop("manager", None)
+    managers = kw.pop("managers", None)
+    if managers is None:
+        managers = [manager or FakeManager()]
+    elif manager is not None:
+        managers = [manager] + list(managers)
     session = kw.pop("session", None) or FakeSession()
-    client = hc.HubClient(manager, config_dir=str(tmp_path), session=session, **kw)
-    return client, manager, session
+    client = hc.HubClient(managers, config_dir=str(tmp_path), session=session, **kw)
+    return client, (managers[0] if managers else None), session
 
 
 # ── 行为 ──────────────────────────────────────────────────────────
@@ -605,3 +610,57 @@ def test_fuse_counter_resets_after_a_successful_session(tmp_path):
     except Exception:  # noqa: BLE001
         pass
     assert len(s.posted) == before + 1, "清零后仍不再自愈＝回到 v1.7.41 那个永不恢复的状态"
+
+
+# ── 安装级多网关聚合（v1.7.43）────────────────────────────────────
+# 背景：HubClient 原来是"每网关条目一个实例"，N 台网关就注册 N 个实例、
+# 抢同一份 /config/huijian_hub_identity.json（互相覆盖），HA 重启后全部
+# 用同一个 instanceId 去连 → hub 的 onAgent 把前一条顶掉 → 重连战争，
+# 而小程序只看到其中一个网关。现在改成"一个 HA 安装一个实例"，实例内部
+# 聚合全部条目的 manager。
+def test_state_items_cover_every_gateway_not_just_the_first(tmp_path):
+    m1 = FakeManager(gateway_sn="GW1", devices={"A1B2": {"attributes": {"r_travel": 30}}})
+    m2 = FakeManager(gateway_sn="GW2", devices={"C3D4": {"attributes": {"r_travel": 70}}})
+    client, _, _ = make_client(tmp_path, managers=[m1, m2])
+    items = client.collect_state_items()
+    sns = sorted(i["sn"] for i in items)
+    assert sns == ["A1B2", "C3D4"], "只聚合到一条网关＝小程序永远看不到全部设备: %s" % sns
+    gw = {i["sn"]: i.get("gwSn") for i in items}
+    assert gw == {"A1B2": "GW1", "C3D4": "GW2"}, "gwSn 串了＝小程序按 gwSn 分桶会把两台网关混成一台: %s" % gw
+
+
+def test_status_listener_attached_to_every_manager_and_detached(tmp_path):
+    m1, m2 = FakeManager(gateway_sn="GW1"), FakeManager(gateway_sn="GW2")
+    client, _, _ = make_client(tmp_path, managers=[m1, m2])
+    client.attach_managers([m1, m2])
+    assert client._on_device_status in m1.listeners and client._on_device_status in m2.listeners, \
+        "监听器没挂满每个 manager＝第二台网关的状态变化不会触发上行"
+    client.attach_managers([m1])          # 条目被卸载后再聚合
+    assert client._on_device_status not in m2.listeners, "撤掉的 manager 没摘监听＝回调持死对象"
+    client.attach_managers([m1])
+    assert m1.listeners.count(client._on_device_status) == 1, "重复 ensure 不得把同一回调挂两次"
+
+
+def test_status_view_lists_all_gateways_and_keeps_gateway_sn_compat(tmp_path):
+    m1 = FakeManager(gateway_sn="GW1", devices={"A1": {}, "A2": {}})
+    m2 = FakeManager(gateway_sn="GW2", devices={"B1": {}})
+    client, _, _ = make_client(tmp_path, managers=[m1, m2])
+    v = client.status_view()
+    assert [g["sn"] for g in v["gateways"]] == ["GW1", "GW2"]
+    assert [g["deviceCount"] for g in v["gateways"]] == [2, 1]
+    assert v["gatewaySn"] == "GW1", "gatewaySn 是旧消费方的兼容字段，必须仍在"
+
+
+def test_register_payload_reports_a_gateway_sn(tmp_path):
+    m1 = FakeManager(gateway_sn="GW1")
+    client, _, session = make_client(tmp_path, managers=[m1, FakeManager(gateway_sn="GW2")])
+    asyncio.run(client._ensure_registered())
+    sent = [p for (_u, p) in session.posted if p and "installKey" in p]
+    assert sent and sent[0]["sn"] == "GW1", "注册载荷 sn 缺失＝hub 侧实例无从辨认"
+
+
+def test_no_manager_means_empty_items_and_no_crash(tmp_path):
+    """所有条目都在卸载中：宁可回空列表，也不能抛（上行协程抛错会打断长连）。"""
+    client, _, _ = make_client(tmp_path, managers=[])
+    assert client.collect_state_items() == []
+    assert client.status_view()["gateways"] == []
