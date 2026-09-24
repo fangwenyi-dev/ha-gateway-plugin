@@ -3,6 +3,38 @@
 所有版本变更记录在此文件中。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.7.48] - 2026-09-24
+
+两处**测试/CI 卫生**修复，生产运行路径零改动（新环境变量默认不设＝行为与既往逐字节相同）。
+
+### 一、真栈 e2e 不再往生产 hub 注册孤儿实例
+
+`run_e2e.sh`(docker) 与 `run_local.sh`(WSL) 跑的是**真实** `async_setup_entry`，会在
+`async_ensure_hub_client` 里拿内置生产默认 `HUB_DEFAULT_BASE` 去 `/agent/register`——两个 harness
+都没设 `hub_base`，于是**每次 CI 都在生产 hub 注册表留一条 `sn=E2EGW0000001` 的孤儿实例**
+（生产 `/healthz` 一度 `instances=4` 而 `agentsOnline=1`，多出的两条时间戳精确对上 v1.7.46/v1.7.47
+两次 CI）。`ha_e2e_driver.py` 对 hub **零断言** ⇒ 纯静默污染，从不让 e2e 变红。
+
+- 修：`hub_client.py` 加纯函数 `resolve_hub_base()`（优先级 `entry.options > HUIJIAN_HUB_BASE 环境变量
+  > 内置默认`），`__init__.py` 接线并在覆盖生效时打一行 INFO（覆盖永不静默）；两 harness 都设
+  `HUIJIAN_HUB_BASE=http://127.0.0.1:1` 黑洞 → 注册秒失败（拒连→WARNING→退避），全程不触网。
+- 新增 `test_hub_base_env.py` **10** 条：纯函数三档优先级 + 走真 `async_ensure_hub_client` 的接线行为
+  （env 真能掰成黑洞 / 默认路径仍是生产 / option 压过 env）+ 两 harness 黑洞值双侧钉（漏设或指向生产即红）。
+  **5 条变异全咬**（接线回退 / env 档删除 / harness 漏设 / harness 指向生产 / 优先级翻转，各精准红）。
+
+### 二、修一个潜伏的测试顺序污染
+
+`test_v1744` 的 `_quiet` autouse fixture 把整个集成 logger 永久 `setLevel(CRITICAL)` **却不 teardown 还原**
+⇒ 任何排在其后、靠 `caplog` 抓 ERROR 的用例（`test_hub_client` 重注册熔断钉）被静默过滤。全量按字母序时
+v1744 排在 hub_client **之后**侥幸不炸；任何"先 v1744 再 hub_client"的子集/CI 分片**必红**。已 `git stash`
+到纯净树复跑同一子集确认是既有 bug、非本批引入；修＝fixture 里 save/restore level（子集 1 red → 64 passed）。
+
+### 门禁
+
+pytest **1004**（994+10）、ruff(CI 同款 F,E9,B --ignore B008,B905)、compileall、node --check×3、bash -n×9、
+JSON×63/YAML 解析、版本四源 + 5 处 cache-buster=1.7.48 全绿；跨仓契约 **28/28**、真栈 hub 生命周期 e2e
+**34/34**（含 E 臂多人绑定 16 条）。协议未变，hub/小程序本批零改动。
+
 ## [1.7.47] - 2026-09-24
 
 两件事：**家庭多人绑定**（三端同批：hub v0.2.5 / 加载项 v1.7.47 / 小程序 v1.4.28）与

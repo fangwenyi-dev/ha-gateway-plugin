@@ -62,8 +62,15 @@ EOF
 chmod -R 777 "$CFG"
 # PYTHONUNBUFFERED：python stdout 非 TTY 时块缓冲，HA 的日志会卡在缓冲区里
 # 不进 docker logs（第二轮 CI 实证：driver 失败时刻之前的日志整段丢失）。
+# HUIJIAN_HUB_BASE=黑洞：本 e2e 跑的是真实 async_setup_entry，会在
+# async_ensure_hub_client 里拿内置生产默认去 /agent/register——不设此变量则
+# **每次 CI 都往生产 hub 注册表塞一条 sn=E2EGW0000001 的孤儿实例**（v1.7.46/47
+# 两次 CI 已实锤各留一条）。指到 127.0.0.1:1 让注册秒失败（拒连→WARNING→退避），
+# 全程不触网。driver 不对 hub 做任何断言，黑洞不影响 e2e 判据。
 docker run -d --name ha-e2e --network host \
-    -e "TZ=Etc/UTC" -e "PYTHONUNBUFFERED=1" -v "$CFG:/config" \
+    -e "TZ=Etc/UTC" -e "PYTHONUNBUFFERED=1" \
+    -e "HUIJIAN_HUB_BASE=http://127.0.0.1:1" \
+    -v "$CFG:/config" \
     ghcr.io/home-assistant/home-assistant:stable >/dev/null
 
 echo "==== 3. 驱动器（等待/认证/entry/002/断言/soak 全在其内） ===="

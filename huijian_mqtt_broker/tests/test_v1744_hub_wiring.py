@@ -263,6 +263,12 @@ def test_guard_itself_is_not_dead_code():
 
 @pytest.fixture(autouse=True)
 def _quiet():
-    logging.getLogger(
-        "custom_components.window_controller_gateway").setLevel(logging.CRITICAL)
+    # 必须还原原级别：本 fixture 曾把整个集成 logger 永久设成 CRITICAL 却不 teardown，
+    # 于是任何**在本文件之后**跑、又靠 caplog 抓 ERROR/WARNING 的用例（如
+    # test_hub_client 的重注册熔断钉）会被静默过滤——全量按字母序时 test_v1744 排在
+    # test_hub_client 之后侥幸不炸，但任何"先跑 v1744 再跑 hub_client"的子集/分片必红。
+    log = logging.getLogger("custom_components.window_controller_gateway")
+    prev = log.level
+    log.setLevel(logging.CRITICAL)
     yield
+    log.setLevel(prev)

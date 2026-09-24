@@ -27,7 +27,8 @@ from .const import (
 from .persist import load_persistent_data, save_persistent_data
 from .services import register_services
 from .api import async_setup_api
-from .hub_client import HUB_DEFAULT_BASE, HUB_DEFAULT_INSTALL_KEY, HubClient
+from .hub_client import (HUB_DEFAULT_BASE, HUB_DEFAULT_INSTALL_KEY, HubClient,
+                         resolve_hub_base)
 from .utils import is_mqtt_loaded, iter_devices
 
 _LOGGER = logging.getLogger(__name__)
@@ -183,10 +184,16 @@ async def async_ensure_hub_client(hass: HomeAssistant) -> None:
         return
 
     if current is None:
+        base = resolve_hub_base(_hub_option(hass, "hub_base"))
+        if base != HUB_DEFAULT_BASE:
+            # 非内置默认＝有覆盖（entry.options 或 HUIJIAN_HUB_BASE 环境变量，后者是
+            # 真栈 e2e 的黑洞杠杆）——显式记一行，覆盖永不静默（否则误设环境变量把生产
+            # HA 指到别处时无从察觉）。
+            _LOGGER.info("慧尖云 hub 端点被覆盖为 %s（非内置默认）", base)
         client = HubClient(
             managers,
             config_dir=hass.config.config_dir,
-            base=_hub_option(hass, "hub_base") or HUB_DEFAULT_BASE,
+            base=base,
             install_key=_hub_option(hass, "hub_install_key") or HUB_DEFAULT_INSTALL_KEY,
             control_fn=_make_hub_control(hass),
         )

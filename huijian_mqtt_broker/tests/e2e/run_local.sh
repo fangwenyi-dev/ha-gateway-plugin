@@ -11,6 +11,10 @@ MOSQ_DIR=${MOSQ_DIR:-$HOME/local/mosq}
 CFG=$HOME/local/ha-e2e-config
 REPO=$(cd "$(dirname "$0")/../../.." && pwd)   # 仓库根
 
+# 黑洞 hub base（与 CI 侧 run_e2e.sh 同名同值——单一事实源）：本地真栈同样跑真实
+# async_setup_entry，不隔离就会拿内置生产默认往生产 hub 注册一条 E2EGW 孤儿实例。
+export HUIJIAN_HUB_BASE=http://127.0.0.1:1
+
 pkill -f "python[0-9.]* -m home[a]ssistant" 2>/dev/null
 # 关键：HA 退出前会把 .storage 刷盘——必须等进程真正消失后再 rm config，
 # 否则 shutdown 回写把 onboarding done 状态复活（本地实锤 403 竞态）

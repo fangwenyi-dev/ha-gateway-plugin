@@ -37,6 +37,29 @@ _LOGGER = logging.getLogger(__name__)
 HUB_DEFAULT_BASE = "https://huijian-hub-318191-7-1412991472.sh.run.tcloudbase.com"
 HUB_DEFAULT_INSTALL_KEY = "c019cee1ef3c68ceea68cfdbcc121b6f"
 
+# hub base 端点解析的环境变量档（专供真栈 e2e/CI 把注册指向黑洞，见 resolve_hub_base）。
+HUB_BASE_ENV = "HUIJIAN_HUB_BASE"
+
+
+def resolve_hub_base(option_value: str = "", env: Optional[Dict[str, str]] = None) -> str:
+    """按优先级解析 hub base：entry.options > HUIJIAN_HUB_BASE 环境变量 > 内置默认。
+
+    环境变量这一档存在的唯一理由：真栈 e2e（docker run_e2e.sh / WSL run_local.sh）跑的
+    是**真实** async_setup_entry，会在 async_ensure_hub_client 里拿内置生产默认去
+    /agent/register——每次 CI 都在生产 hub 注册表里留一条 sn=E2EGW0000001 的孤儿实例
+    （v1.7.46/v1.7.47 两次 CI 已实锤各留一条）。e2e 把本变量设成 http://127.0.0.1:1
+    即让注册秒失败（连接被拒→WARNING→退避），绝不触网到生产。
+
+    默认（不设环境变量）＝逐层回退到内置生产地址，与既往行为逐字节相同（defaults-off）。
+    env 参数仅供测试注入；用户显式配置的 option 永远压过环境变量（环境是基础设施杠杆，
+    不该静默盖掉用户的主动选择）。
+    """
+    option_value = (option_value or "").strip()
+    if option_value:
+        return option_value
+    mapping = os.environ if env is None else env
+    return (mapping.get(HUB_BASE_ENV) or "").strip() or HUB_DEFAULT_BASE
+
 HUB_RECONNECT_BASE_S = 5.0
 HUB_RECONNECT_MAX_S = 300.0
 HUB_RECONNECT_FLOOR_S = 1.0         # "连上过又被干净关掉"的最小间隔（防零间隔风暴，见 _run_forever）
