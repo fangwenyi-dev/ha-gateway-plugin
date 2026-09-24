@@ -50,7 +50,13 @@ def _element(html, marker):
 
 
 def _fn(name):
-    i = JS.index("function %s(" % name)
+    # 断言"只有一处定义"：本文件那条"除统一出口外不得直调 renderBindQr"的反钉曾被
+    # 重复定义的旧版 loadRemoteControl 绕过（index 只取第一处＝验到死码），详见
+    # test_v1746_panel_unique_funcs.py 的 docstring。
+    hits = [m.start() for m in re.finditer(r"function\s+" + re.escape(name) + r"\s*\(", JS)]
+    assert len(hits) == 1, \
+        "函数 %s 出现 %d 次（应为 1；重名＝后者覆盖前者，钉会验到死码）" % (name, len(hits))
+    i = hits[0]
     j = JS.index("{", i)
     depth = 0
     for k in range(j, len(JS)):

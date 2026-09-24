@@ -49,8 +49,17 @@ def _card():
 
 
 def _func(name):
-    """按花括号计数抽整个函数体（定宽窗口会被新注释顶出）。"""
-    i = JS.index("function %s(" % name)
+    """按花括号计数抽整个函数体（定宽窗口会被新注释顶出）。
+
+    **必须断言只有一处定义**：v1.7.41～v1.7.45 期间 `loadRemoteControl` 在 huijian.js 里
+    被定义了两次（新版走 applyHubStatus、旧版 v1.7.37 残留），JS 函数声明后者覆盖前者，
+    而 `index()` 只取第一处 ⇒ 钉验的是那个**永不执行**的版本，940 条测试全绿、线上跑的
+    却是另一份（过期文案与多网关文案都不显示）。见 test_v1746_panel_unique_funcs.py。
+    """
+    hits = [m.start() for m in re.finditer(r"function\s+" + re.escape(name) + r"\s*\(", JS)]
+    assert len(hits) == 1, \
+        "函数 %s 出现 %d 次（应为 1；重名＝后者覆盖前者，钉会验到死码）" % (name, len(hits))
+    i = hits[0]
     j = JS.index("{", i)
     depth = 0
     for k in range(j, len(JS)):

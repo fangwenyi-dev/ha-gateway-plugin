@@ -3,6 +3,48 @@
 所有版本变更记录在此文件中。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.7.46] - 2026-09-24
+
+三端契约对比审查（加载项 ⇄ 小程序 ⇄ 云端 hub）抓出的确证缺陷，本批只修
+"不改协议、不改行为语义"的部分；协议级的**家庭多人绑定**另批（设计文档与实施计划
+见 `docs/superpowers/`）。
+
+**① 面板 `loadRemoteControl` 被定义了两次 ⇒ v1.7.41 的渲染改进一直是死码。**
+`www/js/huijian.js` 里同名函数出现在两处（新版走统一出口 `applyHubStatus`、旧版是
+v1.7.37 残留），JS 函数声明**后者覆盖前者** ⇒ 页面加载与 30s 无感刷新跑的都是旧版：
+绑定码过期文案（`hubCodeExp`）永不显示、「纳管网关 N 台 · M 个子设备」退回只显示单个
+SN，新版只在"点二维码"那条 POST 路径可达。940 条测试全绿的原因更值得记：所有结构钉用
+`index("function loadRemoteControl(")` **只取第一处**，钉到的是那个永不执行的版本，
+连"除统一出口外不得直调 renderBindQr"的反钉也一起失效。修：删旧版；两个抽取器改成
+"出现多次即报错"；新增**重名钉**（扫全部函数名，每个恰好一次）+ 元钉（扫到 0 个即红）。
+
+**② 面板显示云通道故障原因。** `hub_client.status_view()` 早就回了 `lastError`、
+`api.py` 也透传了，但 `www/` 全目录 grep `lastError` **0 命中** ⇒ 用户只能看到"未连接"，
+排障得去翻 HA 日志。新增纯函数 `hubErrorText()`：只映射 4 个已知码（身份被拒 / 反复被拒 /
+换码失败 / 换码被拒），**未知码一律不显示**——面板是给终端用户看的，把 `RuntimeError`
+这类异常名摆上去只是噪声。
+
+**③ 小程序云模式控制失败不再甩英文错误码。** `gw-router` 把 hub 回的 `res.err` 原文塞进
+`control_ack.msg`，而页面直接 toast 它 ⇒ 用户在云模式下看到裸 `offline`/`timeout`/
+`forbidden`。改为 12 个码的中文映射；未收录的码回「控制失败（原码）」——既不吞排障线索，
+也不甩裸英文。改前已核过全仓没有任何页面按 `msg` 字面值分支（不会破逻辑）。
+
+**④ 删死码 `GwRouter.prototype.reconnect`**：全仓零调用点（页面的同名方法走 `connect()`），
+且它调 `this._lan.reconnect`——`WsGatewayClient` 从来没这个方法 ⇒ 恒 false 的陷阱。
+配套加**方法面钉**：`gw-router` 里所有 `this._lan.X` 必须真存在于 LAN 客户端原型上。
+另修一条**与实现相反**的注释：小程序侧写"set_token 后固件会重启 WS 网关、需用新 token
+重连"，而加载项实现是内存即时生效 + 异步持久化 + **当前连接保持**。
+
+**⑤ `.gitignore` 加密钥安全网**（`*.csv` / `*SecretKey*` / `*.key` / `*.pem`）：本仓推
+GitHub + Gitee 两个公开远端，本地下载的密钥文件不该有任何被 `git add -A` 带进去的机会。
+
+门禁：pytest **949**（940 + 9：7 条结构钉 + 2 条**假 DOM 里 node 真跑** `applyHubStatus`
+五场景的行为钉）、ruff（CI 同款 `F,E9,B --ignore B008,B905`）、compileall、`node --check`、
+`bash -n` 全绿；跨仓真栈 e2e **18/18 rc=0**；小程序 `npm test` **247**（240 + 6，
+`all-tests-wired` 22→23 证明新文件已挂链）。变异核验 **8/8** 各精准红自己那条（影子树
+逐条拆、跑完即删、活树全程未动）；其中一条反过来咬出我自己的弱钉——删掉一个错误码的
+中文文案居然还绿，因为兜底文案也是中文、也不等于原码 ⇒ 已补"不许落兜底"断言。
+
 ## [1.7.45] - 2026-09-23
 
 真机报障：`custom_components.window_controller_gateway.hub_client` 打

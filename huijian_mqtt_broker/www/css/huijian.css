@@ -809,3 +809,8 @@ details[open] > summary.card-title::before {
     font-size: 11.5px; color: var(--text-secondary); margin-left: 6px;
 }
 .hub-code-exp.expired { color: #fbbf24; font-weight: 600; }
+
+/* v1.7.46 云通道故障原因：lastError 此前只进 API 与 HA 日志，面板从不显示
+   ⇒ 用户只能看到"未连接"，排障得去翻日志。只映射已知码，未知的一律不显示
+   （面板是给终端用户看的，别把异常类名摆上去）。 */
+.hub-err { font-size: 11.5px; color: #fbbf24; margin: 2px 0 6px; }

@@ -123,6 +123,24 @@
                 gws.map((g) => g.sn).join('、') + '）';
         }
 
+        /** 云通道故障原因文案（纯函数，便于 node 真跑）。
+         *  只映射 hub_client.last_error 的已知取值；未知的一律回 ''（不显示）——
+         *  面板是给终端用户看的，把异常类名（RuntimeError 之类）摆上去只是噪声。*/
+        function hubErrorText(lastError) {
+            switch (lastError) {
+                case 'identity_rejected':
+                    return '云端不认识本机身份，已自动重新注册——需要重新扫码绑定';
+                case 'identity_rejected_loop':
+                    return '云端反复拒绝本机身份，已停止重试（多见于 hub 多副本或注册表未持久化）';
+                case 'bindcode_failed':
+                    return '换绑定码失败（云端暂不可达），页面上的码可能已过期';
+                case 'bindcode_rejected':
+                    return '云端拒绝换绑定码请求，稍后再试或点二维码重试';
+                default:
+                    return '';
+            }
+        }
+
         /** 唯一渲染出口：GET 状态与 POST 换码都走这里，任何一条路径都不会漏渲染。*/
         function applyHubStatus(info, failed) {
             const dot = document.getElementById('hubDot');
@@ -131,6 +149,7 @@
             const gwEl = document.getElementById('hubGateway');
             const gwDot = document.getElementById('hubGwDot');
             const expEl = document.getElementById('hubCodeExp');
+            const errEl = document.getElementById('hubError');
             if (!dot || !statusEl || !codeEl || !gwEl) return;
             if (failed || !info || !info.enabled) {
                 // 读取失败与"未启用"必须分开显示：故障伪装成正常态会让排障从第一步就走错
@@ -140,6 +159,7 @@
                 gwEl.textContent = '—';
                 if (gwDot) gwDot.className = 'dot dot-unknown';
                 if (expEl) { expEl.textContent = ''; expEl.className = 'hub-code-exp'; }
+                if (errEl) { errEl.textContent = ''; errEl.hidden = true; }
                 _bindCode = '';
                 renderBindQr('');
                 return;
@@ -163,6 +183,13 @@
                     expEl.textContent = '剩余 ' + Math.max(1, Math.round(sec / 60)) + ' 分钟';
                     expEl.className = 'hub-code-exp';
                 } else { expEl.textContent = ''; expEl.className = 'hub-code-exp'; }
+            }
+            if (errEl) {
+                // 有原因就摆出来（哪怕长连是通的）：换码失败这类问题不会断开长连，
+                // 但用户看到的就是一张扫不出来的死码，此前只能去翻 HA 日志
+                const why = hubErrorText(info.lastError);
+                errEl.textContent = why;
+                errEl.hidden = !why;
             }
             renderBindQr(_bindCode);
         }
@@ -201,46 +228,6 @@
                 btn.textContent = done ? '已复制' : '按 Ctrl+C';
                 if (_copyTimer) clearTimeout(_copyTimer);
                 _copyTimer = setTimeout(function () { btn.textContent = '复制'; }, 1800);
-            }
-        }
-
-        async function loadRemoteControl() {
-            const dot = document.getElementById('hubDot');
-            const statusEl = document.getElementById('hubStatus');
-            const codeEl = document.getElementById('hubCode');
-            const gwEl = document.getElementById('hubGateway');
-            const gwDot = document.getElementById('hubGwDot');
-            if (!dot || !statusEl || !codeEl || !gwEl) return;
-            try {
-                const resp = await haApi('/window_controller_gateway/hub');
-                if (!resp.ok) throw new Error('HA API ' + resp.status);
-                const info = await resp.json();
-                if (!info || !info.enabled) {
-                    dot.className = 'dot dot-unknown';
-                    statusEl.textContent = '未启用';
-                    codeEl.textContent = '------';
-                    gwEl.textContent = '—';
-                    if (gwDot) gwDot.className = 'dot dot-unknown';
-                    _bindCode = '';
-                    renderBindQr('');
-                    return;
-                }
-                dot.className = 'dot ' + (info.connected ? 'dot-ok' : 'dot-warn');
-                statusEl.textContent = info.connected ? '已连接' : '未连接';
-                _bindCode = info.bindCode || '';
-                codeEl.textContent = _bindCode || '------';
-                gwEl.textContent = info.gatewaySn || '—';
-                if (gwDot) gwDot.className = 'dot ' + (info.gatewaySn ? 'dot-ok' : 'dot-unknown');
-                renderBindQr(_bindCode);
-            } catch (e) {
-                dot.className = 'dot dot-err';
-                statusEl.textContent = '读取失败';
-                codeEl.textContent = '------';
-                gwEl.textContent = '—';
-                if (gwDot) gwDot.className = 'dot dot-unknown';
-                _bindCode = '';
-                renderBindQr('');
-                console.log('远程控制状态获取失败:', e);
             }
         }
 
