@@ -685,10 +685,83 @@ def test_invalidate_identity_writes_cleared_file(tmp_path):
                                      "bindCodeAt": 111.0})
     client, _, _ = make_client(tmp_path)
     client.instance_id, client._secret, client.bind_code, client._bind_code_at = "old", "s" * 32, "123456", 111.0
-    client._invalidate_identity("测试")
+    asyncio.run(client._invalidate_identity("测试"))
     assert (client.instance_id, client.bind_code, client._bind_code_at) == (None, None, 0.0)
     assert not hc.load_identity(str(tmp_path)).get("instanceId"), "死身份还在盘上＝重启后复活"
     assert client.status_view()["bindCodeExpired"] is False, "无码时不得渲染成『刚过期』"
+
+
+def test_identity_io_is_off_the_event_loop(tmp_path):
+    """v1.7.49：身份文件读写不得阻塞事件循环（HA 阻塞 IO 检测真机点名过 hub_client 的 open）。
+
+    三条钉：① 三个身份方法是协程（回退成同步 def 即红）；② 类体内对模块级 sync
+    worker 的引用必须包在 asyncio.to_thread 里（in-loop 直调 load/save_identity 即红；
+    用 lookbehind 排除 self._load_identity() 这类方法调用的子串误配）；③ 真跑一次
+    _save_identity 确能落盘（证明 to_thread 路径有效、不是空协程）。
+    """
+    import inspect
+    import re
+    client, _, _ = make_client(tmp_path)
+    for name in ("_load_identity", "_save_identity", "_invalidate_identity"):
+        assert inspect.iscoroutinefunction(getattr(client, name)), \
+            "%s 回退成同步＝身份 I/O 又跑回事件循环" % name
+    src = inspect.getsource(type(client))
+    for worker in ("load_identity", "save_identity"):
+        # to_thread 传的是函数引用（无括号），故匹配裸 token；lookbehind 排除
+        # self._load_identity() / def _load_identity( 这类带下划线前缀的子串。
+        hits = list(re.finditer(r"(?<![._\w])%s\b" % worker, src))
+        assert hits, "类体内找不到 sync worker %s 的引用＝解析锚点漂移" % worker
+        for m in hits:
+            line = src[:m.start()].splitlines()[-1]
+            assert "to_thread" in line, "sync worker 被 in-loop 直调: %r" % line
+    client.instance_id, client._secret = "i1", "s" * 32
+    client.bind_code, client._bind_code_at = "123456", 1.0
+    asyncio.run(client._save_identity())
+    assert hc.load_identity(str(tmp_path))["instanceId"] == "i1", "to_thread 落盘路径失效"
+
+
+def test_run_forever_survives_loop_body_crash(monkeypatch, tmp_path, caplog):
+    """v1.7.49 看门狗：主循环体自身抛异常不得让长连任务静默死。
+
+    真机形态（v1.7.48）：hub pod 换版后循环体（退避计算/切片睡眠）抛一次异常 ⇒ 任务退出
+    且无人重启 ⇒ agentsOnline 永久 0、只能人工重启集成。内层 try 只护 _session_once，
+    护不住循环体其余行。钉：注入 hub_reconnect_delay 首调抛错，循环必须记 ERROR 并**继续**
+    （_session_once 仍被再次调用），而不是静默退出。
+    """
+    import logging
+    client, _, _ = make_client(tmp_path)
+    calls = {"n": 0}
+
+    async def fake_session_once():
+        calls["n"] += 1
+        if calls["n"] >= 3:
+            raise asyncio.CancelledError   # 第 3 次干净退出，结束本测试
+        return False
+
+    monkeypatch.setattr(client, "_session_once", fake_session_once)
+    state = {"raised": False}
+
+    def boom_delay(attempt):
+        if not state["raised"]:
+            state["raised"] = True
+            raise RuntimeError("injected loop-body crash")
+        return 0.0
+
+    monkeypatch.setattr(hc, "hub_reconnect_delay", boom_delay)
+
+    async def fast_sleep(d, stop):
+        await asyncio.sleep(0)
+
+    monkeypatch.setattr(hc, "interruptible_sleep", fast_sleep)
+    with caplog.at_level(logging.ERROR):
+        try:
+            asyncio.run(asyncio.wait_for(client._run_forever(), timeout=5))
+        except (asyncio.CancelledError, asyncio.TimeoutError):
+            pass
+    assert calls["n"] >= 3, "循环在注入崩溃后没继续＝看门狗失效（任务静默死）"
+    assert state["raised"], "注入的崩溃没触发＝变异没生效"
+    assert any("主循环自身异常" in r.getMessage() for r in caplog.records), \
+        "看门狗兜住了但没记 ERROR＝下次真机仍无从排查"
 
 
 def test_open_ws_is_the_only_reject_site_and_reconnects_once():

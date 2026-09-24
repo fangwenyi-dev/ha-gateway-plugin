@@ -3,6 +3,34 @@
 所有版本变更记录在此文件中。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.7.49] - 2026-09-24
+
+两处** hub 长连可靠性**修复，源自真机一次"换 pod 后远程控制整条断、必须人工重启集成"的事故复盘。
+
+### 一、身份文件 I/O 移出事件循环（修 HA 阻塞 IO 告警）
+
+`save_identity`/`load_identity` 原先用**同步 `open()`** 读写 `huijian_hub_identity.json`，而调用链
+（`refresh_bind_code`/`_ensure_registered` 等）跑在事件循环里，被 HA 的阻塞 IO 检测器点名
+（`homeassistant.util.loop`：blocking call to open … hub_client.py）。虽是 WARNING 不致功能坏，
+但会拖慢整个事件循环。修：`_load_identity`/`_save_identity`/`_invalidate_identity` 改 async，
+文件 I/O 经 `asyncio.to_thread` 放线程池；全部 8 处调用点改 `await`（已逐一核对 enclosing 函数
+全为 async，唯一同步调用者 `_invalidate_identity` 的唯一调用者 `_open_ws` 亦为 async，整链安全）。
+模块级 `load_identity`/`save_identity` 保留为同步 worker 供线程池调用。
+
+### 二、hub 长连主循环加看门狗（修"换 pod 后不自愈、须人工重启"）
+
+真机形态：hub 云托管换 pod 后，`_run_forever` 主循环**体自身**（退避计算/切片睡眠等行）抛一次
+异常 ⇒ 任务退出且无人重启 ⇒ `agentsOnline` 永久 0、小程序无设备/扫码 code_invalid，只能人工重启
+集成才恢复（本次事故 17:16→17:38 卡了 22 分钟）。旧代码内层 try 只护住 `_session_once`，护不住
+循环体其余行。修：外层加兜底 try/except，循环体自身异常时记 **ERROR** 并 5s 后重启循环（"不死"），
+不再静默退出；ERROR 行同时指路便于真机排查。
+
+### 门禁
+
+pytest **1006**（1004+2 新钉：身份 I/O 离线循环钉 + 主循环看门狗钉，均经变异核验精准红）、
+ruff(CI 同款 F,E9,B --ignore B008,B905)、compileall、node --check、bash -n 全绿；
+跨仓契约 28/28、真栈 hub 生命周期 e2e 34/34。协议与 hub/小程序零改动。
+
 ## [1.7.48] - 2026-09-24
 
 两处**测试/CI 卫生**修复，生产运行路径零改动（新环境变量默认不设＝行为与既往逐字节相同）。

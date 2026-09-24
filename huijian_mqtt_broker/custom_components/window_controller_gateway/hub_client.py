@@ -262,7 +262,7 @@ class HubClient:
             return
         self._stopping = False
         self._send_lock = asyncio.Lock()
-        self._load_identity()
+        await self._load_identity()
         self.attach_managers(self._managers)
         self._task = asyncio.ensure_future(self._run_forever())
 
@@ -292,31 +292,44 @@ class HubClient:
     async def _run_forever(self) -> None:
         attempt = 0
         while not self._stopping:
-            connected = False
             try:
-                connected = await self._session_once()
+                connected = False
+                try:
+                    connected = await self._session_once()
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:  # noqa: BLE001 - 任何异常都只降级重连
+                    self.last_error = type(e).__name__
+                    self._logger.warning("hub 连接异常（%s），准备重连", type(e).__name__)
+                finally:
+                    self.connected = False
+                if self._stopping:
+                    return
+                # `_session_once` 只在**真的连上过**之后正常返回才为 True——所以"连上后被
+                # 对端关掉"证明端点是通的，退避阶梯必须归零（否则 hub 反复重启时阶梯会一路
+                # 涨到 300s，把恢复拖成几分钟不可用；跨仓 e2e 的 C 臂就是这么红的）。
+                # 但仍留 HUB_RECONNECT_FLOOR_S 地板：旧实现此时零间隔立即重连，遇到
+                # "接受后立刻关"（被 replaced / 网关抽风 / 云端发布中）就是无间隔风暴。
+                if connected:
+                    attempt = 0
+                    delay = HUB_RECONNECT_FLOOR_S
+                else:
+                    attempt += 1
+                    delay = hub_reconnect_delay(attempt)
+                self._logger.info("hub 重连退避 %.0fs（第 %d 次）", delay, attempt)
+                await interruptible_sleep(delay, lambda: self._stopping)
             except asyncio.CancelledError:
                 raise
-            except Exception as e:  # noqa: BLE001 - 任何异常都只降级重连
-                self.last_error = type(e).__name__
-                self._logger.warning("hub 连接异常（%s），准备重连", type(e).__name__)
-            finally:
-                self.connected = False
-            if self._stopping:
-                return
-            # `_session_once` 只在**真的连上过**之后正常返回才为 True——所以"连上后被
-            # 对端关掉"证明端点是通的，退避阶梯必须归零（否则 hub 反复重启时阶梯会一路
-            # 涨到 300s，把恢复拖成几分钟不可用；跨仓 e2e 的 C 臂就是这么红的）。
-            # 但仍留 HUB_RECONNECT_FLOOR_S 地板：旧实现此时零间隔立即重连，遇到
-            # "接受后立刻关"（被 replaced / 网关抽风 / 云端发布中）就是无间隔风暴。
-            if connected:
-                attempt = 0
-                delay = HUB_RECONNECT_FLOOR_S
-            else:
-                attempt += 1
-                delay = hub_reconnect_delay(attempt)
-            self._logger.info("hub 重连退避 %.0fs（第 %d 次）", delay, attempt)
-            await interruptible_sleep(delay, lambda: self._stopping)
+            except Exception as e:  # noqa: BLE001 - 看门狗：循环体自身异常不得让任务静默死
+                # 真机形态（v1.7.48）：hub pod 换版后主循环体（退避计算/切片睡眠等）抛一次
+                # 异常 ⇒ 本任务退出且无人重启 ⇒ agentsOnline 永久 0、必须人工重启集成才恢复。
+                # 内层 try 只护住 _session_once，护不住循环体其余行；这层兜底让循环"不死"，
+                # 并记 ERROR 指路（此前是静默退出，日志里什么都看不到）。
+                self.last_error = "loop_%s" % type(e).__name__
+                self._logger.error(
+                    "hub 长连主循环自身异常（%s），5s 后重启循环——若反复出现请把本行上报",
+                    type(e).__name__)
+                await interruptible_sleep(5.0, lambda: self._stopping)
 
     async def _ensure_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
@@ -332,9 +345,12 @@ class HubClient:
                 raise RuntimeError("hub %s -> %d" % (path, resp.status))
             return await resp.json()
 
-    def _load_identity(self) -> None:
-        """读本地身份（重启复用；文件缺失/损坏按未注册处理）。"""
-        ident = load_identity(self.config_dir)
+    async def _load_identity(self) -> None:
+        """读本地身份（重启复用；文件缺失/损坏按未注册处理）。
+
+        文件 I/O 放线程池：HA 会检测事件循环内的阻塞 open（v1.7.48 真机被点名）。
+        """
+        ident = await asyncio.to_thread(load_identity, self.config_dir)
         self.instance_id = ident.get("instanceId") or None
         self._secret = ident.get("secret") or None
         self.bind_code = self.bind_code or ident.get("bindCode") or None
@@ -347,7 +363,7 @@ class HubClient:
     async def _ensure_registered(self) -> None:
         """有身份则直接连；无身份（或上次被拒）则注册一次拿 instanceId/secret/绑定码。"""
         if self.instance_id is None:
-            self._load_identity()
+            await self._load_identity()
         if self.instance_id and self._secret:
             return
         # 注册载荷的 sn 只是 hub 侧展示字段（协议不变）：取首个网关，
@@ -364,14 +380,17 @@ class HubClient:
         self._secret = data["secret"]
         self.bind_code = data.get("bindCode")
         self._bind_code_at = time.time()
-        self._save_identity()
+        await self._save_identity()
         # 绑定码要让用户看得到，但日志只记摘要（凭据不回显纪律）
         self._logger.info("hub 注册成功 instance=%s 绑定码=%s（请在插件页查看完整码）",
                           self.instance_id, cred_brief(self.bind_code))
 
-    def _save_identity(self) -> None:
-        """落盘实例身份（含绑定码签发时刻——否则重启后无从判断码是否已过期）。"""
-        save_identity(self.config_dir, {
+    async def _save_identity(self) -> None:
+        """落盘实例身份（含绑定码签发时刻——否则重启后无从判断码是否已过期）。
+
+        原子写（tmp+replace）放线程池，不阻塞事件循环。
+        """
+        await asyncio.to_thread(save_identity, self.config_dir, {
             "instanceId": self.instance_id,
             "secret": self._secret,
             "bindCode": self.bind_code,
@@ -391,7 +410,7 @@ class HubClient:
         绑定码拿不到不影响本地控制与云通道本身。
         """
         if not (self.instance_id and self._secret):
-            self._load_identity()
+            await self._load_identity()
         if not (self.instance_id and self._secret):
             return False
         kind = "member" if kind == "member" else "owner"
@@ -431,7 +450,7 @@ class HubClient:
             return True
         self.bind_code = data["bindCode"]
         self._bind_code_at = time.time()
-        self._save_identity()
+        await self._save_identity()
         self._logger.info("hub 绑定码已更新（%s）", cred_brief(self.bind_code))
         return True
 
@@ -448,7 +467,7 @@ class HubClient:
         老 hub 无此端点 ⇒ 只降级（置 members_supported=False 让面板禁用成员区），绝不影响长连。
         """
         if not (self.instance_id and self._secret):
-            self._load_identity()
+            await self._load_identity()
         if not (self.instance_id and self._secret):
             return False
         try:
@@ -550,11 +569,11 @@ class HubClient:
                     "②确认服务实例数固定为 1（/cmd 按容器内存里的长连表转发，多副本必然随机 offline）",
                     self._rereg_streak)
                 raise
-            self._invalidate_identity("云端拒绝身份（HTTP %s）" % e.status)
+            await self._invalidate_identity("云端拒绝身份（HTTP %s）" % e.status)
             await self._ensure_registered()
             return await session.ws_connect(self._ws_url(), heartbeat=25.0)
 
-    def _invalidate_identity(self, reason: str) -> None:
+    async def _invalidate_identity(self, reason: str) -> None:
         """清空本地身份并落盘：下次连接必然重新注册（换新 instanceId + 新绑定码）。
 
         代价要说清：注册表没了意味着**绑定关系也没了**，各微信号都要重新扫一次码——
@@ -564,7 +583,7 @@ class HubClient:
         self._secret = None
         self.bind_code = None
         self._bind_code_at = 0.0
-        self._save_identity()
+        await self._save_identity()
         self._rereg_streak += 1
         self.last_error = "identity_rejected"
         self._logger.warning(
