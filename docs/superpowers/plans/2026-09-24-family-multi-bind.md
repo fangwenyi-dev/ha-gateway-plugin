@@ -918,11 +918,18 @@ git -C E:/AI/huijian-cloud-hub commit -m "chore: v0.2.5 家庭成员镜像纪律
 
 ## Phase B — 加载项 v1.7.46
 
-> **进度（2026-09-24 凌晨）**：Task **B1 已完成**（工作树未提交）——`huijian.js:207-245` 的重复定义已删，
+> **进度（2026-09-24 凌晨）**：Task **B1 已完成并随 v1.7.46 发布**——`huijian.js:207-245` 的重复定义已删，
 > `test_v1737_hub_ui.py::_func` 与 `test_v1738_hub_qr_ui.py::_fn` 已改成"多处即报错"，
 > 新增 `tests/test_v1746_panel_unique_funcs.py`（7 条）与 `tests/test_v1746_panel_render.py`（2 条，假 DOM 里
 > node 真跑 `applyHubStatus` 五个场景）。插件门禁 949 passed、ruff/compileall/node --check/bash -n 全绿，
-> 变异 M-P1～M-P5 各精准红。B2 起未开工。
+> 变异 M-P1～M-P5 各精准红。
+>
+> **B2–B4 也已完成（2026-09-24，工作树未提交，待发 v1.7.47）**，与本计划的差异只有两处：
+> ① 测试文件名用 `test_v1747_*`（B1 那两条仍是 `test_v1746_*`，因为它们是随 v1.7.46 发的）；
+> ② `test_v1746_panel_render.py` 的假 DOM harness 随 B4 扩容（`applyHubStatus` 现在也渲染成员区，
+>    harness 必须带上 `membersText`/`renderMemberQr`/`renderMembers` 与 `BIND_PAYLOAD_PREFIX` 真值，
+>    否则 node 会 ReferenceError——**它崩得响是好事**，说明"唯一出口又长胖了"不会被静默放过）。
+> 实测门禁：pytest 986、hub 59、小程序 278、跨仓真栈 e2e **34/34**、跨仓契约钉 **24 条**、变异 **9/9**。
 
 ### Task B1: 热修 `huijian.js` 重复定义（必须最先做，否则后续面板改动全是死码）
 

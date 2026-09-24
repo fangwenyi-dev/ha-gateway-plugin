@@ -210,12 +210,26 @@ def device_ws_view(device_sn: str, gateway_sn: str, device: Dict[str, Any]) -> D
     # state 从钳制后的 position 推导：r_travel=255（未校准标记）在
     # 固件视图里 state=-1，插件必须一致，不得报"已开"
     state = 0 if position_i == 0 else (1 if position_i > 0 else -1)
+    # 速度/力度/锁定模式回显（v1.7.47）：设备上报的 rwp_winact_* 由 _ctypes 解析进
+    # attributes["winact_speed"/"winact_strength"]，HA 侧 number 实体靠 _state_key 读它
+    # 显示真值，而小程序此前**只能发不能收**——滑块初值来自本地存储（默认 60/50），
+    # 换手机、清缓存、或在 HA 里调过，小程序显示的就与设备实际值对不上。
+    # 入界纪律与 position 同款：越界/不可解析一律 -1（未知），不把垃圾值当合法数字发出去。
+    speed = _as_int(attrs.get("winact_speed"))
+    if not 0 <= speed <= 100:
+        speed = -1
+    strength = _as_int(attrs.get("winact_strength"))
+    if not 0 <= strength <= 100:
+        strength = -1
     return {
         "sn": device_sn,
         "gwSn": gateway_sn,
         "position": position_i,
         "battery": battery,
         "state": state,
+        "windLockMode": _as_int(attrs.get("wind_lock_mode")),
+        "winactSpeed": speed,
+        "winactStrength": strength,
     }
 
 
@@ -657,7 +671,10 @@ class WsGatewayServer:
         view = device_ws_view(device_sn, gateway_sn, dev)
         # 固件 device_update 模板（main.cpp:252）七键：type/gwSn/devSn/
         # position/battery/state/windLockMode——注意设备键是 devSn 而非
-        # device_list 的 sn，小程序两处的取值代码不同，拼错即静默丢更新
+        # device_list 的 sn，小程序两处的取值代码不同，拼错即静默丢更新。
+        # v1.7.47 追加 winactSpeed/winactStrength（**加字段不改字段**，老小程序忽略即可）：
+        # 推送与列表必须同源，否则"首屏有值、一动就丢"。取值一律走 view，
+        # 别在这里再算一遍——两处算法迟早会漂。
         return {
             "type": "device_update",
             "gwSn": view["gwSn"],
@@ -665,7 +682,9 @@ class WsGatewayServer:
             "position": view["position"],
             "battery": view["battery"],
             "state": view["state"],
-            "windLockMode": _as_int((dev.get("attributes") or {}).get("wind_lock_mode")),
+            "windLockMode": view["windLockMode"],
+            "winactSpeed": view["winactSpeed"],
+            "winactStrength": view["winactStrength"],
         }
 
     async def _broadcast(self, payload: Dict[str, Any]) -> None:

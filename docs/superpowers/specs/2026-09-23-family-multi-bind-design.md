@@ -88,7 +88,7 @@ instances[instanceId] = {
 | `POST /agent/register` | 不变 | `{installKey,sn,fw}` | 200 | `install_key` / 403 |
 | `POST /agent/bindcode` | **加 `kind:'owner'\|'member'`，不传＝owner** | `{instanceId,secret,kind?}` | 200 `{ok,bindCode,expiresInSec,kind}` | `bad_secret` / 403；`unknown_instance` / 404 |
 | `POST /bind` | **按码类型分流**，返回体加 `role` | `{bindCode}` | 200 `{ok,instanceId,sn,role}` | `no_openid` / 401；`code_invalid` / 404；`already_bound` / 409；**`members_full` / 409**；**`no_owner` / 409** |
-| `POST /unbind`（新，**openid 鉴权＝本人退出**） | member 退自己；owner 调 ⇒ 拒 | `{instanceId}` | 200 `{ok,removed,remaining}` | `no_openid` / 401；`forbidden` / 403（与该实例无归属）；`owner_cannot_leave` / 409；`unknown_member` / 404 |
+| `POST /unbind`（新，**openid 鉴权＝本人退出**） | member 退自己；owner 调 ⇒ 拒 | `{instanceId}` | 200 `{ok,removed,remaining}` | `no_openid` / 401；`forbidden` / 403（与该实例无归属，**含已退出的人再退**——前任成员与陌生人同形，不泄露"你曾是成员"）；`owner_cannot_leave` / 409；`unknown_instance` / 404 |
 | `POST /agent/members`（新，**实例凭据鉴权**） | 面板列成员 | `{instanceId,secret}` | 200 `{ok,ownerMasked,members:[{mid,openidMasked,at}],membersMax}` | `bad_secret` / 403；`unknown_instance` / 404 |
 | `POST /agent/unbind`（新，**实例凭据鉴权**） | 面板（＝主人）踢人 | `{instanceId,secret,mid}` | 200 `{ok,removed,remaining}` | `bad_secret` / 403；`unknown_member` / 404 |
 | `POST /state` | 鉴权改 `canAccess()` | 不变 | 200 | `forbidden` / 403 |

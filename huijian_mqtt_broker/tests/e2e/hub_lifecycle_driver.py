@@ -239,6 +239,111 @@ async def main():
                   body.get("err") not in ("offline", "forbidden"),
                   "%s %s" % (st, json.dumps(body, ensure_ascii=False)[:160]))
 
+            # ── E 家庭多人绑定（v1.7.47 / hub v0.2.5）─────────────────────
+            # 用**独立注册的新实例**跑（不碰 A/C/D 臂那条长连的身份），全程只用 HTTP：
+            # 这条臂要证的是 hub 侧的归属语义在真进程里成立，不需要长连；
+            # "member 能控制"用"回 offline 而不是 403"来判——403＝鉴权没过，
+            # offline＝鉴权过了但没 agent，正是本臂要的区分。
+            print("\n==== E 臂：家庭多人绑定 ====")
+            E_OWNER = "o_e2e_fam_owner"
+            E_MOM = "o_e2e_fam_mom"
+            E_STRANGER = "o_e2e_fam_stranger"
+            st, reg = await http_json("POST", "/agent/register", {
+                "installKey": INSTALL_KEY, "sn": "GW-E2E-FAM", "fw": "e2e"})
+            fam_id = (reg or {}).get("instanceId")
+            fam_secret = (reg or {}).get("secret")
+            check("E 注册成功（多人绑定臂前置）", st == 200 and bool(fam_id),
+                  "%s %s" % (st, json.dumps(reg, ensure_ascii=False)[:160]))
+
+            st, b = await http_json("POST", "/bind", {
+                "bindCode": (reg or {}).get("bindCode"), "openid": E_OWNER})
+            check("E1 owner 码绑定回 role=owner",
+                  st == 200 and (b or {}).get("role") == "owner",
+                  "%s %s" % (st, json.dumps(b, ensure_ascii=False)[:160]))
+
+            st, oc = await http_json("POST", "/agent/bindcode", {
+                "instanceId": fam_id, "secret": fam_secret, "kind": "owner"})
+            owner_code = (oc or {}).get("bindCode")
+            st, mc = await http_json("POST", "/agent/bindcode", {
+                "instanceId": fam_id, "secret": fam_secret, "kind": "member"})
+            member_code = (mc or {}).get("bindCode")
+            check("E2 签发成员码不作废 owner 码（分字段的正题）",
+                  st == 200 and (mc or {}).get("kind") == "member"
+                  and bool(owner_code) and owner_code != member_code,
+                  "%s owner=%s member=%s" % (st, oc, mc))
+            st, reb = await http_json("POST", "/bind", {"bindCode": owner_code, "openid": E_OWNER})
+            check("E2b 签发成员码后 owner 码仍可用（同一 owner 幂等）",
+                  st == 200 and (reb or {}).get("role") == "owner",
+                  "%s %s" % (st, json.dumps(reb, ensure_ascii=False)[:160]))
+
+            st, mb = await http_json("POST", "/bind", {"bindCode": member_code, "openid": E_MOM})
+            check("E3 第二个微信号用成员码绑定 → role=member",
+                  st == 200 and (mb or {}).get("role") == "member",
+                  "%s %s" % (st, json.dumps(mb, ensure_ascii=False)[:160]))
+            st, mst = await http_json("POST", "/state", {"instanceId": fam_id, "openid": E_MOM})
+            check("E3b member 能读状态（不再 403）",
+                  st == 200 and (mst or {}).get("ok") is True,
+                  "%s %s" % (st, json.dumps(mst, ensure_ascii=False)[:160]))
+            st, again = await http_json("POST", "/bind", {"bindCode": member_code, "openid": E_STRANGER})
+            check("E3c 成员码一次性（同码再绑 → code_invalid）",
+                  st == 404 and (again or {}).get("err") == "code_invalid",
+                  "%s %s" % (st, json.dumps(again, ensure_ascii=False)[:160]))
+
+            st, cmd = await http_json("POST", "/cmd", {
+                "instanceId": fam_id, "openid": E_MOM, "sn": "DEV1", "action": "control",
+                "params": {"attribute": "position", "value": "100"}})
+            check("E4 member 发控制命令鉴权通过（无长连时回 offline，不是 403）",
+                  st == 200 and (cmd or {}).get("err") == "offline",
+                  "%s %s" % (st, json.dumps(cmd, ensure_ascii=False)[:160]))
+            st, denied = await http_json("POST", "/cmd", {
+                "instanceId": fam_id, "openid": E_STRANGER, "sn": "DEV1", "action": "control",
+                "params": {"attribute": "position", "value": "100"}})
+            check("E4b 陌生人仍被拒（放宽只放宽到 member）",
+                  st == 403 and (denied or {}).get("err") == "forbidden",
+                  "%s %s" % (st, json.dumps(denied, ensure_ascii=False)[:160]))
+
+            st, mem = await http_json("POST", "/agent/members", {
+                "instanceId": fam_id, "secret": fam_secret})
+            members = (mem or {}).get("members") or []
+            check("E5 /agent/members 用实例凭据可列成员且回 mid+掩码",
+                  st == 200 and len(members) == 1
+                  and all(m.get("mid") and m.get("openidMasked") for m in members),
+                  "%s %s" % (st, json.dumps(mem, ensure_ascii=False)[:200]))
+            check("E5b 成员列表不回完整 openid（面板/日志一律掩码）",
+                  E_MOM not in json.dumps(mem, ensure_ascii=False), json.dumps(mem, ensure_ascii=False)[:200])
+            st, badsec = await http_json("POST", "/agent/members", {
+                "instanceId": fam_id, "secret": "wrong-secret"})
+            check("E5c /agent/members 错 secret → 403 bad_secret",
+                  st == 403 and (badsec or {}).get("err") == "bad_secret",
+                  "%s %s" % (st, json.dumps(badsec, ensure_ascii=False)[:160]))
+
+            mid = (members[0].get("mid") if members else "")
+            st, kick = await http_json("POST", "/agent/unbind", {
+                "instanceId": fam_id, "secret": fam_secret, "mid": mid})
+            check("E6 按 mid 踢人成功", st == 200 and (kick or {}).get("ok") is True,
+                  "%s %s" % (st, json.dumps(kick, ensure_ascii=False)[:160]))
+            st, after = await http_json("POST", "/state", {"instanceId": fam_id, "openid": E_MOM})
+            check("E6b 被踢者立刻失去访问权（403）",
+                  st == 403 and (after or {}).get("err") == "forbidden",
+                  "%s %s" % (st, json.dumps(after, ensure_ascii=False)[:160]))
+
+            full_ok = True
+            for i in range(9):
+                st, c = await http_json("POST", "/agent/bindcode", {
+                    "instanceId": fam_id, "secret": fam_secret, "kind": "member"})
+                st2, r2 = await http_json("POST", "/bind", {
+                    "bindCode": (c or {}).get("bindCode"), "openid": "o_e2e_fam_m%d" % i})
+                if i < 8:
+                    full_ok = full_ok and st2 == 200 and (r2 or {}).get("role") == "member"
+                else:
+                    full_ok = full_ok and st2 == 409 and (r2 or {}).get("err") == "members_full"
+            check("E7 前 8 人加入成功、第 9 人 409 members_full", full_ok, "上限校验失败")
+
+            st, leave = await http_json("POST", "/unbind", {"instanceId": fam_id, "openid": E_OWNER})
+            check("E8 owner 不能退自己（否则实例无主、没人能管成员）",
+                  st == 409 and (leave or {}).get("err") == "owner_cannot_leave",
+                  "%s %s" % (st, json.dumps(leave, ensure_ascii=False)[:160]))
+
     finally:
         await client.async_stop()
         _kill_hub()

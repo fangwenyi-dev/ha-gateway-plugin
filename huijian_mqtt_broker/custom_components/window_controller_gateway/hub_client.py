@@ -54,6 +54,9 @@ IDENTITY_REJECTED_HTTP = (401, 403)
 # 连续多少次【被拒 - 重注册 - 再被拒】就熔断（不再自动重注册）。病态形态＝云托管多副本
 # 且注册表不共享：register 落到 A、握手落到 B，每轮退避都会白造一个新实例。
 HUB_REREGISTER_FUSE = 3
+# 家庭成员上限——与 hub 的 HUB_MEMBERS_MAX 同值（跨仓契约：两侧各写一份，
+# 由 tests/test_v1747_cross_repo_contract 对账，改一边必须改另一边）
+HUB_MEMBERS_MAX = 8
 
 _VALUE_RE = re.compile(r"-?\d+(\.\d+)?")
 
@@ -187,6 +190,12 @@ class HubClient:
         self._secret: Optional[str] = None
         self.bind_code: Optional[str] = None
         self._bind_code_at: float = 0.0      # 当前码的签发时刻（epoch 秒；0=未知）
+        # 家庭成员（v1.7.47）：成员码短命且属显式操作 ⇒ **不落身份文件**（落了会与 hub 真相分叉）
+        self.member_code: Optional[str] = None
+        self._member_code_at: float = 0.0
+        self.members: List[Dict[str, Any]] = []   # hub 回的掩码成员列表（原样透传给面板）
+        self.owner_masked: Optional[str] = None
+        self.members_supported: bool = True       # 老 hub 无成员端点时置 False，面板据此禁用成员区
         self._bind_renew_at: float = 0.0     # 上一次"换码尝试"时刻（成功失败都记，用于节流）
         self._rereg_streak: int = 0        # 连续【被拒 - 重注册】计数（见 HUB_REREGISTER_FUSE）
         self.connected = False
@@ -352,21 +361,23 @@ class HubClient:
             return -1
         return int(BIND_CODE_TTL_S - (time.time() - self._bind_code_at))
 
-    async def refresh_bind_code(self) -> bool:
-        """向 hub 换一个新绑定码（旧码当场作废）。
+    async def refresh_bind_code(self, kind: str = "owner") -> bool:
+        """向 hub 换一个新绑定码（旧码当场作废）。kind='member' 换的是**成员码**。
 
-        面板"点二维码/刷新"与自动补发都走这里。失败只记日志回 False——绑定码拿不到
-        不影响本地控制与云通道本身。
+        面板"点二维码/添加家人"与 owner 码的自动补发都走这里。失败只记日志回 False——
+        绑定码拿不到不影响本地控制与云通道本身。
         """
         if not (self.instance_id and self._secret):
             self._load_identity()
         if not (self.instance_id and self._secret):
             return False
+        kind = "member" if kind == "member" else "owner"
         self._bind_renew_at = time.time()     # 成功失败都算一次尝试（自动补发侧的节流基准）
         try:
             data = await self._http("/agent/bindcode", {
                 "instanceId": self.instance_id,
                 "secret": self._secret,
+                "kind": kind,
             })
         except Exception as e:  # noqa: BLE001 - 网络/旧 hub 无此端点都只降级
             # 原因必须进日志：这里曾只打 type(e).__name__，而 RuntimeError 的消息带的
@@ -376,16 +387,93 @@ class HubClient:
             if self._secret and self._secret in why:
                 why = type(e).__name__        # 万一消息里带上 URL，绝不回显凭据
             self.last_error = "bindcode_failed"
-            self._logger.warning("hub 换绑定码失败：%s", why)
+            self._logger.warning("hub 换绑定码失败（kind=%s）：%s", kind, why)
             return False
         if not data.get("ok") or not data.get("bindCode"):
             self.last_error = "bindcode_rejected"
-            self._logger.warning("hub 换绑定码被拒：%s", data.get("err"))
+            self._logger.warning("hub 换绑定码被拒（kind=%s）：%s", kind, data.get("err"))
             return False
+        if kind == "member" and data.get("kind") != "member":
+            # 老 hub 忽略 kind ⇒ 它轮换的其实是 owner 码（用户手上那张已作废，覆水难收）。
+            # 判据只能是响应里的 kind 回显；此处必须**丢弃返回值**，否则面板会把 owner 码
+            # 当成员码显示 —— 家人扫到的就是"成为主人"的码。
+            self.members_supported = False
+            self.last_error = "hub_too_old_for_member_code"
+            self._logger.warning("云端 hub 版本过旧（/agent/bindcode 不回 kind），已忽略成员码请求")
+            return False
+        if kind == "member":
+            self.member_code = data["bindCode"]
+            self._member_code_at = time.time()
+            self._logger.info("hub 成员码已签发（%s）", cred_brief(self.member_code))
+            return True
         self.bind_code = data["bindCode"]
         self._bind_code_at = time.time()
         self._save_identity()
         self._logger.info("hub 绑定码已更新（%s）", cred_brief(self.bind_code))
+        return True
+
+    def member_code_expires_in(self) -> int:
+        """成员码剩余秒数（-1＝无码/签发时刻未知，与 owner 码同口径：不当"刚过期"渲染）。"""
+        if not self.member_code or not self._member_code_at:
+            return -1
+        return int(BIND_CODE_TTL_S - (time.time() - self._member_code_at))
+
+    async def list_members(self) -> bool:
+        """拉家庭成员（掩码 openid + mid 句柄）。
+
+        走**实例凭据**而不是 openid：openid 只由云托管注入到小程序请求，加载项根本没有。
+        老 hub 无此端点 ⇒ 只降级（置 members_supported=False 让面板禁用成员区），绝不影响长连。
+        """
+        if not (self.instance_id and self._secret):
+            self._load_identity()
+        if not (self.instance_id and self._secret):
+            return False
+        try:
+            data = await self._http("/agent/members", {
+                "instanceId": self.instance_id,
+                "secret": self._secret,
+            })
+        except Exception as e:  # noqa: BLE001
+            why = str(e) or type(e).__name__
+            if self._secret and self._secret in why:
+                why = type(e).__name__
+            self.members_supported = False
+            self.last_error = "members_unavailable"
+            self._logger.warning("hub 取家庭成员失败：%s", why)
+            return False
+        if not data.get("ok"):
+            self.members_supported = False
+            self.last_error = "members_rejected"
+            self._logger.warning("hub 取家庭成员被拒：%s", data.get("err"))
+            return False
+        self.members_supported = True
+        self.members = list(data.get("members") or [])
+        self.owner_masked = data.get("ownerMasked")
+        return True
+
+    async def remove_member(self, mid: str) -> bool:
+        """按 mid 踢一个成员（面板「移除」）。mid 由 list_members 给出：稳定、不可逆推。"""
+        if not (self.instance_id and self._secret) or not mid:
+            return False
+        try:
+            data = await self._http("/agent/unbind", {
+                "instanceId": self.instance_id,
+                "secret": self._secret,
+                "mid": str(mid),
+            })
+        except Exception as e:  # noqa: BLE001
+            why = str(e) or type(e).__name__
+            if self._secret and self._secret in why:
+                why = type(e).__name__
+            self.last_error = "member_remove_failed"
+            self._logger.warning("hub 移除成员失败：%s", why)
+            return False
+        if not data.get("ok"):
+            self.last_error = "member_remove_rejected"
+            self._logger.warning("hub 移除成员被拒：%s", data.get("err"))
+            return False
+        self._logger.info("家庭成员已移除（剩余 %s）", data.get("remaining"))
+        await self.list_members()
         return True
 
     async def _renew_bind_code_if_stale(self) -> None:
@@ -633,4 +721,13 @@ class HubClient:
             "gateways": gateways,
             "hub": self.base,
             "lastError": self.last_error,
+            # 家庭成员（v1.7.47）：members 里只有掩码与 mid（hub 从不回完整 openid）
+            "memberCode": self.member_code,
+            "memberCodeExpiresIn": self.member_code_expires_in(),
+            "memberCodeExpired": bool(self.member_code) and self.member_code_expires_in() <= 0,
+            "members": list(self.members),
+            "membersCount": len(self.members),
+            "membersMax": HUB_MEMBERS_MAX,
+            "membersSupported": bool(self.members_supported),
+            "ownerMasked": self.owner_masked,
         }

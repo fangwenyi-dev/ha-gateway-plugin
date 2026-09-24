@@ -34,10 +34,17 @@ def test_files_exist():
 def test_three_arms_are_real_checks():
     """防稀释：按 check( 真调用计数，注释里写"三臂"不算数。"""
     arms = ["A 长连建立并拿到 6 位绑定码", "B 保盘重启后 instanceId 未变",
-            "C 抹盘重启后插件自愈并重连", "C 新码真能被 /bind 接受"]
+            "C 抹盘重启后插件自愈并重连", "C 新码真能被 /bind 接受",
+            # E 臂（v1.7.47 家庭多人绑定）：owner/member 分流、成员码不作废 owner 码、
+            # 鉴权放宽只到 member、踢人立即生效、上限 8、owner 不能退自己
+            "E1 owner 码绑定回 role=owner", "E2 签发成员码不作废 owner 码",
+            "E3 第二个微信号用成员码绑定", "E4 member 发控制命令鉴权通过",
+            "E5 /agent/members 用实例凭据可列成员", "E6 按 mid 踢人成功",
+            "E7 前 8 人加入成功、第 9 人 409 members_full",
+            "E8 owner 不能退自己"]
     for a in arms:
         assert ('"%s"' % a) in SRC or ("%s" % a) in SRC, "缺臂: %s" % a
-    assert SRC.count("check(") >= 13, "真栈断言只剩 %d 条，疑似被砍" % SRC.count("check(")
+    assert SRC.count("check(") >= 30, "真栈断言只剩 %d 条，疑似被砍" % SRC.count("check(")
 
 
 def test_cmd_arm_does_not_pass_on_forbidden():

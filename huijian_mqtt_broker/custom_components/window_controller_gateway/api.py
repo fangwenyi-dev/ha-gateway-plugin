@@ -27,6 +27,8 @@ def async_setup_api(hass: HomeAssistant) -> None:
     hass.http.register_view(WindowGatewaySecurityView())
     hass.http.register_view(WindowGatewayHubView())
     hass.http.register_view(WindowGatewayHubBindCodeView())
+    hass.http.register_view(WindowGatewayHubMembersView())
+    hass.http.register_view(WindowGatewayHubMemberRemoveView())
 
 
 class WindowGatewaySecurityView(http.HomeAssistantView):
@@ -180,13 +182,89 @@ class WindowGatewayHubBindCodeView(http.HomeAssistantView):
     name = "api:window_controller_gateway:hub:bindcode"
 
     async def post(self, request):
-        """换码并回新状态；集成里没有 hub 客户端（或换码失败）时如实回 refreshOk=False。"""
+        """换码并回新状态；集成里没有 hub 客户端（或换码失败）时如实回 refreshOk=False。
+
+        v1.7.47：body 可带 `{"kind":"member"}` 换**成员码**（面板「添加家人」）。
+        老面板不带 body ⇒ 按 owner 处理（向后兼容）；未知 kind 一律回落 owner，
+        不把面板传来的字符串直接透传给 hub。
+        """
         hass = request.app["hass"]
         client = _hub_client(hass)
         if client is None:
             return self.json({"enabled": False, "refreshOk": False})
-        ok = await client.refresh_bind_code()
+        try:
+            payload = await request.json()
+        except Exception:  # noqa: BLE001 - 无体/坏体一律按 owner 码处理
+            payload = {}
+        kind = "member" if isinstance(payload, dict) and payload.get("kind") == "member" else "owner"
+        ok = await client.refresh_bind_code(kind)
+        if kind == "member":
+            await client.list_members()      # 点「添加家人」后顺手刷新成员列表，省一次往返
         view = client.status_view()
         view["enabled"] = True
         view["refreshOk"] = bool(ok)
         return self.json(view)
+
+
+class WindowGatewayHubMembersView(http.HomeAssistantView):
+    """v1.7.47: 家庭成员列表（掩码 openid + mid 句柄）。
+
+    只读，但**每次都经 hub 取**：成员关系的真相在云端，本地不留副本（留了就会与 hub 分叉）。
+    老 hub 没有 /agent/members ⇒ 回 membersSupported=False，面板据此**禁用**成员区，
+    而不是显示"读取失败"（那会让人以为云通道坏了）。
+    """
+
+    url = "/api/window_controller_gateway/hub/members"
+    name = "api:window_controller_gateway:hub:members"
+
+    async def get(self, request):
+        hass = request.app["hass"]
+        client = _hub_client(hass)
+        if client is None:
+            return self.json({"enabled": False, "ok": False, "members": [], "membersSupported": False})
+        ok = await client.list_members()
+        view = client.status_view()
+        return self.json({
+            "enabled": True,
+            "ok": bool(ok),
+            "ownerMasked": view.get("ownerMasked"),
+            "members": view.get("members") or [],
+            "membersCount": view.get("membersCount"),
+            "membersMax": view.get("membersMax"),
+            "membersSupported": bool(view.get("membersSupported")),
+        })
+
+
+class WindowGatewayHubMemberRemoveView(http.HomeAssistantView):
+    """v1.7.47: 移除一个家庭成员（按 mid）。
+
+    必须是 POST：这是有副作用的写操作（被踢的人立刻失去控制权），不能被"看一眼状态"顺带触发。
+    没有 mid 就不发请求——空 mid 会被 hub 判 unknown_member，白打一次云端端点。
+    """
+
+    url = "/api/window_controller_gateway/hub/members/remove"
+    name = "api:window_controller_gateway:hub:members:remove"
+
+    async def post(self, request):
+        hass = request.app["hass"]
+        client = _hub_client(hass)
+        if client is None:
+            return self.json({"enabled": False, "removedOk": False})
+        try:
+            payload = await request.json()
+        except Exception:  # noqa: BLE001
+            payload = {}
+        mid = str((payload or {}).get("mid") or "")
+        removed = bool(mid) and await client.remove_member(mid)
+        if mid:
+            await client.list_members()      # 踢完刷新，否则面板还显示被踢的人
+        view = client.status_view()
+        return self.json({
+            "enabled": True,
+            "removedOk": bool(removed),
+            "ownerMasked": view.get("ownerMasked"),
+            "members": view.get("members") or [],
+            "membersCount": view.get("membersCount"),
+            "membersMax": view.get("membersMax"),
+            "membersSupported": bool(view.get("membersSupported")),
+        })

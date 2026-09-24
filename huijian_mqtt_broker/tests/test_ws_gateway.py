@@ -185,7 +185,8 @@ class TestDeviceView:
         dev = {"attributes": {"r_travel": 42, "voltage": 10.5}}
         v = device_ws_view("5005A1", "GW1", dev)
         assert v == {"sn": "5005A1", "gwSn": "GW1", "position": 42,
-                     "battery": 105, "state": 1}
+                     "battery": 105, "state": 1, "windLockMode": -1,
+                     "winactSpeed": -1, "winactStrength": -1}
 
     def test_closed(self):
         v = device_ws_view("D", "G", {"attributes": {"r_travel": 0, "voltage": 12.3}})
@@ -193,7 +194,8 @@ class TestDeviceView:
 
     def test_unknown_fields_are_minus_one(self):
         v = device_ws_view("D", "G", {})
-        assert v == {"sn": "D", "gwSn": "G", "position": -1, "battery": -1, "state": -1}
+        assert v == {"sn": "D", "gwSn": "G", "position": -1, "battery": -1, "state": -1,
+                     "windLockMode": -1, "winactSpeed": -1, "winactStrength": -1}
 
     def test_bad_voltage_falls_to_minus_one(self):
         v = device_ws_view("D", "G", {"attributes": {"voltage": "abc", "r_travel": 5}})
@@ -263,7 +265,8 @@ class TestDispatch:
         s = make_server(entries={"GW1": (FakeHandler("GW1"), dm)})
         out = await s.handle_json_message('{"cmd":"get_devices"}')
         assert out == {"type": "device_list", "devices": [
-            {"sn": "5005A", "gwSn": "GW1", "position": 0, "battery": -1, "state": 0}]}
+            {"sn": "5005A", "gwSn": "GW1", "position": 0, "battery": -1, "state": 0,
+             "windLockMode": -1, "winactSpeed": -1, "winactStrength": -1}]}
 
     @pytest.mark.asyncio
     async def test_control_routes_to_owning_gateway_with_raw_args(self):
@@ -481,7 +484,8 @@ class TestSetTokenAndPush:
         s = make_server(entries={"GW1": (FakeHandler("GW1"), dm)})
         p = s._device_update_payload("GW1", "5005A")
         assert p == {"type": "device_update", "gwSn": "GW1", "devSn": "5005A",
-                     "position": 30, "battery": 105, "state": 1, "windLockMode": 1}
+                     "position": 30, "battery": 105, "state": 1, "windLockMode": 1,
+                     "winactSpeed": -1, "winactStrength": -1}
         # 未知网关/设备 → None（不推）
         assert s._device_update_payload("NOPE", "5005A") is None
         assert s._device_update_payload("GW1", "ZZ") is None

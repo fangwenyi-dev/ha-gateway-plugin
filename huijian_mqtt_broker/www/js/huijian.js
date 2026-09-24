@@ -141,6 +141,105 @@
             }
         }
 
+        /** 成员区口径文案（纯函数，便于 node 真跑）。
+         *  四种态必须分开：读不到（—）/ 老 hub 不支持（说清是云端版本旧，不是"读取失败"）/
+         *  只有主人 / N 与上限。把"不支持"显示成"读取失败"会让人以为云通道坏了。*/
+        function membersText(info) {
+            if (!info || info.enabled === false) return '—';
+            if (info.membersSupported === false) return '云端版本过旧，暂不支持';
+            const list = Array.isArray(info.members) ? info.members : [];
+            const max = info.membersMax || 8;
+            if (!list.length) return '只有你一人';
+            return list.length + ' / ' + max + ' 人';
+        }
+
+        function renderMemberQr(code) {
+            const wrap = document.getElementById('hubMemberQr');
+            const box = document.getElementById('hubMemberQrBox');
+            const codeEl = document.getElementById('hubMemberCode');
+            if (!wrap || !box) return;
+            if (!code || !window.HjQr) { wrap.hidden = true; return; }
+            try {
+                // 载荷前缀与 owner 码**完全相同**：角色由 hub 按码查表决定，不写进载荷
+                // （载荷无签名，写了也能被改；hub 查表才提不了权）
+                window.HjQr.render(box, BIND_PAYLOAD_PREFIX + code, { ecc: 'M' });
+            } catch (e) {
+                wrap.hidden = true;          // 生成失败宁可不摆——扫不出来的码比没有码更坏
+                console.log('成员码二维码生成失败:', e);
+                return;
+            }
+            wrap.hidden = false;
+            if (codeEl) codeEl.textContent = code;
+        }
+
+        function renderMembers(info) {
+            const ul = document.getElementById('hubMembers');
+            const empty = document.getElementById('hubMembersEmpty');
+            const countEl = document.getElementById('hubMembersCount');
+            const btn = document.getElementById('addMemberBtn');
+            if (!ul || !countEl) return;
+            const usable = !!info && info.enabled !== false;
+            const supported = usable && info.membersSupported !== false;
+            const list = (usable && Array.isArray(info.members)) ? info.members : [];
+            const max = (usable && info.membersMax) || 8;
+            countEl.textContent = membersText(info);
+            if (empty) {
+                empty.textContent = !usable ? '—' : (supported ? '只有你一人' : '云端 hub 版本过旧，暂不支持添加家人');
+                empty.hidden = supported && list.length > 0;
+            }
+            // 满员 / 老 hub / 读不到状态都要禁用按钮：能点但必然失败，比不能点更让人困惑
+            if (btn) {
+                btn.disabled = !supported || list.length >= max;
+                btn.title = !usable ? '读取不到云端状态'
+                    : (!supported ? '云端 hub 版本过旧，暂不支持添加家人'
+                        : (list.length >= max ? '家庭成员已满（' + max + ' 人），先移除一位才能再加'
+                            : '生成一个 10 分钟有效的一次性成员码'));
+            }
+            ul.textContent = '';
+            for (const m of list) {
+                if (!m || !m.mid) continue;
+                const li = document.createElement('li');
+                const who = document.createElement('span');
+                who.textContent = m.openidMasked || '—';   // 只有掩码：hub 从不回完整 openid
+                const kick = document.createElement('button');
+                kick.type = 'button';
+                kick.className = 'btn btn-ghost btn-mini';
+                kick.textContent = '移除';
+                kick.setAttribute('data-mid', String(m.mid));
+                kick.onclick = function () { removeMember(String(m.mid)); };
+                li.appendChild(who);
+                li.appendChild(kick);
+                ul.appendChild(li);
+            }
+        }
+
+        /** 显式签发成员码（不受自动轮换与节流影响：这是主人的显式意图，
+         *  自动轮换会把已经截图发出去的码作废）。*/
+        async function refreshMemberCode() {
+            try {
+                const resp = await haApi('/window_controller_gateway/hub/bindcode', 'POST', { kind: 'member' });
+                if (!resp.ok) throw new Error('HA API ' + resp.status);
+                applyHubStatus(await resp.json());
+            } catch (e) {
+                console.log('成员码签发失败:', e);
+                await loadRemoteControl();
+            }
+        }
+
+        async function removeMember(mid) {
+            if (!mid) return;
+            if (!confirm('移除后这位家人立刻失去远程控制权，确定？')) return;
+            try {
+                const resp = await haApi('/window_controller_gateway/hub/members/remove', 'POST', { mid: mid });
+                if (!resp.ok) throw new Error('HA API ' + resp.status);
+                applyHubStatus(await resp.json());
+                return;
+            } catch (e) {
+                console.log('移除成员失败:', e);
+            }
+            await loadRemoteControl();
+        }
+
         /** 唯一渲染出口：GET 状态与 POST 换码都走这里，任何一条路径都不会漏渲染。*/
         function applyHubStatus(info, failed) {
             const dot = document.getElementById('hubDot');
@@ -162,6 +261,10 @@
                 if (errEl) { errEl.textContent = ''; errEl.hidden = true; }
                 _bindCode = '';
                 renderBindQr('');
+                renderMemberQr('');
+                renderMembers(null);
+                const memExp0 = document.getElementById('hubMemberExp');
+                if (memExp0) memExp0.textContent = '';
                 return;
             }
             dot.className = 'dot ' + (info.connected ? 'dot-ok' : 'dot-warn');
@@ -192,6 +295,17 @@
                 errEl.hidden = !why;
             }
             renderBindQr(_bindCode);
+            // 成员区与成员码同样只在这里渲染（单一出口纪律：多出口＝总有一条路径漏渲染）
+            renderMemberQr((info.memberCode && !info.memberCodeExpired) ? info.memberCode : '');
+            renderMembers(info);
+            const memExpEl = document.getElementById('hubMemberExp');
+            if (memExpEl) {
+                const memIn = typeof info.memberCodeExpiresIn === 'number' ? info.memberCodeExpiresIn : null;
+                if (!info.memberCode) memExpEl.textContent = '';
+                else if (info.memberCodeExpired || (memIn !== null && memIn <= 0)) memExpEl.textContent = '已过期，点「添加家人」换新码';
+                else if (memIn === null || memIn < 0) memExpEl.textContent = '';
+                else memExpEl.textContent = '剩余 ' + Math.max(1, Math.round(memIn / 60)) + ' 分钟';
+            }
         }
 
         async function loadRemoteControl() {
