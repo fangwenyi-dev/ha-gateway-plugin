@@ -76,7 +76,7 @@ def test_old_hub_without_kind_echo_degrades_and_is_not_used_as_member_code(clien
     assert asyncio.run(client.refresh_bind_code("member")) is False
 
     assert client.member_code is None, "不得把老 hub 回的 owner 码当成员码显示"
-    assert client.last_error == "hub_too_old_for_member_code"
+    assert client.last_op_error == "hub_too_old_for_member_code"
     assert client.members_supported is False
 
 
@@ -119,12 +119,35 @@ def test_list_members_fills_view(client):
 
 
 def test_list_members_on_old_hub_degrades_without_breaking_link(client):
-    _stub_http(client, {"/agent/members": RuntimeError("hub /agent/members -> 404")})
+    """只有 hub 明确"没有这个端点"（404 且体里没给应用级 err）才是老 hub。"""
+    _stub_http(client, {"/agent/members": hc.HubHttpError("/agent/members", 404)})
 
     assert asyncio.run(client.list_members()) is False
 
     assert client.members_supported is False, "老 hub 无此端点 ⇒ 面板要禁用成员区，而不是显示'读取失败'"
-    assert client.last_error == "members_unavailable"
+    assert client.last_op_error == "members_unsupported"
+
+
+def test_list_members_network_failure_is_not_blamed_on_hub_version(client):
+    """瞬时网络失败不得判成"云端版本过旧"：那会让人以为升级云端就能修好一个网络问题。
+
+    旧实现把任何异常都置 members_supported=False ⇒ 面板显示"云端版本过旧，暂不支持"
+    并禁用按钮，而真因只是超时/5xx/断网。
+    """
+    for boom in (RuntimeError("net down"),
+                 hc.HubHttpError("/agent/members", 500),
+                 hc.HubHttpError("/agent/members", 502),
+                 hc.HubHttpError("/agent/members", 404, "unknown_instance")):
+        client.members_supported = True
+        _stub_http(client, {"/agent/members": boom})
+        assert asyncio.run(client.list_members()) is False
+        assert client.members_supported is True, "%r 竟被判成老 hub" % (boom,)
+    assert client.last_op_error == "unknown_instance", "hub 的真实 err 必须原样留着，别压成笼统值"
+
+    client.members_supported = True
+    _stub_http(client, {"/agent/members": RuntimeError("timed out")})
+    asyncio.run(client.list_members())
+    assert client.last_op_error == "members_unavailable"
 
 
 def test_remove_member_sends_mid_and_instance_credentials(client):
@@ -145,8 +168,8 @@ def test_remove_member_failure_does_not_echo_secret(client):
 
     assert asyncio.run(client.remove_member("a" * 12)) is False
 
-    assert client.last_error == "member_remove_failed"
-    assert "sec-1" not in str(client.last_error), "last_error 不得回显凭据"
+    assert client.last_op_error == "member_remove_failed"
+    assert "sec-1" not in str(client.last_op_error), "错误槽不得回显凭据"
 
 
 def test_remove_member_requires_mid(client):
@@ -163,7 +186,8 @@ def test_status_view_exposes_member_keys(client):
         assert key in view, "status_view 缺键 %s（面板拿不到就不会渲染）" % key
     # 既有键一个都不能少（面板与 api 都在用）
     for key in ("connected", "instanceId", "bindCode", "bindCodeExpiresIn",
-                "bindCodeExpired", "gatewaySn", "gateways", "hub", "lastError"):
+                "bindCodeExpired", "gatewaySn", "gateways", "hub", "lastError",
+                "lastOpError", "bindCodeTtlS", "memberCodeTtlS"):
         assert key in view, "status_view 丢了既有键 %s" % key
 
 

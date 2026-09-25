@@ -161,11 +161,16 @@ class WindowGatewayHubView(http.HomeAssistantView):
     name = "api:window_controller_gateway:hub"
 
     async def get(self, request):
-        """返回安装级 hub 的状态；没长连（无网关/未起）如实回 enabled=False。"""
+        """返回安装级 hub 的状态；没长连（无网关/未起）如实回 enabled=False。
+
+        顺带（服务端节流地）刷一次家庭成员：面板只调本路由与两条 POST，从不调只读的
+        /hub/members ⇒ 不刷就永远显示"只有你一人"，看不到也踢不了已有家人。
+        """
         hass = request.app["hass"]
         client = _hub_client(hass)
         if client is None:
             return self.json({"enabled": False})
+        await client.maybe_refresh_members()
         view = client.status_view()
         view["enabled"] = True
         return self.json(view)
@@ -232,6 +237,8 @@ class WindowGatewayHubMembersView(http.HomeAssistantView):
             "membersCount": view.get("membersCount"),
             "membersMax": view.get("membersMax"),
             "membersSupported": bool(view.get("membersSupported")),
+            "lastError": view.get("lastError"),
+            "lastOpError": view.get("lastOpError"),
         })
 
 
@@ -267,4 +274,6 @@ class WindowGatewayHubMemberRemoveView(http.HomeAssistantView):
             "membersCount": view.get("membersCount"),
             "membersMax": view.get("membersMax"),
             "membersSupported": bool(view.get("membersSupported")),
+            "lastError": view.get("lastError"),
+            "lastOpError": view.get("lastOpError"),
         })

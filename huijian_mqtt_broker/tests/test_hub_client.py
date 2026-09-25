@@ -13,11 +13,18 @@ from custom_components.window_controller_gateway import hub_client as hc
 
 # ── 纯函数 ────────────────────────────────────────────────────────
 def test_reconnect_delay_is_exponential_capped():
-    assert hc.hub_reconnect_delay(1) == 5.0
-    assert hc.hub_reconnect_delay(2) == 10.0
-    assert hc.hub_reconnect_delay(3) == 20.0
-    assert hc.hub_reconnect_delay(20) == hc.HUB_RECONNECT_MAX_S     # 封顶 300s
-    assert hc.hub_reconnect_delay(0) == 5.0                        # 0/负数按首次
+    """指数阶梯 + 封顶不变；v1.7.50 起叠了 ±20% 抖动（防 hub pod 重启后多 agent 惊群），
+    所以断言**区间**而不是精确值——但阶梯语义必须还在：后一次的中位数是前一次的两倍。"""
+    for attempt, base in ((1, 5.0), (2, 10.0), (3, 20.0), (4, 40.0)):
+        draws = [hc.hub_reconnect_delay(attempt) for _ in range(200)]
+        lo, hi = base * (1 - hc.HUB_RECONNECT_JITTER), base * (1 + hc.HUB_RECONNECT_JITTER)
+        assert all(lo <= d <= hi for d in draws), (attempt, min(draws), max(draws))
+        assert len(set(round(d, 3) for d in draws)) > 1, "第 %d 次没有抖动＝惊群没修" % attempt
+    for _ in range(200):                                   # 封顶：抖动不许顶穿 MAX
+        assert hc.hub_reconnect_delay(20) <= hc.HUB_RECONNECT_MAX_S
+        assert hc.hub_reconnect_delay(20) >= hc.HUB_RECONNECT_MAX_S * (1 - hc.HUB_RECONNECT_JITTER)
+    assert hc.hub_reconnect_delay(0) >= hc.HUB_RECONNECT_BASE_S * (1 - hc.HUB_RECONNECT_JITTER)
+    assert all(hc.hub_reconnect_delay(n) > 0 for n in range(-3, 30)), "延迟必须恒 > 0"
 
 
 def test_sleep_slices_and_yields_when_stopping(monkeypatch):
@@ -157,8 +164,9 @@ class FakeSession:
         self.posted.append((url, json))
         return FakeResp(self.register_payload)
 
-    def ws_connect(self, url, heartbeat=None):                         # noqa: ARG002
+    def ws_connect(self, url, headers=None, heartbeat=None):           # noqa: ARG002
         self.ws_url = url
+        self.ws_headers = headers
         return FakeCM(self.ws)
 
     async def close(self):
@@ -203,12 +211,17 @@ def test_register_not_repeated_when_identity_exists(tmp_path):
     assert client.instance_id == "abc"
 
 
-def test_ws_url_switches_scheme(tmp_path):
+def test_ws_url_switches_scheme_and_carries_no_credentials(tmp_path):
+    """URL 只负责换 scheme：凭据一律走请求头，绝不进 query（中间层访问日志会留档明文）。"""
     client, _, _ = make_client(tmp_path)
     client.instance_id, client._secret = "abc", "def"
-    assert client._ws_url().startswith("wss://")
+    assert client._ws_url() == "wss://" + hc.HUB_DEFAULT_BASE[len("https://"):] + "/agent/ws"
     client.base = "http://127.0.0.1:8080"
-    assert client._ws_url().startswith("ws://127.0.0.1:8080/agent/ws?instanceId=abc&secret=def")
+    assert client._ws_url() == "ws://127.0.0.1:8080/agent/ws"
+    assert "?" not in client._ws_url(), "长连 URL 不得带 query（secret 会进访问日志）"
+    assert "def" not in client._ws_url() and "abc" not in client._ws_url()
+    assert client._ws_headers() == {hc.WS_HEADER_INSTANCE_ID: "abc", hc.WS_HEADER_SECRET: "def"}
+    assert hc.WS_HEADER_INSTANCE_ID == "x-hub-instance-id" and hc.WS_HEADER_SECRET == "x-hub-secret"
 
 
 def test_collect_state_items_uses_injected_view_and_survives_bad_entries(tmp_path):
@@ -322,7 +335,6 @@ def test_session_once_replies_cmd_result_and_flushes_state(tmp_path, monkeypatch
     async def run():
         client._stopping = False
         client._state_dirty = asyncio.Event()
-        client._send_lock = None
         done = await client._session_once()
         assert done is True
         await asyncio.sleep(0.05)                                       # 让 flush 有机会跑
@@ -462,7 +474,10 @@ def test_bindcode_failure_logs_the_actual_reason(tmp_path, caplog):
     assert asyncio.run(client.refresh_bind_code()) is False
     logs = " ".join(r.getMessage() for r in caplog.records)
     assert "502" in logs, "失败原因（HTTP 状态）必须进日志：%s" % logs
-    assert client.last_error == "bindcode_failed"
+    # v1.7.50：换码失败是**操作类**错误，落 last_op_error（连接类槽留给身份/长连故障，
+    # 否则一次瞬时换码失败就长期盖住 identity_rejected_loop 这条最有诊断价值的信息）
+    assert client.last_op_error == "bindcode_failed"
+    assert client.last_error is None
 
 
 def test_bindcode_failure_never_echoes_credentials(tmp_path, caplog):
@@ -548,7 +563,7 @@ def test_clean_close_reconnects_at_the_floor_not_zero(tmp_path, monkeypatch):
 
 
 def test_connect_failure_still_escalates(tmp_path, monkeypatch):
-    """连都没连上（异常）⇒ 必须走指数阶梯，不能享受地板。"""
+    """连都没连上（异常）⇒ 必须走指数阶梯，不能享受地板。抖动后断言区间。"""
     client, _, _ = make_client(tmp_path)
     delays = []
     rounds = {"i": 0}
@@ -565,8 +580,11 @@ def test_connect_failure_still_escalates(tmp_path, monkeypatch):
     monkeypatch.setattr(client, "_session_once", boom_session)
     monkeypatch.setattr(hc, "interruptible_sleep", fake_sleep)
     asyncio.run(client._run_forever())
-    assert delays == [hc.HUB_RECONNECT_BASE_S, hc.HUB_RECONNECT_BASE_S * 2], \
-        "连不上必须指数退避，实得 %s" % delays
+    assert len(delays) == 2, delays
+    for got, base in zip(delays, (hc.HUB_RECONNECT_BASE_S, hc.HUB_RECONNECT_BASE_S * 2)):
+        assert base * (1 - hc.HUB_RECONNECT_JITTER) <= got <= base * (1 + hc.HUB_RECONNECT_JITTER), \
+            "连不上必须指数退避（%s±20%%），实得 %s" % (base, got)
+    assert delays[1] > delays[0] * 0.9, "阶梯必须递增，实得 %s" % delays
 
 
 def test_reconnect_floor_is_positive():
@@ -575,18 +593,28 @@ def test_reconnect_floor_is_positive():
     assert hc.HUB_RECONNECT_FLOOR_S < hc.HUB_RECONNECT_BASE_S
 
 
-def test_renew_is_wired_into_session_and_keepalive():
-    """防死码凑数：自动补发必须真接在"上线自检"与"保活 tick"两条活路径上。"""
+def test_renew_is_wired_into_keepalive_and_off_the_receive_path():
+    """防死码凑数：自动补发必须真接在活路径（保活 task）上。
+
+    v1.7.50 起换码自检从 `_session_once` 挪进 `_keepalive_loop`：那是 HTTP，最坏等
+    HUB_HTTP_TIMEOUT_S=15s，挡在接收循环前＝上线首 15s 内下行命令一律不被处理。
+    所以两条钉：保活循环里必须有它（否则补发变死码），接收循环那条路上必须没有它。
+    """
     tree = ast.parse(inspect.getsource(hc))
-    want = {"_session_once", "_keepalive_loop"}
-    found = {}
+    bodies = {}
     for node in ast.walk(tree):
-        if isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef)) and node.name in want:
-            found[node.name] = any(
+        if isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef)):
+            bodies[node.name] = any(
                 isinstance(n, ast.Attribute) and n.attr == "_renew_bind_code_if_stale"
                 for n in ast.walk(node)
             )
-    assert found == {"_session_once": True, "_keepalive_loop": True}, found
+    assert bodies.get("_keepalive_loop") is True, "保活循环没接自动补发＝死码（面板会显示过期码）"
+    assert bodies.get("_session_once") is False, \
+        "_session_once 又内联换码了：HTTP 最坏 15s，会挡住接收循环（上线首 15s 下行命令不处理）"
+    # 保活 task 必须真被会话拉起来（否则上面那条"接在保活里"等于没接）
+    session_src = inspect.getsource(hc.HubClient._session_once)
+    assert "_keepalive_loop()" in session_src, "_session_once 没起保活 task＝补发路径断了"
+    assert "gather(flush, keepalive" in session_src, "保活 task 没被回收＝孤儿 task"
 
 
 # ── 身份被云端拒绝后的自愈（v1.7.42）────────────────────────────────
@@ -612,9 +640,10 @@ class ScriptedSession(FakeSession):
             return FakeResp(self.payloads.pop(0))
         return FakeResp(self.register_payload)
 
-    def ws_connect(self, url, heartbeat=None):                         # noqa: ARG002
+    def ws_connect(self, url, headers=None, heartbeat=None):           # noqa: ARG002
         self.ws_attempts += 1
         self.ws_url = url
+        self.ws_headers = headers
         kind = self.script.pop(0) if self.script else None
         if kind is None:
             return FakeCM(self.ws)

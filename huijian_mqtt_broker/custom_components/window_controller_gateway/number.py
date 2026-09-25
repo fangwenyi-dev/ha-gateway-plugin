@@ -42,7 +42,6 @@ class WindowControllerRangeNumber(WindowControllerBaseEntity, NumberEntity):
     - _entity_icon: 图标
     - _command: 发送命令（COMMAND_SET_SPEED / COMMAND_SET_STRENGTH）
     - _param_key: send_command 的参数字段（speed / strength）
-    - _state_key: 设备属性中回显的键（winact_speed / winact_strength）
     """
 
     _entity_suffix = ""
@@ -50,7 +49,6 @@ class WindowControllerRangeNumber(WindowControllerBaseEntity, NumberEntity):
     _entity_icon = ""
     _command = ""
     _param_key = ""
-    _state_key = ""
 
     def __init__(
         self,
@@ -116,6 +114,7 @@ class WindowControllerRangeNumber(WindowControllerBaseEntity, NumberEntity):
 
         注意：不读取 005 上报的运行时值——网关空闲时上报 0，
         若以运行时值回显，重新进入界面后滑块会跳回 0。
+        HA 侧显示 setpoint、小程序侧显示设备回传值（winact_speed/strength），这是刻意分叉。
         """
         value = self._read_setpoint()
         if value is not None:
@@ -230,7 +229,6 @@ class WindowControllerSpeedNumber(WindowControllerRangeNumber):
     _entity_icon = "mdi:speedometer"
     _command = COMMAND_SET_SPEED
     _param_key = "speed"
-    _state_key = "winact_speed"
 
 
 class WindowControllerStrengthNumber(WindowControllerRangeNumber):
@@ -241,7 +239,6 @@ class WindowControllerStrengthNumber(WindowControllerRangeNumber):
     _entity_icon = "mdi:arm-flex"
     _command = COMMAND_SET_STRENGTH
     _param_key = "strength"
-    _state_key = "winact_strength"
 
 
 # 所有数值调节实体类（新增 rwp_winact_* 参数时在此追加）

@@ -83,9 +83,17 @@ def start_hub():
     return _hub
 
 
-async def http_json(method, path, payload=None):
+async def http_json(method, path, payload=None, openid_in_body=False):
+    """按**生产口径**发请求：云托管是把调用者 openid 注入 `x-wx-openid` 头，
+    而 hub 默认不认 body.openid（那是 HUB_TRUST_BODY_OPENID 联调开关，生产不开）。
+    e2e 若继续用 body 传身份，测的就是一条线上根本不存在的路径——门控一关就全红。
+    openid_in_body=True 只给"验证生产门控确实关着"那一条臂用。"""
+    body = dict(payload or {})
+    headers = {}
+    if not openid_in_body and "openid" in body:
+        headers["x-wx-openid"] = str(body.pop("openid"))
     async with aiohttp.ClientSession() as s:
-        async with s.request(method, BASE + path, json=payload or {}) as r:
+        async with s.request(method, BASE + path, json=body, headers=headers) as r:
             try:
                 return r.status, await r.json(content_type=None)
             except Exception:  # noqa: BLE001
@@ -178,6 +186,13 @@ async def main():
               "connected=%s code_len=%s err=%s" % (client.connected, len(code_a or ""), client.last_error))
         st, body = await http_json("POST", "/bind", {"bindCode": code_a, "openid": OPENID})
         check("A /bind 接受注册时下发的码", st == 200 and body.get("ok"), "%s %s" % (st, body))
+        # 生产门控：hub 只认云托管注入的 x-wx-openid 头；body.openid 不算身份。
+        # 少了这条，"任何人可在公网自选身份"的回归不会被真栈发现（hub 侧 401 先于查码，
+        # 所以用废码即可，不消耗任何真实码）。
+        st_f, body_f = await http_json("POST", "/bind", {"bindCode": "000000", "openid": OPENID},
+                                       openid_in_body=True)
+        check("A2 body.openid 不被当作身份（生产门控默认关，公网伪造身份打不进）",
+              st_f == 401 and body_f.get("err") == "no_openid", "%s %s" % (st_f, body_f))
         st, body = await http_json("POST", "/state", {"instanceId": inst_a, "openid": OPENID})
         check("A 绑定后 /state 可取（owns 判定通过）", st == 200 and body.get("ok"), "%s %s" % (st, body))
 

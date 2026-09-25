@@ -123,30 +123,90 @@
                 gws.map((g) => g.sn).join('、') + '）';
         }
 
-        /** 云通道故障原因文案（纯函数，便于 node 真跑）。
+        /** 云通道**连接类**故障文案（纯函数，便于 node 真跑）。
          *  只映射 hub_client.last_error 的已知取值；未知的一律回 ''（不显示）——
-         *  面板是给终端用户看的，把异常类名（RuntimeError 之类）摆上去只是噪声。*/
+         *  面板是给终端用户看的，把异常类名（RuntimeError 之类）摆上去只是噪声。
+         *  换码/成员/踢人这类**操作**故障走 hubOpErrorText（两个槽分开，见下）。*/
         function hubErrorText(lastError) {
             switch (lastError) {
                 case 'identity_rejected':
                     return '云端不认识本机身份，已自动重新注册——需要重新扫码绑定';
                 case 'identity_rejected_loop':
                     return '云端反复拒绝本机身份，已停止重试（多见于 hub 多副本或注册表未持久化）';
-                case 'bindcode_failed':
-                    return '换绑定码失败（云端暂不可达），页面上的码可能已过期';
-                case 'bindcode_rejected':
-                    return '云端拒绝换绑定码请求，稍后再试或点二维码重试';
                 default:
                     return '';
             }
         }
 
+        /** 云通道**操作类**故障文案（换码 / 成员 / 踢人）。
+         *  值优先是 hub 回的真实 err（no_owner/members_full/rate_limited/…），
+         *  只有拿不到 err 的网络降级才是本地值（bindcode_failed/members_unavailable）。
+         *  为什么必须分开一个槽：混在连接类里时，一次瞬时换码失败会长期盖住
+         *  identity_rejected_loop 这条最有诊断价值的信息，而且所有成功路径都不清它
+         *  ⇒ 面板会在一张刚签发的有效码旁边一直喊"码可能已过期"。
+         *  未知码回 ''（不显示）：终端用户看到裸英文码只是噪声。*/
+        function hubOpErrorText(opError) {
+            switch (opError) {
+                case 'no_owner':
+                    return '这处安装还没有主人：请先自己扫右边的二维码成为主人，再点「添加家人」';
+                case 'members_full':
+                    return '家庭成员已满，先移除一位才能再加';
+                case 'rate_limited':
+                    return '云端限流，请稍后再试';
+                case 'registry_full':
+                    return '云端实例表已满，暂时无法注册/换码——请联系慧尖';
+                case 'superseded':
+                    return '这次请求已被更新的请求取代，请重试';
+                case 'bad_secret':
+                    return '云端不认识本机凭据（注册表可能已重置），稍后会自动重新注册——需要重新扫码绑定';
+                case 'unknown_instance':
+                    return '云端已没有本机实例（注册表可能已重置），稍后会自动重新注册——需要重新扫码绑定';
+                case 'unknown_member':
+                    return '云端没有这位家人（可能已被移除），列表即将刷新';
+                case 'owner_cannot_leave':
+                    return '主人不能移除自己（否则这处安装就没人能管成员了）';
+                case 'bindcode_failed':
+                    return '换绑定码失败（云端暂不可达），页面上的码可能已过期';
+                case 'bindcode_rejected':
+                    return '云端拒绝换绑定码请求，稍后再试或点二维码重试';
+                case 'hub_too_old_for_member_code':
+                    return '云端 hub 版本过旧，暂不支持成员码';
+                case 'members_unavailable':
+                    return '家庭成员读取失败（云端暂不可达），请稍后重试';
+                case 'members_rejected':
+                    return '云端拒绝读取家庭成员，请稍后重试';
+                case 'member_remove_failed':
+                    return '移除家人失败（云端暂不可达），请稍后重试';
+                case 'member_remove_rejected':
+                    return '云端拒绝移除这位家人';
+                default:
+                    return '';
+            }
+        }
+
+        /** 有效期文案的分钟数：优先用服务端回的 TTL 秒数，缺失/非法才回落字面量。
+         *  hub 改了有效期之后，硬编的"10 分钟"就是对用户说谎——他会照着去扫一张
+         *  云端早已作废的码，然后只看到 code_invalid。*/
+        function ttlMinutes(ttlSec, fallbackMin) {
+            const n = Number(ttlSec);
+            if (!isFinite(n) || n <= 0) return fallbackMin;
+            return Math.max(1, Math.round(n / 60));
+        }
+
+        /** 成员列表是不是"读取失败"（网络/云端拒绝）——必须与"云端版本过旧"分成两句话，
+         *  否则用户会去升级云端来修一个网络问题（或反过来以为云通道坏了）。*/
+        function membersReadFailed(info) {
+            const e = info && info.lastOpError;
+            return e === 'members_unavailable' || e === 'members_rejected';
+        }
+
         /** 成员区口径文案（纯函数，便于 node 真跑）。
-         *  四种态必须分开：读不到（—）/ 老 hub 不支持（说清是云端版本旧，不是"读取失败"）/
-         *  只有主人 / N 与上限。把"不支持"显示成"读取失败"会让人以为云通道坏了。*/
+         *  五种态必须分开：读不到（—）/ 老 hub 不支持（说清是云端版本旧）/ 读取失败
+         *  （说清是网络，稍后重试）/ 只有主人 / N 与上限。*/
         function membersText(info) {
             if (!info || info.enabled === false) return '—';
             if (info.membersSupported === false) return '云端版本过旧，暂不支持';
+            if (membersReadFailed(info)) return '读取失败，稍后重试';
             const list = Array.isArray(info.members) ? info.members : [];
             const max = info.membersMax || 8;
             if (!list.length) return '只有你一人';
@@ -180,20 +240,26 @@
             if (!ul || !countEl) return;
             const usable = !!info && info.enabled !== false;
             const supported = usable && info.membersSupported !== false;
+            const readFailed = usable && membersReadFailed(info);
             const list = (usable && Array.isArray(info.members)) ? info.members : [];
             const max = (usable && info.membersMax) || 8;
             countEl.textContent = membersText(info);
             if (empty) {
-                empty.textContent = !usable ? '—' : (supported ? '只有你一人' : '云端 hub 版本过旧，暂不支持添加家人');
-                empty.hidden = supported && list.length > 0;
+                empty.textContent = !usable ? '—'
+                    : (!supported ? '云端 hub 版本过旧，暂不支持添加家人'
+                        : (readFailed ? '成员列表读取失败（云端暂不可达），稍后自动重试'
+                            : '只有你一人'));
+                empty.hidden = supported && !readFailed && list.length > 0;
             }
-            // 满员 / 老 hub / 读不到状态都要禁用按钮：能点但必然失败，比不能点更让人困惑
+            // 满员 / 老 hub / 读不到状态都要禁用按钮：能点但必然失败，比不能点更让人困惑。
+            // 读取失败（网络）不禁用——那是瞬时的，禁了用户反而以为功能没了。
             if (btn) {
                 btn.disabled = !supported || list.length >= max;
                 btn.title = !usable ? '读取不到云端状态'
                     : (!supported ? '云端 hub 版本过旧，暂不支持添加家人'
                         : (list.length >= max ? '家庭成员已满（' + max + ' 人），先移除一位才能再加'
-                            : '生成一个 10 分钟有效的一次性成员码'));
+                            : '生成一个 ' + ttlMinutes(usable && info.memberCodeTtlS, 10)
+                              + ' 分钟有效的一次性成员码'));
             }
             ul.textContent = '';
             for (const m of list) {
@@ -289,11 +355,15 @@
             }
             if (errEl) {
                 // 有原因就摆出来（哪怕长连是通的）：换码失败这类问题不会断开长连，
-                // 但用户看到的就是一张扫不出来的死码，此前只能去翻 HA 日志
-                const why = hubErrorText(info.lastError);
+                // 但用户看到的就是一张扫不出来的死码，此前只能去翻 HA 日志。
+                // **操作类优先**：它是用户刚刚那一下的结果，比后台的连接类状态更要紧。
+                const why = hubOpErrorText(info.lastOpError) || hubErrorText(info.lastError);
                 errEl.textContent = why;
                 errEl.hidden = !why;
             }
+            // 有效期文案跟服务端回的 TTL 走（硬编"10 分钟"在 hub 改了 TTL 后就是假话）
+            const ttlEl = document.getElementById('hubCodeTtl');
+            if (ttlEl) ttlEl.textContent = ttlMinutes(info.bindCodeTtlS, 10) + ' 分钟';
             renderBindQr(_bindCode);
             // 成员区与成员码同样只在这里渲染（单一出口纪律：多出口＝总有一条路径漏渲染）
             renderMemberQr((info.memberCode && !info.memberCodeExpired) ? info.memberCode : '');
@@ -305,6 +375,11 @@
                 else if (info.memberCodeExpired || (memIn !== null && memIn <= 0)) memExpEl.textContent = '已过期，点「添加家人」换新码';
                 else if (memIn === null || memIn < 0) memExpEl.textContent = '';
                 else memExpEl.textContent = '剩余 ' + Math.max(1, Math.round(memIn / 60)) + ' 分钟';
+            }
+            const memTipEl = document.getElementById('hubMemberTip');
+            if (memTipEl) {
+                memTipEl.textContent = '家人用「小慧语音」扫一扫；'
+                    + ttlMinutes(info.memberCodeTtlS, 10) + ' 分钟内有效，扫完即失效';
             }
         }
 
@@ -354,6 +429,9 @@
             _silentRefreshing = true;
             try {
             await checkServiceStatus();
+            // hub 卡也要刷：此前只刷设备 ⇒ 连接状态点、二维码、码倒计时全会陈旧
+            // （后台标签的跳过语义在 setInterval 那一侧，这里不再判一次 document.hidden）
+            await loadRemoteControl();
             // 遍历页面上已有的网关卡片，只更新设备状态
             const container = document.getElementById('gatewayContainer');
             if (!container) return;

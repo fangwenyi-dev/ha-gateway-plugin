@@ -3,6 +3,30 @@
 所有版本变更记录在此文件中。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.7.50] - 2026-09-25
+
+三仓联审（加载项 / hub / 小程序）查出的确证缺陷批，本仓 10 条 + 跨仓契约钉 28 → 55 条。配套 hub **v0.2.6**（已部署上线并核验）/ 小程序 **v1.4.29**。**发版顺序：hub 必须先上**——本版长连凭据只发请求头，靠 hub v0.2.6 保留的 query 兜底才不会把已装机用户断开；顺序反了新加载项连不上。
+
+**一、面板「家庭成员」列表恒为空（功能半坏）**。面板只调 GET /hub 与两条 POST，**从不调**那条专用的只读路由 /hub/members，而 status_view 回的是内存里的 self.members（只在 list_members 里被写）⇒ HA 每次重启后打开面板一律显示"只有你一人"、count=0，**看不到也踢不了任何已有家人**，直到点一次「添加家人」才顺带刷准。修：GET /hub 在 connected 且 members_supported 时带**服务端节流**（MEMBERS_REFRESH_MIN_INTERVAL_S=120，成败都算一次，防并发 GET 同时打云端）触发一次 list_members；面板不开就完全不产生调用，老 hub 不触发（那只会白拿一个 404）。另把 loadRemoteControl 纳入 30s silentRefresh（此前只刷设备 ⇒ 连接状态点、二维码、码倒计时全会陈旧），后台标签的跳过语义仍在 setInterval 那侧，不新增后台空转。
+
+**二、身份文件并发写竞态（v1.7.49 移线程池时引入的回归）**。save_identity 用**固定** tmp 名，而 _save_identity 改成 asyncio.to_thread 后两个协程可真并发写同一个 .tmp（改动前是事件循环里的同步调用，单线程天然串行、不可能竞态）⇒ 交错截断 ⇒ 落地半截 JSON ⇒ load_identity 判损坏改名 .bad ⇒ 重新注册 ⇒ **换 instanceId、作废所有人手上的绑定码、云端多一条孤儿**。最易触发是面板连点两次二维码（显式换码刻意不受 120s 节流）。修两道：实例级 asyncio.Lock（按 loop 重建，防绑到已死循环）+ tmp 名唯一（tempfile.mkstemp）。仓内早有先例：persist.py 的 _save_lock 注释原话就是"确保不会有两个协程同时写同一个 .tmp 文件"。
+
+**三、面板错误呈现三处**。① hub 对无主人实例回 no_owner，加载项把它压成 bindcode_rejected（真实 err 只进日志不进视图）⇒ 面板显示"稍后再试或点二维码重试"，而新装用户先点「添加家人」再扫码就会撞上，**重试永远不会成功**（正解是"先自己扫码成为主人"）。② last_error 有 8 个失败写入点但**只有 WS 连上会清**，所有成功路径都不清 ⇒ 一次瞬时失败后面板长期在一张**刚签发的有效二维码旁边**显示"换绑定码失败，页面上的码可能已过期"；同一个槽还让面板操作失败掩盖掉 identity_rejected_loop 这条最有诊断价值的信息。③ 成员类错误码全不在 hubErrorText 的 4 条映射里 ⇒ 点「移除」失败时用户看到"确认框关了、什么都没发生"。修：错误槽**拆 conn / op 两个**（lastError 只留连接类；新增 lastOpError 操作类、**对应操作成功即清零**、并保留 hub 的真实 err 不再压成笼统值），面板拆 hubErrorText / hubOpErrorText 两个纯函数、操作类优先、仍走唯一出口 applyHubStatus；覆盖 no_owner / members_full / rate_limited / registry_full / superseded / bad_secret / unknown_instance / unknown_member / owner_cannot_leave 与全部本地降级值。
+
+**四、list_members 把瞬时网络失败判成"云端版本过旧"**⇒ 面板显示"云端版本过旧，暂不支持"并禁用按钮，而真因是网络。修：给 _http 加带 status 属性的 HubHttpError（**继承 RuntimeError**，既有 pytest.raises 不受影响），只有 hub 明确 **404** 才置 members_supported=False，其余走独立网络错误态、文案区分"读取失败，稍后重试"与"版本过旧"。**不靠字符串解析错误消息**。
+
+**五、加载项无视 hub 回的权威值**。hub 回 expiresInSec 与 membersMax，加载项两个都丢掉、改用自己的 BIND_CODE_TTL_S=600 与 HUB_MEMBERS_MAX；面板还把"10 分钟""8 人"写死 ⇒ hub 一改 TTL，面板就对着一张云端已作废的码继续倒计时，用户扫到 code_invalid 且无人解释。修：一律**优先采用云端值、本地常量只兜底**；index.html 的"10 分钟"包进 #hubCodeTtl 由 JS 按 bindCodeTtlS 覆写（字面量留作兜底）。
+
+**六、长连凭据不再进 URL query**。secret 走 query 就会被任何记 request line 的中间层留档（云托管访问日志、反代、错误上报），与"凭据不回显"纪律相悖（HTTP 的 /agent/* 一直走 body，唯独 WS 例外）；另一隐患是 aiohttp 的 ClientResponseError.__str__ 带完整 URL，将来谁写一句 str(e) 就把 secret 送进 HA 日志。修：改走请求头 x-hub-instance-id / x-hub-secret。**线上已实证自定义头能穿过云托管网关**（带 x-wx-openid → code_invalid，不带 → no_openid），且老加载项的 query 写法在 hub v0.2.6 上照常连上。
+
+**七、小修一批**。_send_lock 此前创建后**从不使用**（死码），而状态上行与命令回执是两个并发 task 写同一条 ws ⇒ 收敛到唯一出口 _send_json 并真正加锁（今天靠 aiohttp 非压缩帧的同步 write 侥幸不交错，协商上 permessage-deflate 就不是了）；async_stop 不再吞 CancelledError；退避加 ±20% 抖动防惊群（hub pod 重启后多台 agent 同步 5/10/20… 重试），地板语义不受抖动影响；上线自检的换码从"挡在接收循环前"挪进保活 task（此前最坏 15s 内下行命令不被处理）；_ensure_registered 改 .get + 明确的 register incomplete；删掉 number.py 里从不被读取的死属性 _state_key，并在 docstring 写明"HA 侧显示 setpoint、小程序侧显示设备回传值"是刻意分叉。
+
+**八、跨仓契约钉 28 → 55 条（本批最重要的一项）**。原 28 条全过，却**放走了一个真缺陷**：小程序云缓存层 gw-router 丢掉了 winactSpeed/winactStrength，而钉只 grep 了 cloud-gw.js——字符串在、值不在，**字符串存在性证明不了数据流贯通**。补：/agent/register 端点（4 个 agent 端点此前只钉 3 个）、**WS 消息词汇**（t:cmd/cmd_result/state、cmdsn、items、params.attribute）、**两条通道故意不同的判别键**（LAN cmd:'control' ↔ 云 action:'control'，谁"顺手统一"就静默断一边）、绑定码 TTL 三处对账（hub 600000ms / 加载项 600s 兜底 / 面板文案）、加载项产的 4 个控制错误码在小程序必须有中文文案、hub 三个新码在面板必须有文案、WS 凭据头名两侧逐字一致 + **hub 的 query 兜底不许被清理**（发版顺序安全网）、加载项必须优先采用 hub 的 expiresInSec/membersMax、winact* 必须走到 gw-router 云缓存层。并把 `grep -qF 'mid'` 这类会被注释与 middle/amid 满足的弱匹配改成精确形态。**6 条变异核验全咬**（影子树全量替换 + 按字节解码，跑完即删）。
+
+**九、真栈 e2e harness 改到生产口径（34 → 35 臂）**。hub 那条 openid 生产门控一加，真栈 e2e 当场红 **20/34**（满屏 401 no_openid / 403 forbidden）——根因是 harness 一直用 body.openid 传身份，**在测一条线上根本不存在的路径**。修法不是给 e2e 开联调开关（那会让它继续测假路径），而是让 http_json 按生产口径把 openid 注入 x-wx-openid 头：20 处调用点一行未改，并新增 A2 臂专钉"只带 body.openid 必须 401"，把门控本身钉进真栈；防稀释计数下限同步抬到精确值。
+
+门禁：pytest **1078**（1006+72）、ruff（CI 同款 F,E9,B --ignore B008,B905，四目标）、compileall、py_compile、node --check、bash -n（9 个脚本）、YAML 6 / JSON 63 解析、版本四源与 5 处 cache-buster=1.7.50 全绿；**CI 的 E2E real stack 硬门禁本地补跑通过**（本机无 Docker，改走 WSL 里的 HA Core venv + mosquitto 跑 run_local.sh，与 CI 同一份 ha_e2e_driver.py：真 async_setup_entry、MQTT→handler→registry→REST 全链路、cover 真发 004、WS 端口监听、零点击自动添加、500 条 002 soak ~199/s 后 HA 仍正常）；跨仓契约钉 **55/55**；跨仓真栈 e2e **35/35**；hub npm test **91**；小程序 npm test **327**。另抓到一条钉自己假绿：面板"除唯一出口外不许有人渲染操作错误"扫到了**自己的函数签名**（_fn 返回的源码含 `function hubOpErrorText(`）⇒ 恒红；改成扫函数体，并变异核验它仍会咬（把调用塞进 renderMembers → 只那一条红）。
+
 ## [1.7.49] - 2026-09-24
 
 两处** hub 长连可靠性**修复，源自真机一次"换 pod 后远程控制整条断、必须人工重启集成"的事故复盘。

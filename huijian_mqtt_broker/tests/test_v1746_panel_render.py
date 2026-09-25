@@ -40,7 +40,8 @@ def _body(name):
 
 
 # applyHubStatus 会调到的渲染函数，一个都不能少（少了 node 会 ReferenceError 崩）
-DEPS = ("hubGatewayText", "hubErrorText", "membersText", "renderMemberQr", "renderMembers")
+DEPS = ("hubGatewayText", "hubErrorText", "hubOpErrorText", "ttlMinutes", "membersReadFailed",
+        "membersText", "renderMemberQr", "renderMembers")
 
 HARNESS_HEAD = """
 // ── 最小假 DOM：只有面板真实存在的那几个 id 会被返回，其余回 null ──
@@ -49,8 +50,8 @@ const qrCalls = [];
 const memberQrCalls = [];
 function renderBindQr(code) { qrCalls.push(code); }
 const KNOWN = ['hubDot', 'hubStatus', 'hubCode', 'hubGateway', 'hubGwDot', 'hubCodeExp', 'hubError',
-               'hubMembersCount', 'hubMembersEmpty', 'hubMembers', 'addMemberBtn', 'hubMemberQr',
-               'hubMemberQrBox', 'hubMemberCode', 'hubMemberExp'];
+               'hubCodeTtl', 'hubMembersCount', 'hubMembersEmpty', 'hubMembers', 'addMemberBtn',
+               'hubMemberQr', 'hubMemberQrBox', 'hubMemberCode', 'hubMemberExp', 'hubMemberTip'];
 const els = {};
 function mk(id) {
   return els[id] = els[id] || {
@@ -106,7 +107,8 @@ want(els.hubMemberExp.textContent.indexOf('剩余 7 分钟') === 0, '成员码�
 reset();
 applyHubStatus({
   enabled: true, connected: false, bindCode: '654321', bindCodeExpiresIn: -10,
-  bindCodeExpired: true, gatewaySn: '', gateways: [], lastError: 'bindcode_failed',
+  bindCodeExpired: true, gatewaySn: '', gateways: [], lastError: null,
+  lastOpError: 'bindcode_failed',
   members: [], membersMax: 8, membersSupported: true
 }, false);
 want(els.hubStatus.textContent === '未连接', '连接态: ' + els.hubStatus.textContent);
@@ -149,6 +151,56 @@ applyHubStatus({ enabled: true, connected: true, bindCode: '111111', bindCodeExp
                  members: [], membersMax: 8, membersSupported: false }, false);
 want(els.hubMembersCount.textContent === '云端版本过旧，暂不支持', '老 hub 文案: ' + els.hubMembersCount.textContent);
 want(els.addMemberBtn.disabled === true, '老 hub 必须禁用「添加家人」');
+want(els.hubError.hidden === true, '老 hub 不该在错误行喊话（成员区自己说清了）: ' + els.hubError.textContent);
+
+// 场景 7：成员读取失败（网络）≠ 云端版本过旧——两句话必须分开，且按钮不禁用
+reset();
+applyHubStatus({ enabled: true, connected: true, bindCode: '111111', bindCodeExpiresIn: 60,
+                 bindCodeExpired: false, gatewaySn: 'GW1', gateways: [], lastError: null,
+                 lastOpError: 'members_unavailable',
+                 members: [], membersMax: 8, membersSupported: true }, false);
+want(els.hubMembersCount.textContent === '读取失败，稍后重试', '网络失败文案: ' + els.hubMembersCount.textContent);
+want(/读取失败/.test(els.hubMembersEmpty.textContent), '成员区要说清是读取失败: ' + els.hubMembersEmpty.textContent);
+want(!/版本过旧/.test(els.hubMembersCount.textContent + els.hubMembersEmpty.textContent),
+     '网络失败不得说成"云端版本过旧"（用户会去升级云端修一个网络问题）');
+want(els.addMemberBtn.disabled === false, '瞬时网络失败不该禁用按钮');
+want(els.hubError.hidden === false && /读取失败/.test(els.hubError.textContent),
+     '错误行要给出成员读取失败的原因: ' + els.hubError.textContent);
+
+// 场景 8：操作类错误优先于连接类；hub 的真实 err（no_owner）必须有自己的话
+reset();
+applyHubStatus({ enabled: true, connected: true, bindCode: '111111', bindCodeExpiresIn: 60,
+                 bindCodeExpired: false, gatewaySn: 'GW1', gateways: [],
+                 lastError: 'identity_rejected', lastOpError: 'no_owner',
+                 members: [], membersMax: 8, membersSupported: true }, false);
+want(/还没有主人/.test(els.hubError.textContent), 'no_owner 必须指路"先自己扫码成为主人": ' + els.hubError.textContent);
+want(!/重新注册/.test(els.hubError.textContent), '操作类错误应优先显示: ' + els.hubError.textContent);
+
+// 场景 9：只有连接类错误时照常显示（操作类槽空不得把它吃掉）
+reset();
+applyHubStatus({ enabled: true, connected: false, bindCode: '111111', bindCodeExpiresIn: 60,
+                 bindCodeExpired: false, gatewaySn: 'GW1', gateways: [],
+                 lastError: 'identity_rejected_loop', lastOpError: null,
+                 members: [], membersMax: 8, membersSupported: true }, false);
+want(/反复拒绝/.test(els.hubError.textContent), '连接类错误仍要显示: ' + els.hubError.textContent);
+
+// 场景 10：有效期文案跟服务端 TTL 走（硬编"10 分钟"在 hub 改 TTL 后就是假话）
+reset();
+applyHubStatus({ enabled: true, connected: true, bindCode: '111111', bindCodeExpiresIn: 200,
+                 bindCodeExpired: false, bindCodeTtlS: 300, memberCodeTtlS: 300,
+                 gatewaySn: 'GW1', gateways: [], lastError: null,
+                 memberCode: '222222', memberCodeExpiresIn: 200, memberCodeExpired: false,
+                 members: [], membersMax: 8, membersSupported: true }, false);
+want(els.hubCodeTtl.textContent === '5 分钟', 'TTL 文案应取服务端值: ' + els.hubCodeTtl.textContent);
+want(/5 分钟内有效/.test(els.hubMemberTip.textContent), '成员码提示应取服务端 TTL: ' + els.hubMemberTip.textContent);
+reset();
+applyHubStatus({ enabled: true, connected: true, bindCode: '111111', bindCodeExpiresIn: 200,
+                 bindCodeExpired: false, gatewaySn: 'GW1', gateways: [], lastError: null,
+                 members: [{ mid: 'a'.repeat(12), openidMasked: 'oFa…02', at: 1 }],
+                 membersMax: 6, membersSupported: true }, false);
+want(els.hubCodeTtl.textContent === '10 分钟', '服务端没给 TTL 才回落字面量: ' + els.hubCodeTtl.textContent);
+want(els.hubMembersCount.textContent === '1 / 6 人',
+     '成员上限也要取服务端值（hub 改了上限后 8 就是假话）: ' + els.hubMembersCount.textContent);
 
 if (bad) { console.log('applyHubStatus 真跑: ' + bad + ' 处不符'); process.exit(1) }
 console.log('OK');

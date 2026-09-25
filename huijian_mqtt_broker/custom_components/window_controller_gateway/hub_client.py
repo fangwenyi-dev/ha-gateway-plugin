@@ -24,13 +24,31 @@ import asyncio
 import json
 import logging
 import os
+import random
 import re
+import tempfile
 import time
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 import aiohttp
 
 _LOGGER = logging.getLogger(__name__)
+
+
+class HubHttpError(RuntimeError):
+    """hub 回了非 200：带 `status` 与 hub 自己的 `err`，调用方按状态码分支。
+
+    继承 RuntimeError 是刻意的（既有调用点与测试都按 RuntimeError 兜），但判据必须走
+    `status`/`err` 属性——从 `str(e)` 里 grep "404" 一旦消息措辞变了就静默判错。
+    `err` 是 hub 响应体里的应用级错误码（如 unknown_instance/bad_secret），
+    非 JSON 响应体（反代错误页）时为 None。
+    """
+
+    def __init__(self, path: str, status: int, err: Optional[str] = None) -> None:
+        super().__init__("hub %s -> %d" % (path, status))
+        self.path = path
+        self.status = int(status)
+        self.err = err if isinstance(err, str) and err else None
 
 # 慧尖云 hub 默认端点（P0）。客户零配置：加载项内置默认值，慧尖换域名只改默认值或
 # entry.options 覆盖（hub_base / hub_install_key）。
@@ -63,32 +81,56 @@ def resolve_hub_base(option_value: str = "", env: Optional[Dict[str, str]] = Non
 HUB_RECONNECT_BASE_S = 5.0
 HUB_RECONNECT_MAX_S = 300.0
 HUB_RECONNECT_FLOOR_S = 1.0         # "连上过又被干净关掉"的最小间隔（防零间隔风暴，见 _run_forever）
+HUB_RECONNECT_JITTER = 0.2          # 退避抖动 ±20%：hub pod 重启后多台 agent 同步 5/10/20… 就是惊群
 HUB_SLEEP_SLICE_S = 30.0            # 长睡切片（停机时最多 30s 内让出）
 HUB_STATE_DEBOUNCE_S = 0.3          # 状态上行合并窗
 HUB_KEEPALIVE_S = 300.0             # 保活重推：让 hub 侧 updatedAt 反映 agent 存活
-BIND_CODE_TTL_S = 600               # 绑定码有效期（与 hub 侧 bindTtlMs 同口径；过期即作废）
+# 绑定码有效期的**兜底值**：权威值在云端（hub 回 expiresInSec / 注册回 bindExpire），
+# 只有云端没回时才用这里（老 hub、身份文件是旧版本写的）。改这里不会改 hub 的 TTL。
+BIND_CODE_TTL_S = 600
 BIND_CODE_RENEW_BEFORE_S = 120      # 剩余不足这么久就自动换新码（用户不必自己发现过期）
 BIND_CODE_RENEW_MIN_INTERVAL_S = 120.0   # 两次换码尝试的最小间隔（失败后不连击，见 _renew_bind_code_if_stale）
+# 面板 GET /hub 顺带刷成员列表的服务端节流窗：面板从不调用只读的 /hub/members，
+# 不刷就永远显示"只有你一人"；不节流就会把云端调用打成每 30s 一次（面板开着即刷）。
+MEMBERS_REFRESH_MIN_INTERVAL_S = 120.0
 HUB_HTTP_TIMEOUT_S = 15.0
 HUB_IDENTITY_FILE = "huijian_hub_identity.json"
+# 长连凭据走请求头，不进 URL query：任何记 request line 的中间层（云托管访问日志、
+# 反代、错误上报）都会把明文 secret 留档。hub 侧先读头、缺失回落 query（发版必须 hub 先）。
+WS_HEADER_INSTANCE_ID = "x-hub-instance-id"
+WS_HEADER_SECRET = "x-hub-secret"
 # 长连握手被这些状态明确拒了＝"云端不认识本机身份"（hub 重新部署抹了注册表的主形态），
 # 值得重注册；其余失败一律按网络问题处理，继续抱身份退避重试。
 IDENTITY_REJECTED_HTTP = (401, 403)
 # 连续多少次【被拒 - 重注册 - 再被拒】就熔断（不再自动重注册）。病态形态＝云托管多副本
 # 且注册表不共享：register 落到 A、握手落到 B，每轮退避都会白造一个新实例。
 HUB_REREGISTER_FUSE = 3
-# 家庭成员上限——与 hub 的 HUB_MEMBERS_MAX 同值（跨仓契约：两侧各写一份，
+# 家庭成员上限的**兜底值**——权威值在云端（/agent/members 回 membersMax）。
+# 与 hub 的 HUB_MEMBERS_MAX 同值（跨仓契约：两侧各写一份，
 # 由 tests/test_v1747_cross_repo_contract 对账，改一边必须改另一边）
 HUB_MEMBERS_MAX = 8
+
+# 操作类错误的族别：成功只清**同族**的错误——换码走 /agent/bindcode、成员走
+# /agent/members，一个通证明不了另一个通（跨族清零＝把还没恢复的故障藏起来）。
+OP_BINDCODE = "bindcode"
+OP_MEMBERS = "members"
+OP_MEMBER_REMOVE = "member_remove"
 
 _VALUE_RE = re.compile(r"-?\d+(\.\d+)?")
 
 
 def hub_reconnect_delay(attempt: int) -> float:
-    """指数退避：5s×2^(n-1)，封顶 5min（防恒频重试给 hub 施压）。"""
+    """指数退避：5s×2^(n-1)，封顶 5min，再叠 ±HUB_RECONNECT_JITTER 抖动。
+
+    抖动防惊群：hub pod 重启后全部 agent 在同一秒开始按 5/10/20… 同步重试。
+    地板（HUB_RECONNECT_FLOOR_S）是"干净断开"那条路专用的，不走这里，语义不受抖动影响。
+    """
     if attempt < 1:
         attempt = 1
-    return min(HUB_RECONNECT_BASE_S * (2 ** (attempt - 1)), HUB_RECONNECT_MAX_S)
+    base = min(HUB_RECONNECT_BASE_S * (2 ** (attempt - 1)), HUB_RECONNECT_MAX_S)
+    delay = base * (1.0 + random.uniform(-HUB_RECONNECT_JITTER, HUB_RECONNECT_JITTER))
+    # 抖动只许让重试错开，不许把它压到地板以下或顶穿封顶
+    return min(max(delay, HUB_RECONNECT_FLOOR_S), HUB_RECONNECT_MAX_S)
 
 
 async def interruptible_sleep(seconds: float, is_stopping: Callable[[], bool]) -> None:
@@ -125,6 +167,25 @@ def cred_brief(value: Any) -> str:
     return "len=%d head=%s" % (len(s), s[:2])
 
 
+def _positive_int(value: Any) -> int:
+    """云端回的数值一律过这道闸：bool/不可解析/非正数 ⇒ 0（＝未知，调用方回落兜底）。"""
+    if value is None or isinstance(value, bool):
+        return 0
+    try:
+        n = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+    return n if n > 0 else 0
+
+
+def _ttl_from_expire_ms(bind_expire: Any) -> int:
+    """注册回的是绝对到期时刻（epoch ms）⇒ 换算成剩余 TTL 秒；不可用回 0（回落常量）。"""
+    ms = _positive_int(bind_expire)
+    if not ms:
+        return 0
+    return max(0, int(ms / 1000.0 - time.time()))
+
+
 def identity_path(config_dir: str) -> str:
     return os.path.join(config_dir, HUB_IDENTITY_FILE)
 
@@ -149,12 +210,25 @@ def load_identity(config_dir: str) -> Dict[str, Any]:
 
 
 def save_identity(config_dir: str, data: Dict[str, Any]) -> None:
-    """原子写实例身份（tmp+replace），避免断电留半截文件。"""
+    """原子写实例身份（唯一 tmp 名 + replace），避免断电留半截文件。
+
+    tmp 名必须唯一：写入跑在 asyncio.to_thread 里（v1.7.49 起），固定的 `path + ".tmp"`
+    会被两个协程交错截断 ⇒ os.replace 落地半截/混合 JSON ⇒ load_identity 判损坏改名
+    .bad ⇒ 重新注册换 instanceId，作废所有人手上的绑定码。锁在 _save_identity 侧，
+    这里是第二道（模块级函数也可能被别处直接调）。
+    """
     path = identity_path(config_dir)
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump(data, fh, ensure_ascii=False)
-    os.replace(tmp, path)
+    fd, tmp = tempfile.mkstemp(prefix=os.path.basename(path) + ".", suffix=".tmp", dir=config_dir)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, ensure_ascii=False)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def validate_control_params(attribute: Any, value: Any) -> Optional[str]:
@@ -213,21 +287,67 @@ class HubClient:
         self._secret: Optional[str] = None
         self.bind_code: Optional[str] = None
         self._bind_code_at: float = 0.0      # 当前码的签发时刻（epoch 秒；0=未知）
+        # 码的有效期以云端回的为准（expiresInSec / 注册回的 bindExpire），0＝云端没给，回落常量
+        self._bind_code_ttl_s: int = 0
+        self._member_code_ttl_s: int = 0
         # 家庭成员（v1.7.47）：成员码短命且属显式操作 ⇒ **不落身份文件**（落了会与 hub 真相分叉）
         self.member_code: Optional[str] = None
         self._member_code_at: float = 0.0
         self.members: List[Dict[str, Any]] = []   # hub 回的掩码成员列表（原样透传给面板）
         self.owner_masked: Optional[str] = None
         self.members_supported: bool = True       # 老 hub 无成员端点时置 False，面板据此禁用成员区
+        self.members_max: Optional[int] = None    # hub 回的成员上限（None＝没拿到，回落常量）
+        self._members_refresh_at: float = 0.0     # 上一次"GET /hub 顺带刷成员"时刻（节流基准）
         self._bind_renew_at: float = 0.0     # 上一次"换码尝试"时刻（成功失败都记，用于节流）
         self._rereg_streak: int = 0        # 连续【被拒 - 重注册】计数（见 HUB_REREGISTER_FUSE）
         self.connected = False
+        # 两个错误槽必须分开：连接类（长连/身份）与操作类（换码/成员/踢人）混在一个槽里，
+        # 一次瞬时操作失败就会长期盖住 identity_rejected_loop 这条最有诊断价值的信息，
+        # 且所有成功路径都不清它 ⇒ 面板会在刚签发的有效码旁边一直喊"码可能已过期"。
         self.last_error: Optional[str] = None
+        self.last_op_error: Optional[str] = None
+        self._op_error_family: Optional[str] = None
 
         self._task: Optional[asyncio.Task] = None
         self._stopping = False           # 停机闩锁（照 _lifecycle._closing 纪律）
         self._state_dirty = asyncio.Event()
+        # 两把锁都按事件循环懒建（见 _loop_bound_lock）
         self._send_lock: Optional[asyncio.Lock] = None
+        self._send_lock_loop: Optional[asyncio.AbstractEventLoop] = None
+        self._identity_lock: Optional[asyncio.Lock] = None
+        self._identity_lock_loop: Optional[asyncio.AbstractEventLoop] = None
+
+    # ── 错误槽（连接类 / 操作类）───────────────────────────────────
+    def _set_op_error(self, family: str, value: Optional[str]) -> None:
+        """记一次操作失败：值优先用 hub 回的真实 err（no_owner/members_full/…），
+        本地降级值（bindcode_failed/members_unavailable）只在拿不到 err 时用。"""
+        self._op_error_family = family
+        self.last_op_error = value or "op_failed"
+
+    def _clear_op_error(self, family: str) -> None:
+        if self._op_error_family == family:
+            self._op_error_family = None
+            self.last_op_error = None
+
+    def _write_lock(self) -> asyncio.Lock:
+        """出帧锁（按事件循环懒建）。
+
+        为什么懒建：asyncio.Lock 首次 await 就绑定当前循环，而条目 reload 与测试里的
+        多次 asyncio.run 都会换循环——在 __init__ 里建死就是 RuntimeError。
+        """
+        loop = asyncio.get_running_loop()
+        if self._send_lock is None or self._send_lock_loop is not loop:
+            self._send_lock = asyncio.Lock()
+            self._send_lock_loop = loop
+        return self._send_lock
+
+    def _identity_write_lock(self) -> asyncio.Lock:
+        """身份写入锁（同款按循环懒建，理由见 _write_lock）。"""
+        loop = asyncio.get_running_loop()
+        if self._identity_lock is None or self._identity_lock_loop is not loop:
+            self._identity_lock = asyncio.Lock()
+            self._identity_lock_loop = loop
+        return self._identity_lock
 
     # ── 网关集合（条目增删/重载时由 __init__.py 重新聚合）───────────
     @property
@@ -261,7 +381,6 @@ class HubClient:
         if self._task is not None and not self._task.done():
             return
         self._stopping = False
-        self._send_lock = asyncio.Lock()
         await self._load_identity()
         self.attach_managers(self._managers)
         self._task = asyncio.ensure_future(self._run_forever())
@@ -276,10 +395,12 @@ class HubClient:
         task, self._task = self._task, None
         if task and not task.done():
             task.cancel()
-            try:
-                await task
-            except (asyncio.CancelledError, Exception):  # noqa: BLE001
-                pass
+            # 用 gather(return_exceptions=True) 而不是裸 await：主动取消的子任务必然回
+            # CancelledError，裸 await 会把它当"本协程被取消"传上去（收尾全跳过），
+            # 而旧写法 `except (CancelledError, Exception)` 反过来把**我们自己**被取消
+            # 的信号也吞了（HA 停机路径）。gather 两者都对：子任务的取消不转抛，
+            # 本协程真被取消时照样上传。
+            await asyncio.gather(task, return_exceptions=True)
         if self._own_session and self._session is not None:
             try:
                 await self._session.close()
@@ -342,8 +463,23 @@ class HubClient:
         session = await self._ensure_session()
         async with session.post(self.base + path, json=payload) as resp:
             if resp.status != 200:
-                raise RuntimeError("hub %s -> %d" % (path, resp.status))
+                raise HubHttpError(path, resp.status, await self._err_of(resp))
             return await resp.json()
+
+    @staticmethod
+    async def _err_of(resp: Any) -> Optional[str]:
+        """从非 200 响应体里取 hub 的应用级 err（取不到就 None，绝不猜）。
+
+        为什么值得多读一次体：hub 的 /agent/members 在"实例不认识"时也回 404，
+        与"老 hub 没有这个端点"同状态码——只有体里的 err 能分开这两件事。
+        """
+        try:
+            body = await resp.json()
+        except Exception:  # noqa: BLE001 - 反代错误页/空体都不是 hub 的 err
+            return None
+        if isinstance(body, dict) and isinstance(body.get("err"), str):
+            return body["err"]
+        return None
 
     async def _load_identity(self) -> None:
         """读本地身份（重启复用；文件缺失/损坏按未注册处理）。
@@ -359,6 +495,9 @@ class HubClient:
                 self._bind_code_at = float(ident.get("bindCodeAt") or 0)
             except (TypeError, ValueError):
                 self._bind_code_at = 0.0
+        # 老身份文件没有 bindCodeTtl ⇒ 0 ⇒ 有效期回落 BIND_CODE_TTL_S（向后兼容读取）
+        if not self._bind_code_ttl_s:
+            self._bind_code_ttl_s = _positive_int(ident.get("bindCodeTtl"))
 
     async def _ensure_registered(self) -> None:
         """有身份则直接连；无身份（或上次被拒）则注册一次拿 instanceId/secret/绑定码。"""
@@ -376,32 +515,49 @@ class HubClient:
         })
         if not data.get("ok"):
             raise RuntimeError("register rejected: %s" % data.get("err"))
-        self.instance_id = data["instanceId"]
-        self._secret = data["secret"]
+        self.instance_id = data.get("instanceId")
+        self._secret = data.get("secret")
+        if not (self.instance_id and self._secret):
+            # ok:true 却缺凭据＝hub 侧半截响应：裸 KeyError 看着像本地 bug，得说清是谁的问题
+            raise RuntimeError("register incomplete")
         self.bind_code = data.get("bindCode")
         self._bind_code_at = time.time()
+        # 注册回的是**绝对**到期时刻（ms），换算成 TTL；缺失＝老 hub，回落本地常量
+        self._bind_code_ttl_s = _ttl_from_expire_ms(data.get("bindExpire"))
         await self._save_identity()
         # 绑定码要让用户看得到，但日志只记摘要（凭据不回显纪律）
         self._logger.info("hub 注册成功 instance=%s 绑定码=%s（请在插件页查看完整码）",
                           self.instance_id, cred_brief(self.bind_code))
 
     async def _save_identity(self) -> None:
-        """落盘实例身份（含绑定码签发时刻——否则重启后无从判断码是否已过期）。
+        """落盘实例身份（含签发时刻与云端给的 TTL——否则重启后无从判断码是否已过期）。
 
-        原子写（tmp+replace）放线程池，不阻塞事件循环。
+        锁 + 唯一 tmp 名两道防线：写在 asyncio.to_thread 里，两个协程可真并发
+        （面板连点两次二维码＝显式换码刻意不受节流；用户点刷新与保活 tick 重叠），
+        交错截断同一个 .tmp 会让 os.replace 落地混合 JSON ⇒ 身份读回时被判损坏改名
+        .bad ⇒ 重注册换 instanceId ⇒ 作废所有人手上的绑定码 + 云端多一条孤儿实例。
         """
-        await asyncio.to_thread(save_identity, self.config_dir, {
-            "instanceId": self.instance_id,
-            "secret": self._secret,
-            "bindCode": self.bind_code,
-            "bindCodeAt": round(self._bind_code_at, 3),
-        })
+        async with self._identity_write_lock():
+            await asyncio.to_thread(save_identity, self.config_dir, {
+                "instanceId": self.instance_id,
+                "secret": self._secret,
+                "bindCode": self.bind_code,
+                "bindCodeAt": round(self._bind_code_at, 3),
+                "bindCodeTtl": self._bind_code_ttl_s,
+            })
+
+    def bind_code_ttl_s(self) -> int:
+        """当前绑定码的有效期秒数：云端回的优先，没有才回落 BIND_CODE_TTL_S。"""
+        return self._bind_code_ttl_s or BIND_CODE_TTL_S
+
+    def member_code_ttl_s(self) -> int:
+        return self._member_code_ttl_s or BIND_CODE_TTL_S
 
     def bind_code_expires_in(self) -> int:
         """当前绑定码剩余秒数（负数=已过期；0 是签发时刻未知＝按过期处理）。"""
         if not self.bind_code or not self._bind_code_at:
             return -1
-        return int(BIND_CODE_TTL_S - (time.time() - self._bind_code_at))
+        return int(self.bind_code_ttl_s() - (time.time() - self._bind_code_at))
 
     async def refresh_bind_code(self, kind: str = "owner") -> bool:
         """向 hub 换一个新绑定码（旧码当场作废）。kind='member' 换的是**成员码**。
@@ -428,11 +584,14 @@ class HubClient:
             why = str(e) or type(e).__name__
             if self._secret and self._secret in why:
                 why = type(e).__name__        # 万一消息里带上 URL，绝不回显凭据
-            self.last_error = "bindcode_failed"
+            self._set_op_error(OP_BINDCODE, "bindcode_failed")
             self._logger.warning("hub 换绑定码失败（kind=%s）：%s", kind, why)
             return False
         if not data.get("ok") or not data.get("bindCode"):
-            self.last_error = "bindcode_rejected"
+            # 保留 hub 的真实 err（no_owner/members_full/rate_limited/registry_full/…）：
+            # 压成一个笼统的 bindcode_rejected，面板就只能说"稍后再试"，而 no_owner 的
+            # 正解是"先自己扫码成为主人"——重试永远不会成功。
+            self._set_op_error(OP_BINDCODE, data.get("err") or "bindcode_rejected")
             self._logger.warning("hub 换绑定码被拒（kind=%s）：%s", kind, data.get("err"))
             return False
         if kind == "member" and data.get("kind") != "member":
@@ -440,16 +599,21 @@ class HubClient:
             # 判据只能是响应里的 kind 回显；此处必须**丢弃返回值**，否则面板会把 owner 码
             # 当成员码显示 —— 家人扫到的就是"成为主人"的码。
             self.members_supported = False
-            self.last_error = "hub_too_old_for_member_code"
+            self._set_op_error(OP_BINDCODE, "hub_too_old_for_member_code")
             self._logger.warning("云端 hub 版本过旧（/agent/bindcode 不回 kind），已忽略成员码请求")
             return False
+        ttl = _positive_int(data.get("expiresInSec"))   # 权威 TTL 在云端，缺了才回落常量
         if kind == "member":
             self.member_code = data["bindCode"]
             self._member_code_at = time.time()
+            self._member_code_ttl_s = ttl
+            self._clear_op_error(OP_BINDCODE)
             self._logger.info("hub 成员码已签发（%s）", cred_brief(self.member_code))
             return True
         self.bind_code = data["bindCode"]
         self._bind_code_at = time.time()
+        self._bind_code_ttl_s = ttl
+        self._clear_op_error(OP_BINDCODE)
         await self._save_identity()
         self._logger.info("hub 绑定码已更新（%s）", cred_brief(self.bind_code))
         return True
@@ -458,13 +622,16 @@ class HubClient:
         """成员码剩余秒数（-1＝无码/签发时刻未知，与 owner 码同口径：不当"刚过期"渲染）。"""
         if not self.member_code or not self._member_code_at:
             return -1
-        return int(BIND_CODE_TTL_S - (time.time() - self._member_code_at))
+        return int(self.member_code_ttl_s() - (time.time() - self._member_code_at))
 
     async def list_members(self) -> bool:
         """拉家庭成员（掩码 openid + mid 句柄）。
 
         走**实例凭据**而不是 openid：openid 只由云托管注入到小程序请求，加载项根本没有。
-        老 hub 无此端点 ⇒ 只降级（置 members_supported=False 让面板禁用成员区），绝不影响长连。
+        只有 hub 明确"没有这个端点"（404 且体里没给应用级 err）才降级成
+        members_supported=False；超时/5xx/网络一律是**读取失败**——两者在面板上是完全不同
+        的话（"云端版本过旧，暂不支持" vs "读取失败，稍后重试"），混为一谈会让人以为
+        云通道坏了、或以为升级云端就能修好一个网络问题。
         """
         if not (self.instance_id and self._secret):
             await self._load_identity()
@@ -475,23 +642,50 @@ class HubClient:
                 "instanceId": self.instance_id,
                 "secret": self._secret,
             })
+        except HubHttpError as e:
+            if e.status == 404 and e.err in (None, "not_found"):
+                self.members_supported = False
+                self._set_op_error(OP_MEMBERS, "members_unsupported")
+                self._logger.warning("云端 hub 无 /agent/members（404），成员区降级为不支持")
+            else:
+                # hub 的 /agent/members 在"实例不认识"时也回 404（体里带 err）——那不是老 hub
+                self._set_op_error(OP_MEMBERS, e.err or "members_unavailable")
+                self._logger.warning("hub 取家庭成员失败：HTTP %s err=%s", e.status, e.err)
+            return False
         except Exception as e:  # noqa: BLE001
             why = str(e) or type(e).__name__
             if self._secret and self._secret in why:
                 why = type(e).__name__
-            self.members_supported = False
-            self.last_error = "members_unavailable"
+            self._set_op_error(OP_MEMBERS, "members_unavailable")
             self._logger.warning("hub 取家庭成员失败：%s", why)
             return False
         if not data.get("ok"):
-            self.members_supported = False
-            self.last_error = "members_rejected"
+            self._set_op_error(OP_MEMBERS, data.get("err") or "members_rejected")
             self._logger.warning("hub 取家庭成员被拒：%s", data.get("err"))
             return False
         self.members_supported = True
         self.members = list(data.get("members") or [])
         self.owner_masked = data.get("ownerMasked")
+        self.members_max = _positive_int(data.get("membersMax")) or None
+        self._clear_op_error(OP_MEMBERS)
         return True
+
+    async def maybe_refresh_members(self) -> None:
+        """GET /hub 顺带刷一次成员列表（服务端节流）。
+
+        为什么必须在这里刷：面板只调 GET /hub 与两条 POST，从不调只读的 /hub/members，
+        而 status_view 回的是内存里的 self.members（只在 list_members 里被写）⇒ HA 每次
+        重启后打开面板一律"只有你一人"、count=0，看不到也踢不了任何已有家人，
+        直到用户点一次「添加家人」才顺带把列表刷准。
+        节流窗内不重复打云端；面板不开就完全不产生调用。老 hub（members_supported=False）
+        不触发——那只会白拿一个 404。
+        """
+        if not (self.connected and self.members_supported):
+            return
+        if time.time() - self._members_refresh_at < MEMBERS_REFRESH_MIN_INTERVAL_S:
+            return
+        self._members_refresh_at = time.time()   # 成败都算一次（并发 GET 不得同时打云端）
+        await self.list_members()
 
     async def remove_member(self, mid: str) -> bool:
         """按 mid 踢一个成员（面板「移除」）。mid 由 list_members 给出：稳定、不可逆推。"""
@@ -503,18 +697,23 @@ class HubClient:
                 "secret": self._secret,
                 "mid": str(mid),
             })
+        except HubHttpError as e:
+            self._set_op_error(OP_MEMBER_REMOVE, e.err or "member_remove_failed")
+            self._logger.warning("hub 移除成员失败：HTTP %s err=%s", e.status, e.err)
+            return False
         except Exception as e:  # noqa: BLE001
             why = str(e) or type(e).__name__
             if self._secret and self._secret in why:
                 why = type(e).__name__
-            self.last_error = "member_remove_failed"
+            self._set_op_error(OP_MEMBER_REMOVE, "member_remove_failed")
             self._logger.warning("hub 移除成员失败：%s", why)
             return False
         if not data.get("ok"):
-            self.last_error = "member_remove_rejected"
+            self._set_op_error(OP_MEMBER_REMOVE, data.get("err") or "member_remove_rejected")
             self._logger.warning("hub 移除成员被拒：%s", data.get("err"))
             return False
         self._logger.info("家庭成员已移除（剩余 %s）", data.get("remaining"))
+        self._clear_op_error(OP_MEMBER_REMOVE)
         await self.list_members()
         return True
 
@@ -536,12 +735,25 @@ class HubClient:
             self._logger.warning("绑定码已过期且自动补发失败——面板点一下二维码可重试")
 
     def _ws_url(self) -> str:
+        """长连端点——**不带凭据 query**。
+
+        secret 进 URL 就会被任何记 request line 的中间层留档（云托管访问日志、反代、
+        错误上报），与"凭据不回显"纪律相悖；HTTP 的 /agent/* 一直走 body，唯独 WS 例外。
+        另一个隐患：aiohttp 的 ClientResponseError.__str__ 带完整 URL，谁写一句 str(e)
+        就把 secret 送进 HA 日志。凭据改走请求头（见 _ws_headers）。
+        """
         base = self.base
         if base.startswith("https://"):
             base = "wss://" + base[len("https://"):]
         elif base.startswith("http://"):
             base = "ws://" + base[len("http://"):]
-        return "%s/agent/ws?instanceId=%s&secret=%s" % (base, self.instance_id, self._secret)
+        return "%s/agent/ws" % base
+
+    def _ws_headers(self) -> Dict[str, str]:
+        return {
+            WS_HEADER_INSTANCE_ID: str(self.instance_id or ""),
+            WS_HEADER_SECRET: str(self._secret or ""),
+        }
 
     async def _open_ws(self, session: aiohttp.ClientSession):
         """建长连；云端明确"不认识这个身份"时当场重注册再连一次（只补一次）。
@@ -554,7 +766,8 @@ class HubClient:
         **网络层失败一律不清身份**，否则每次抖动都多发一次 register、把用户手上的活码换掉。
         """
         try:
-            return await session.ws_connect(self._ws_url(), heartbeat=25.0)
+            return await session.ws_connect(self._ws_url(), headers=self._ws_headers(),
+                                            heartbeat=25.0)
         except aiohttp.WSServerHandshakeError as e:
             if e.status not in IDENTITY_REJECTED_HTTP:
                 raise
@@ -571,7 +784,8 @@ class HubClient:
                 raise
             await self._invalidate_identity("云端拒绝身份（HTTP %s）" % e.status)
             await self._ensure_registered()
-            return await session.ws_connect(self._ws_url(), heartbeat=25.0)
+            return await session.ws_connect(self._ws_url(), headers=self._ws_headers(),
+                                            heartbeat=25.0)
 
     async def _invalidate_identity(self, reason: str) -> None:
         """清空本地身份并落盘：下次连接必然重新注册（换新 instanceId + 新绑定码）。
@@ -601,7 +815,8 @@ class HubClient:
             self._rereg_streak = 0        # 连上过＝云端确实认识当前身份，熔断计数归零
             self._logger.info("hub 已连接（instance=%s）", self.instance_id)
             self._state_dirty.set()          # 上线先全量推一次
-            await self._renew_bind_code_if_stale()   # 上线自检：过期码当场换新
+            # 上线自检的换码挪进保活 task：那是 HTTP，最坏等 HUB_HTTP_TIMEOUT_S=15s，
+            # 挡在接收循环前＝上线首 15s 内下行命令一律不被处理。
             flush = asyncio.ensure_future(self._flush_loop(ws))
             keepalive = asyncio.ensure_future(self._keepalive_loop())
             try:
@@ -615,7 +830,7 @@ class HubClient:
                     if not isinstance(data, dict) or data.get("t") != "cmd":
                         continue
                     result = await self._handle_cmd(data)
-                    await ws.send_json({
+                    await self._send_json(ws, {
                         "t": "cmd_result",
                         "cmdsn": data.get("cmdsn"),
                         "ok": bool(result.get("ok")),
@@ -628,12 +843,24 @@ class HubClient:
                 await asyncio.gather(flush, keepalive, return_exceptions=True)
         return True
 
+    async def _send_json(self, ws: aiohttp.ClientWebSocketResponse, payload: Dict[str, Any]) -> None:
+        """所有出帧的唯一出口：状态上行与命令回执是两个并发 task 写同一条 ws。
+
+        今天靠 aiohttp 非压缩帧的同步 write 侥幸不交错；协商上 permessage-deflate
+        或实现变化后就不是了，所以显式串行化。
+        """
+        async with self._write_lock():
+            await ws.send_json(payload)
+
     async def _keepalive_loop(self) -> None:
-        """周期标脏重推：状态长时间不变时也要刷新 hub 侧 updatedAt。
+        """上线自检 + 周期标脏重推：状态长时间不变时也要刷新 hub 侧 updatedAt。
 
         否则"设备一直没人动"与"agent 已死"在云端是同一种形态（updatedAt 越来越旧），
         小程序侧无法区分。睡眠按 30s 切片（停机时最多 30s 内让出）。
+        换码自检放这里（而不是 `_session_once` 的接收循环之前）：它是 HTTP，
+        最坏等 HUB_HTTP_TIMEOUT_S，挡在接收循环前＝上线首 15s 下行命令不被处理。
         """
+        await self._renew_bind_code_if_stale()   # 上线自检：过期码当场换新
         while not self._stopping:
             await interruptible_sleep(HUB_KEEPALIVE_S, lambda: self._stopping)
             if self._stopping:
@@ -700,7 +927,7 @@ class HubClient:
             if not items:
                 continue
             try:
-                await ws.send_json({"t": "state", "items": items})
+                await self._send_json(ws, {"t": "state", "items": items})
             except Exception as e:  # noqa: BLE001 - 发送失败交给外层重连
                 self._logger.debug("hub 状态上行失败：%s", type(e).__name__)
                 return
@@ -759,17 +986,21 @@ class HubClient:
             "bindCode": self.bind_code,
             "bindCodeExpiresIn": expires_in,
             "bindCodeExpired": bool(self.bind_code) and expires_in <= 0,
+            # TTL 也让面板拿权威值：hub 改了有效期后，"10 分钟内有效"这类硬编文案就是假话
+            "bindCodeTtlS": self.bind_code_ttl_s(),
             "gatewaySn": gateway_sn,
             "gateways": gateways,
             "hub": self.base,
             "lastError": self.last_error,
+            "lastOpError": self.last_op_error,
             # 家庭成员（v1.7.47）：members 里只有掩码与 mid（hub 从不回完整 openid）
             "memberCode": self.member_code,
             "memberCodeExpiresIn": self.member_code_expires_in(),
             "memberCodeExpired": bool(self.member_code) and self.member_code_expires_in() <= 0,
+            "memberCodeTtlS": self.member_code_ttl_s(),
             "members": list(self.members),
             "membersCount": len(self.members),
-            "membersMax": HUB_MEMBERS_MAX,
+            "membersMax": self.members_max or HUB_MEMBERS_MAX,
             "membersSupported": bool(self.members_supported),
             "ownerMasked": self.owner_masked,
         }

@@ -211,9 +211,9 @@ def device_ws_view(device_sn: str, gateway_sn: str, device: Dict[str, Any]) -> D
     # 固件视图里 state=-1，插件必须一致，不得报"已开"
     state = 0 if position_i == 0 else (1 if position_i > 0 else -1)
     # 速度/力度/锁定模式回显（v1.7.47）：设备上报的 rwp_winact_* 由 _ctypes 解析进
-    # attributes["winact_speed"/"winact_strength"]，HA 侧 number 实体靠 _state_key 读它
-    # 显示真值，而小程序此前**只能发不能收**——滑块初值来自本地存储（默认 60/50），
-    # 换手机、清缓存、或在 HA 里调过，小程序显示的就与设备实际值对不上。
+    # attributes["winact_speed"/"winact_strength"]，而小程序此前**只能发不能收**——滑块初值
+    # 来自本地存储（默认 60/50），换手机、清缓存、或在 HA 里调过，小程序显示的就与设备
+    # 实际值对不上。（HA 侧滑块刻意只显示 setpoint，见 number._update_state。）
     # 入界纪律与 position 同款：越界/不可解析一律 -1（未知），不把垃圾值当合法数字发出去。
     speed = _as_int(attrs.get("winact_speed"))
     if not 0 <= speed <= 100:

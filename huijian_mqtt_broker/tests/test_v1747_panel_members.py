@@ -94,7 +94,7 @@ def test_member_qr_reuses_owner_payload_prefix():
 
 # ── 纯函数真跑 ──────────────────────────────────────────────────────
 def test_members_text_really_runs_in_node():
-    _node(_single_func_body(JS, "membersText") + """
+    _node(_single_func_body(JS, "membersReadFailed") + _single_func_body(JS, "membersText") + """
 const cases = [
   [null, '—'],
   [{enabled:false}, '—'],
@@ -102,10 +102,19 @@ const cases = [
   [{enabled:true, membersSupported:true, members:[]}, '只有你一人'],
   [{enabled:true, membersSupported:true, membersMax:8, members:[{openidMasked:'oFa…02',at:1}]}, '1 / 8 人'],
   [{enabled:true, membersSupported:true, membersMax:8, members:Array.from({length:8},(_,i)=>({openidMasked:'o'+i,at:1}))}, '8 / 8 人'],
+  // 上限以服务端回的为准（hub 改了上限后，兜底的 8 只是兜底）
+  [{enabled:true, membersSupported:true, membersMax:6, members:[{openidMasked:'o',at:1}]}, '1 / 6 人'],
+  // 网络失败 ≠ 版本过旧：两句话必须分开，否则用户会去升级云端修一个网络问题
+  [{enabled:true, membersSupported:true, lastOpError:'members_unavailable', members:[]}, '读取失败，稍后重试'],
+  [{enabled:true, membersSupported:true, lastOpError:'members_rejected', members:[]}, '读取失败，稍后重试'],
 ];
 for (const [info, want] of cases) {
   const got = membersText(info);
   if (got !== want) { console.log('FAIL', JSON.stringify(info), '->', got, 'want', want); process.exit(1) }
+}
+// 成员类的其它错误码（踢人失败等）不该被说成"读取失败"
+if (membersText({enabled:true, membersSupported:true, lastOpError:'member_remove_failed', members:[]}) !== '只有你一人') {
+  console.log('FAIL 非读取类错误不该改成员计数文案'); process.exit(1)
 }
 console.log('OK');
 """)
@@ -113,7 +122,8 @@ console.log('OK');
 
 def test_render_members_really_runs_in_node():
     """渲染真跑：满员禁用、老 hub 禁用、成员行带掩码与「移除」、读不到状态显示破折号。"""
-    _node(_single_func_body(JS, "membersText") + _single_func_body(JS, "renderMembers") + """
+    _node(_single_func_body(JS, "membersReadFailed") + _single_func_body(JS, "ttlMinutes")
+          + _single_func_body(JS, "membersText") + _single_func_body(JS, "renderMembers") + """
 const els = {};
 function mk(id) {
   return els[id] = els[id] || {
@@ -173,6 +183,23 @@ renderMembers(null);
 want(els.hubMembersCount.textContent === '—', '读不到时应为破折号: ' + els.hubMembersCount.textContent);
 want(els.addMemberBtn.disabled === true, '读不到时应禁用');
 want(els.hubMembers.children.length === 0, '不得残留成员行');
+
+// ⑥ 成员读取失败（网络）：说清是读取失败、不是版本过旧，且按钮仍可点（瞬时故障不该像功能没了）
+reset();
+renderMembers({ enabled: true, membersSupported: true, membersMax: 8, members: [],
+                lastOpError: 'members_unavailable' });
+want(els.hubMembersCount.textContent === '读取失败，稍后重试', '文案: ' + els.hubMembersCount.textContent);
+want(/读取失败/.test(els.hubMembersEmpty.textContent), '空态要说清读取失败: ' + els.hubMembersEmpty.textContent);
+want(!/版本过旧/.test(els.hubMembersEmpty.textContent), '不得说成版本过旧');
+want(els.addMemberBtn.disabled === false, '瞬时网络失败不该禁用按钮');
+
+// ⑦ 按钮提示里的有效期跟服务端 TTL 走（硬编"10 分钟"在 hub 改 TTL 后就是假话）
+reset();
+renderMembers({ enabled: true, membersSupported: true, membersMax: 8, members: [], memberCodeTtlS: 300 });
+want(/5 分钟有效/.test(els.addMemberBtn.title), 'TTL 应取服务端值: ' + els.addMemberBtn.title);
+reset();
+renderMembers({ enabled: true, membersSupported: true, membersMax: 8, members: [] });
+want(/10 分钟有效/.test(els.addMemberBtn.title), '没给 TTL 才回落字面量: ' + els.addMemberBtn.title);
 
 if (bad) { console.log(bad + ' 处不符'); process.exit(1) }
 console.log('OK');
