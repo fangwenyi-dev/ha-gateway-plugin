@@ -276,7 +276,9 @@ class TestDispatch:
         out = await s.handle_json_message(json.dumps({
             "cmd": "control", "gwSn": "IGNORED", "devSn": "5005A",
             "attribute": "w_travel", "value": "100"}))
-        assert out == {"type": "control_ack", "ok": True, "msg": "ok"}
+        # v1.7.52：control_ack 带上关联字段 attribute（cmdsn 本次没发故不出现）
+        assert out == {"type": "control_ack", "ok": True, "msg": "ok",
+                       "attribute": "w_travel"}
         assert h1.raw004 == [("5005A", "w_travel", "100")]
         assert h2.raw004 == []  # 定向，不广播
 
@@ -319,11 +321,14 @@ class TestDispatch:
         s = make_server()
         out = await s.handle_json_message(json.dumps(
             {"cmd": "control", "gwSn": "G", "devSn": "", "attribute": "w_travel", "value": "0"}))
-        assert out == {"type": "control_ack", "ok": False, "msg": "missing fields"}
+        # attribute 本身是合法非空 str ⇒ 关联字段照常回带（即便这单被 devSn 缺失拒了）
+        assert out == {"type": "control_ack", "ok": False, "msg": "missing fields",
+                       "attribute": "w_travel"}
         # value 缺失同样拒绝
         out = await s.handle_json_message(json.dumps(
             {"cmd": "control", "gwSn": "G", "devSn": "D", "attribute": "w_travel"}))
-        assert out == {"type": "control_ack", "ok": False, "msg": "missing fields"}
+        assert out == {"type": "control_ack", "ok": False, "msg": "missing fields",
+                       "attribute": "w_travel"}
 
     @pytest.mark.asyncio
     async def test_control_send_failure_reports_send_failed_not_ok(self):
@@ -334,14 +339,16 @@ class TestDispatch:
         out = await s.handle_json_message(json.dumps({
             "cmd": "control", "gwSn": "GW1", "devSn": "5005A",
             "attribute": "w_travel", "value": "100"}))
-        assert out == {"type": "control_ack", "ok": False, "msg": "send failed"}
+        assert out == {"type": "control_ack", "ok": False, "msg": "send failed",
+                       "attribute": "w_travel"}
         # 广播路径同样如实
         s2 = make_server(entries={"GW1": (FakeHandler("GW1", fail004=True),
                                           FakeDM(gateway_sn="GW1"))})
         out = await s2.handle_json_message(json.dumps({
             "cmd": "control", "gwSn": "X", "devSn": "UNKNOWN",
             "attribute": "w_travel", "value": "0"}))
-        assert out == {"type": "control_ack", "ok": False, "msg": "send failed"}
+        assert out == {"type": "control_ack", "ok": False, "msg": "send failed",
+                       "attribute": "w_travel"}
 
     @pytest.mark.asyncio
     async def test_control_empty_string_and_bool_value_rejected(self):
@@ -356,7 +363,8 @@ class TestDispatch:
                 {"cmd": "control", "gwSn": "GW1", "devSn": "5005A",
                  "attribute": "w_travel", "value": bad}))
             assert out == {"type": "control_ack", "ok": False,
-                           "msg": "missing fields"}, bad
+                           "msg": "missing fields",
+                           "attribute": "w_travel"}, bad
         assert h.raw004 == []
         # 数字 0 / 字符串 "0" 仍是合法值（既有广播测试 value:0 已钉）
         out = await s.handle_json_message(json.dumps(

@@ -80,6 +80,11 @@ from .utils import log_throttled
 
 _LOGGER = logging.getLogger(__name__)
 
+# 固件线值格式：只放行十进制整数/小数。与 hub_client._VALUE_RE **必须逐字同串**——
+# 两条通道（LAN / 云）对同一个 value 的合法性判据不一致时，会出现"云拒 LAN 放行"
+# 或反之的分裂行为，而调用方只看得到一次成功一次失败。由跨仓契约钉对账两个模式串。
+_VALUE_RE = re.compile(r"-?\d+(\.\d+)?")
+
 # 小程序 WS 服务器在 hass.data[DOMAIN] 中的单例键（跨 config entry 共享：
 # 一台 HA 只监听一个端口，网关/设备视图聚合全部已完成设置的 entry）
 WS_GATEWAY_DATA_KEY = "_ws_gateway"
@@ -447,34 +452,60 @@ class WsGatewayServer:
         """固件 control：四字段（gwSn/devSn/attribute/value）均须非空，
         value 一律转字符串透传 004；路由 = 设备映射网关，缺失时广播到
         全部在线网关（send_004_command_all_gateways 定式）。
+
+        回执带 `attribute` + `cmdsn` 两个**关联字段**（见内部 ack）：小程序的在途命令
+        配对靠它们——此前 LAN 回执两者都没有，页面只能退化成"认最早那条在途"的弱 FIFO，
+        「打开」的回执会被当成速度命令的回执（误保存/误回退滑块）。
         """
         gw_sn = msg.get("gwSn")
         dev_sn = msg.get("devSn")
         attribute = msg.get("attribute")
         value = msg.get("value")
+        cmdsn = msg.get("cmdsn")
+
+        def ack(ok: bool, text: str) -> Dict[str, Any]:
+            """所有 control_ack 的唯一出口：关联字段在一处统一，别在七个 return 点各抄一份。
+
+            **additive、向后兼容**：老小程序既不发 cmdsn 也不读这两个键 ⇒ 它收到的回执
+            与既往逐字节同形。attribute 只在已是非空 str 时回带（"missing fields" 那条
+            本来就没有这个信息）；cmdsn 原样回带，不校验、不改写。
+            """
+            out: Dict[str, Any] = {"type": "control_ack", "ok": ok, "msg": text}
+            if isinstance(attribute, str) and attribute:
+                out["attribute"] = attribute
+            if isinstance(cmdsn, str) and cmdsn:
+                out["cmdsn"] = cmdsn
+            return out
+
         if not all(isinstance(x, str) and x for x in (gw_sn, dev_sn, attribute)) or value is None:
-            return {"type": "control_ack", "ok": False, "msg": "missing fields"}
+            return ack(False, "missing fields")
         # v1.6.17（联审）：固件把"空字符串 value"按缺失字段拒绝，bool 经
         # str() 会变成 "True"/"False"（固件解析出的是 'true'/'false' 字面量，
         # 设备端两者都不是合法命令值）——同口径拒绝，不透传脏值
         if value == "" or isinstance(value, bool):
-            return {"type": "control_ack", "ok": False, "msg": "missing fields"}
+            return ack(False, "missing fields")
         # v1.7.12（第 6 轮审计 F6）：仅 str/int/float 可转固件线值——dict/list
         # 等经 str() 会产出 Python repr（单引号/True 字面量）固件不可解析，
         # 而小程序已收到 ok=true 的假成功回执，属脏值透传面。白名单拒绝。
         if not isinstance(value, (str, int, float)):
-            return {"type": "control_ack", "ok": False, "msg": "invalid value"}
+            return ack(False, "invalid value")
         value_s = str(value)
         # v1.7.18（第 7 轮审计 BUG-16）：数值形态须再过线值格式校验——
         # inf/nan 与 1e+308/1e999 等 str() 出设备不可解析的字面量照样透传
-        # 004 且 control_ack ok=true（假成功）。只放行十进制整数/小数；
-        # str 值维持 F6 白名单透传语义（设备端自校验）。
-        if not isinstance(value, str) and not re.fullmatch(r"-?\d+(\.\d+)?", value_s):
-            return {"type": "control_ack", "ok": False, "msg": "invalid value"}
+        # 004 且 control_ack ok=true（假成功）。
+        # **本批把 str 的豁免取消**：豁免是个真实缺陷——小程序云通道的 params.value
+        # 恒为 String(value)，所以 `NaN` 经 String() 得到字符串 'NaN' 正好从豁免缝里
+        # 穿过去，一路透传 004 到固件并拿到 ok=true 的假成功。合法值域逐条核过
+        # （w_travel ∈ 0/100/101/200 与位置 0-100、rwp_wind_lock_mode ∈ 0/1、
+        # rwp_winact_speed/strength ∈ 0-100）**全部是十进制串** ⇒ 不再豁免 str
+        # 不会挡掉任何合法命令。范围校验仍留在客户端与固件（这里只管可解析性，
+        # 不把三处各写一份的范围逻辑复制到网关这条路上）。
+        if not _VALUE_RE.fullmatch(value_s):
+            return ack(False, "invalid value")
         data = self._device_gateway(dev_sn)
         if data is not None:
             ok = await data["mqtt_handler"].send_ws_raw_004(dev_sn, attribute, value_s)
-            return {"type": "control_ack", "ok": bool(ok), "msg": "ok" if ok else "send failed"}
+            return ack(bool(ok), "ok" if ok else "send failed")
         # 映射缺失 → 广播。v1.6.17（联审）：固件定式是"无条件向全部
         # 网关发布"（app_protocol_bridge.cpp :1628-1650 的 P2 修复，不查
         # 网关在线状态）；插件此前跳过 connected=False（=1800s 无上报，
@@ -487,15 +518,14 @@ class WsGatewayServer:
             # 假成功（小程序显示已下发、设备无动作）。control 是执行语义，
             # 无对象可发必须如实失败——与 _cmd_pair 的"广播后恒 ok"定案
             # （固件 P2 广播语义）不同，后者不属此列。
-            return {"type": "control_ack", "ok": False,
-                    "msg": "no gateway registered"}
+            return ack(False, "no gateway registered")
         publish_failed = False
         for _gw, edata in entries:
             if not await edata["mqtt_handler"].send_ws_raw_004(dev_sn, attribute, value_s):
                 publish_failed = True
         if publish_failed:
-            return {"type": "control_ack", "ok": False, "msg": "send failed"}
-        return {"type": "control_ack", "ok": True, "msg": "ok"}
+            return ack(False, "send failed")
+        return ack(True, "ok")
 
     async def _cmd_pair(self, msg: Dict[str, Any]) -> Dict[str, Any]:
         """固件 pair：gwSn 指定时须已注册且在线（L5/M6 如实 ack）；

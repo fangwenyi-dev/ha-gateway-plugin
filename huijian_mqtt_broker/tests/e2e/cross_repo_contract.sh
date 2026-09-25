@@ -25,6 +25,7 @@ JS="$PLUGIN_REPO/huijian_mqtt_broker/www/js/huijian.js"
 HTML="$PLUGIN_REPO/huijian_mqtt_broker/www/index.html"
 PYHUB="$PLUGIN_REPO/huijian_mqtt_broker/custom_components/window_controller_gateway/hub_client.py"
 WSGW="$PLUGIN_REPO/huijian_mqtt_broker/custom_components/window_controller_gateway/ws_gateway.py"
+CONST="$PLUGIN_REPO/huijian_mqtt_broker/custom_components/window_controller_gateway/const.py"
 HUBSRV="$HUB_REPO/src/server.js"
 HUBSTORE="$HUB_REPO/src/store.js"
 HUBREADME="$HUB_REPO/README.md"
@@ -250,6 +251,48 @@ check "运维口径：hub README 说不要配存储挂载时，加载项不得�
   "grep -qF '不要配「存储挂载」' '$HUBREADME' && grep -qF '改去配「存储挂载」' '$PYHUB' && ! grep -qF '确认云托管「存储挂载」已挂到' '$PYHUB'"
 check "运维口径：加载项熔断指路必须指向 hub 的注册表镜像（真正的跨重建存活条件）" \
   "grep -qF 'mirror.enabled' '$PYHUB' && grep -qF 'mirror.enabled' '$HUBREADME'"
+
+# ㉒ LAN 回执的关联字段（v1.7.52 新增的跨仓契约）：加载项回带 attribute+cmdsn，
+#    小程序发 cmdsn 并把两个字段透传给页面做精确配对。任一侧单独改＝配对静默退回
+#    弱 FIFO（表现为"点打开却把速度滑块回退了"这类查不到根因的错乱）。
+check "LAN 回执关联字段：加载项 control_ack 回带 attribute 与 cmdsn" \
+  "grep -qF 'out[\"attribute\"] = attribute' '$WSGW' && grep -qF 'out[\"cmdsn\"] = cmdsn' '$WSGW'"
+check "LAN 回执关联字段：小程序发 cmdsn 且把两个字段透传给页面" \
+  "grep -qF 'cmdsn: newLanCmdsn()' '$WSJS' && grep -qF 'attribute: msg.attribute' '$WSJS' && grep -qF 'cmdsn: msg.cmdsn' '$WSJS'"
+# 反向（防"单边加了没人用"）：加载项回带了，页面必须真读
+check "页面真读关联字段做配对（加载项回带但没人读＝白加一个字段）" \
+  "grep -qE 'res\.attribute|res && res\.attribute' '$DEVPAGE'"
+
+# ㉓ 004 属性名与命令值：三端各写一份的字面量（此前无人对账，我这次是手工逐个核的）。
+#    加载项 const.py 是权威源，小程序抄一份——抄错就是"命令发了设备不动"，
+#    而且两侧单测都不会红（各自都自洽）。
+for lit in w_travel rwp_wind_lock_mode rwp_winact_speed rwp_winact_strength; do
+  check "004 属性名 $lit：加载项 const 里有这个字面量 且 小程序也写着同一串" \
+    "grep -qF \"\\\"$lit\\\"\" '$CONST' && grep -qF \"'$lit'\" '$WSJS'"
+done
+
+# ㉔ 取消 str 豁免的**前提**必须两侧同时成立：
+#    ① 两条通道（LAN _cmd_control / 云 validate_control_params）的格式模式逐字同串，
+#       否则同一个 value 会出现"云拒 LAN 放行"的分裂行为；
+#    ② 小程序实际下发的值全是十进制串，否则格式闸会静默挡掉真命令。
+#    两侧各自**抽取字面量再比对**（不写正则去匹配整行——那会被转义与注释坑掉）。
+pat_hub=$(grep -oE '_VALUE_RE = re.compile\(r"[^"]+"\)' "$PYHUB" | head -1)
+pat_ws=$(grep -oE '_VALUE_RE = re.compile\(r"[^"]+"\)' "$WSGW" | head -1)
+check "两条通道的线值格式模式逐字同串（不一致＝云拒 LAN 放行的分裂行为）" \
+  "test -n '$pat_hub' && test -n '$pat_ws' && [ '$pat_hub' = '$pat_ws' ]"
+
+non_decimal=""
+for v in $(grep -oE "^const VALUE_[A-Z_]+ = '[^']*'" "$WSJS" | sed "s/^const //; s/ = '/=/; s/'$//"); do
+  case "${v##*=}" in
+    ''|*[!0-9]*) non_decimal="$non_decimal $v" ;;
+  esac
+done
+check "小程序下发的 VALUE_* 全是十进制串（取消 str 豁免的合法性前提）" \
+  "test -z '$non_decimal'"
+# 元钉：上面那条抽取若锚点漂移会抽到 0 条、然后"全是十进制"空判通过
+n_val=$(grep -cE "^const VALUE_[A-Z_]+ = " "$WSJS")
+check "VALUE_* 抽取量 ≥4（防空扫假绿：锚点漂移会让上一条钉空判通过）" \
+  "[ $n_val -ge 4 ]"
 
 echo
 echo "跨仓契约: $pass passed, $fail failed"

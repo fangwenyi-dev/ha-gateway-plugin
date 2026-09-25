@@ -242,8 +242,9 @@ def validate_control_params(attribute: Any, value: Any) -> Optional[str]:
     返回规范化后的 value 字符串；不合法返回 None：
     空串/bool 拒（固件把空串按缺失字段拒、bool 经 str() 是 'True'/'False' 不可解析）；
     仅 str/int/float 可转线值（dict/list 经 str() 出 Python repr，固件不可解析，
-    而调用方已收到假成功——v1.7.12 F6）；数值形态再过十进制格式校验
-    （inf/nan/1e999 等 str() 出设备不可解析字面量——v1.7.18 BUG-16）。
+    而调用方已收到假成功——v1.7.12 F6）；**任何形态**都须过十进制格式校验
+    （inf/nan/1e999 等 str() 出设备不可解析字面量——v1.7.18 BUG-16；字符串入参
+    自 v1.7.52 起**不再豁免**，'NaN' 就是从那道豁免缝里穿过去的）。
     """
     if not isinstance(attribute, str) or not attribute:
         return None
@@ -252,7 +253,14 @@ def validate_control_params(attribute: Any, value: Any) -> Optional[str]:
     if not isinstance(value, (str, int, float)):
         return None
     value_s = str(value)
-    if not isinstance(value, str) and not _VALUE_RE.fullmatch(value_s):
+    # 十进制格式闸对**所有**类型一律生效——此前 `str` 被豁免，而豁免正是漏洞本身：
+    # 小程序云通道送上来的是 `params: {attribute, value: String(value)}`，
+    # `NaN` 经 String() 得到字符串 'NaN' 恰好从豁免缝里穿过去，一路透传 004 到固件，
+    # 且调用方已经拿到 ok:true 的假成功。合法值域逐条核过全部是十进制串
+    # （w_travel ∈ 0/100/101/200 与位置 0-100、rwp_wind_lock_mode ∈ 0/1、
+    # rwp_winact_speed/strength ∈ 0-100）⇒ 取消豁免不会挡掉任何合法命令。
+    # 模式串与 ws_gateway._VALUE_RE 必须同串（两条通道判据不一致＝分裂行为）。
+    if not _VALUE_RE.fullmatch(value_s):
         return None
     return value_s
 

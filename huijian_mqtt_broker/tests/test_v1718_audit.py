@@ -364,14 +364,34 @@ class TestWsLifecycle:
         for bad in (math.inf, -math.inf, math.nan, 1e308):
             out = await s._cmd_control({"gwSn": "G", "devSn": "D",
                                         "attribute": "position", "value": bad})
-            assert out == {"type": "control_ack", "ok": False,
-                           "msg": "invalid value"}, f"{bad!r} 未被拒绝"
+            assert out == {"type": "control_ack", "ok": False, "msg": "invalid value",
+                           "attribute": "position"}, f"{bad!r} 未被拒绝"
         out = await s._cmd_control({"gwSn": "G", "devSn": "D",
                                     "attribute": "position", "value": 50})
         assert out["ok"] is True, "正常 int 线值不受影响"
+        # ── v1.7.52 改判：取消 str 豁免 ─────────────────────────────
+        # 本批原先在这里断言 `attribute:"state", value:"open"` 必须放行（"str 值维持
+        # F6 透传语义"）。核过真实协议面后判定那条是**虚构例子钉住了真实漏洞**：
+        #   · 004 的入站属性全集（_ctypes.py）= voltage / r_travel / rwp_wind_lock_mode
+        #     / rwp_winact_speed / rwp_winact_strength，出站 w_travel —— 全部数值型；
+        #   · 合法值域（_commands.py 的 send_ws_raw_004 docstring 原文）=
+        #     "w_travel 的 100/0/101/200/0-100、rwp_wind_lock_mode 0/1 等"，也是全数值；
+        #   · `state` 根本不是本协议的属性名，"open" 更不是任何合法线值。
+        # 而豁免放过的正是 'NaN'：小程序云通道送的是 String(value)，NaN → 'NaN'
+        # 恰好从豁免缝穿到固件并拿到 ok:true 假成功。所以现在一律过十进制格式闸。
         out = await s._cmd_control({"gwSn": "G", "devSn": "D",
                                     "attribute": "state", "value": "open"})
-        assert out["ok"] is True, "str 值维持 F6 透传语义"
+        assert out["ok"] is False and out["msg"] == "invalid value", \
+            "非十进制线值必须拒（'NaN'/'open' 这类从 str 豁免缝里穿过去）"
+        out = await s._cmd_control({"gwSn": "G", "devSn": "D",
+                                    "attribute": "w_travel", "value": "NaN"})
+        assert out["ok"] is False and out["msg"] == "invalid value", \
+            "'NaN' 不得再靠 str 豁免透传 004 并回 ok:true"
+        # 合法字符串线值（小程序实际下发的就是 String() 形态）不受影响
+        for good in ("0", "100", "101", "200", "50", "-1"):
+            out = await s._cmd_control({"gwSn": "G", "devSn": "D",
+                                        "attribute": "w_travel", "value": good})
+            assert out["ok"] is True, f"合法十进制串 {good!r} 被误拒"
 
 
 # ==================== BUG-9：remove_entry 清持久忽略 ====================
