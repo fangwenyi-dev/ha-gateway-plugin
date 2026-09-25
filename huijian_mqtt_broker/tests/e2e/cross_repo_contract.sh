@@ -22,16 +22,18 @@ done
 [ -f "$MINIPROGRAM_REPO/miniprogram/utils/cloud-gw.js" ] || { echo "SKIP MINIPROGRAM_REPO 不像小程序仓: $MINIPROGRAM_REPO"; exit 3; }
 
 JS="$PLUGIN_REPO/huijian_mqtt_broker/www/js/huijian.js"
+HTML="$PLUGIN_REPO/huijian_mqtt_broker/www/index.html"
 PYHUB="$PLUGIN_REPO/huijian_mqtt_broker/custom_components/window_controller_gateway/hub_client.py"
 WSGW="$PLUGIN_REPO/huijian_mqtt_broker/custom_components/window_controller_gateway/ws_gateway.py"
 HUBSRV="$HUB_REPO/src/server.js"
 HUBSTORE="$HUB_REPO/src/store.js"
+HUBREADME="$HUB_REPO/README.md"
 CGW="$MINIPROGRAM_REPO/miniprogram/utils/cloud-gw.js"
 GWR="$MINIPROGRAM_REPO/miniprogram/utils/gw-router.js"
 WSJS="$MINIPROGRAM_REPO/miniprogram/utils/ws-gateway.js"
 PAGE="$MINIPROGRAM_REPO/miniprogram/pages/broker-gateways/broker-gateways.js"
 DEVPAGE="$MINIPROGRAM_REPO/miniprogram/pages/broker-device/broker-device.js"
-for f in "$JS" "$PYHUB"; do [ -f "$f" ] || { echo "SKIP 加载项文件缺失: $f"; exit 3; }; done
+for f in "$JS" "$HTML" "$PYHUB" "$WSGW" "$HUBREADME"; do [ -f "$f" ] || { echo "SKIP 对账所需文件缺失: $f"; exit 3; }; done
 
 pass=0; fail=0
 check() {  # check <名称> <shell 命令串>
@@ -69,9 +71,22 @@ for code in members_full no_owner owner_cannot_leave unknown_member already_boun
   check "绑定错误码 $code：hub 会回 且 小程序有中文文案" \
     "grep -qF \"$code\" '$HUBSTORE' && grep -qF \"$code:\" '$PAGE'"
 done
-for code in offline timeout forbidden send_failed; do
-  check "控制错误码 $code：小程序有中文文案（云模式直接 toast）" \
-    "grep -qF \"$code:\" '$GWR'"
+# 控制面错误码：**两侧**都要对账。此前只 grep 小程序有文案，hub 把 send_failed 改个名
+# 也不会红（文案还在，只是永远命中不了 ⇒ 用户看到兜底句）。判据用 `err: '<code>'` 这个
+# 返回点字面量，而不是"这个字符串在某处出现过"。
+for code in offline timeout forbidden send_failed superseded; do
+  check "控制错误码 $code：hub 真会回（err: 字面量）且 小程序有中文文案" \
+    "grep -qF \"err: '$code'\" '$HUBSRV' && grep -qF \"$code:\" '$GWR'"
+done
+# 身份类：云托管没注入 openid 时 hub 回 401 no_openid，小程序必须说清"用正式版/体验版打开"
+check "身份错误码 no_openid：hub 真会回 且 小程序有中文文案" \
+  "grep -qF \"err: 'no_openid'\" '$HUBSRV' && grep -qF 'no_openid:' '$PAGE'"
+# 加载项侧（/agent/* 用实例凭据）：这两个码决定面板说"云端不认识本机凭据"还是"读取失败"。
+# hub 侧两个文件都要找：bad_secret 是 server.js 直接回的，unknown_instance 是 store.js 回的、
+# 由 handler 原样透传（写死只查 server.js 会假红——这条钉第一次跑就自己咬出来了）。
+for code in bad_secret unknown_instance; do
+  check "加载项侧错误码 $code：hub 真会回 且 面板有中文文案" \
+    "{ grep -qF \"err: '$code'\" '$HUBSRV' || grep -qF \"err: '$code'\" '$HUBSTORE'; } && grep -qF \"case '$code':\" '$JS'"
 done
 # ⑥ role：hub 回、小程序存（老 hub 不回时小程序兜 owner，这条钉的是"两侧都知道有 role"）
 #    role 的字面量在 hub 的 store.js（bindByCode 的返回体），server.js 只是透传+记日志
@@ -134,15 +149,16 @@ check "加载项优先采用 hub 回的 expiresInSec（本地 TTL 只兜底）" 
 check "加载项优先采用 hub 回的 membersMax（本地常量只兜底）" \
   "grep -qF 'data.get(\"membersMax\")' '$PYHUB' && grep -qF 'membersMax' '$HUBSTORE'"
 
-# ⑭ hub 新增错误码：会回就必须两端都有中文文案（否则用户看到裸英文或笼统兜底句）
+# ⑭ hub v0.2.6 新增错误码：会回就必须两端都有中文文案（否则用户看到裸英文或笼统兜底句）。
+#    hub 侧的判据用 `err: '<code>'` 返回点字面量；此前写 `grep -qF '$code' 文件A 文件B`，
+#    而 grep 多文件只要**任一**命中就 exit 0 ⇒ 那条钉的语义是 OR 而不是注释里说的"hub 会回"。
 for code in registry_full rate_limited superseded; do
-  check "新错误码 $code：hub 会回 且 加载项面板有中文文案" \
-    "grep -qF '$code' '$HUBSRV' '$HUBSTORE' && grep -qF \"case '$code':\" '$JS'"
+  check "新错误码 $code：hub 真会回（err: 字面量）且 加载项面板有中文文案" \
+    "{ grep -qF \"err: '$code'\" '$HUBSRV' || grep -qF \"err: '$code'\" '$HUBSTORE'; } && grep -qF \"case '$code':\" '$JS'"
 done
 check "新错误码 rate_limited：小程序绑定失败也有中文文案" \
   "grep -qF 'rate_limited:' '$PAGE'"
-check "新错误码 superseded：小程序控制面有中文文案" \
-  "grep -qF 'superseded:' '$GWR'"
+# superseded 的小程序文案已由上面「控制错误码」那组两侧对账（更强的判据），这里不重复钉
 
 # ⑮ 加载项自己产的回执错误码（经 hub 原样透传给小程序）：此前无人对账，改名不会红
 for code in control_failed control_unavailable invalid_params unknown_action; do
@@ -153,10 +169,87 @@ done
 # ⑯ 数据流贯通（治假绿）：字段"在某文件里出现过"证明不了它走到了页面。
 #    v1.4.28 的速度/力度回显就是这么漏的——normalizeStates 产出了 winact*，但 gw-router
 #    的云缓存构造把它们丢了，而钉只 grep 了 cloud-gw.js ⇒ 字符串在、值不在，28 条全绿。
+#    **但标识符级的 grep 本身也是假绿**：v1.7.50 复审实测过——把 gw-router 首建分支那两行
+#    真赋值整行删掉（即把 v1.4.28 的回归原样放回去），解释这个 bug 的注释里就有
+#    winactSpeed，55 条照样全绿。所以这里钉**赋值语法**，注释满足不了。
+#    行为级的最终证明在小程序仓 tests/winact-echo.test.js（真跑 _pollCloud 断言 _cloudCache）。
 for f in winactSpeed winactStrength; do
-  check "回显字段 $f 必须走到云缓存层 gw-router（只钉 normalize 层＝假绿）" \
-    "grep -qF '$f' '$GWR'"
+  check "回显字段 $f 首建分支必须真赋值进云缓存（钉语法；标识符级 grep 会被注释满足＝假绿）" \
+    "grep -qE '$f: *inRange\(item\.$f, *0, *100\) *\? *item\.$f *: *-1' '$GWR'"
+  check "回显字段 $f 更新分支必须用合法值覆盖已知值（漏了＝云模式冻结在首次轮询的值）" \
+    "grep -qE 'if \(inRange\(item\.$f, *0, *100\)\) *dev\.$f *= *item\.$f' '$GWR'"
 done
+# position 走同一个更新分支、同一类漏测（复审时一并验出：删掉它两仓的测试全绿）
+check "回显字段 position 更新分支必须用合法值覆盖（与 winact* 同一分支、同一类漏测）" \
+  "grep -qE 'if \(inRange\(item\.position, *0, *100\)\) *dev\.position *= *item\.position' '$GWR'"
+
+# ⑰ LAN 回执文案：小程序 LAN_ACK_TEXT / LAN_TOKEN_ACK_TEXT 的 key 是加载项 ws_gateway.py
+#    里英文字面量的**精确副本**（改一个字母就静默退化成「操作失败（原文）」）。这是三端里
+#    唯一一处"整句字符串逐字对账"，此前无人钉。用 grep -F 精确匹配，不做任何模糊化。
+#    **必须连着引号一起匹配**：裸串会被注释满足——实测把加载项的 "send failed" 改成
+#    "send faild"，裸串钉照样全绿，因为同文件有一行注释提到了 send failed。
+#    （14 个 key 在加载项里一律是双引号字面量，无单引号形态。）
+ack_keys=$(sed -n "/^const LAN_ACK_TEXT = {/,/^}/p;/^const LAN_TOKEN_ACK_TEXT = {/,/^}/p" "$WSJS" \
+           | grep -oE "^  '[^']+':" | sed "s/^  '//; s/':$//")
+n_ack=0
+while IFS= read -r k; do
+  [ -z "$k" ] && continue
+  n_ack=$((n_ack + 1))
+  check "LAN 回执文案「$k」：小程序映射的原文必须在加载项里以字符串字面量逐字存在" \
+    "grep -qF '\"$k\"' '$WSGW'"
+done <<< "$ack_keys"
+# 元钉：抽取量为 0 时上面一条都不会跑 ⇒ 全绿。没有这条，锚点漂移就等于门禁不存在。
+check "LAN 回执文案抽取量 ≥14（防空扫假绿：sed 锚点漂移会抽到 0 条然后全绿）" \
+  "[ $n_ack -ge 14 ]"
+
+# ⑱ 面板的有效期文案必须**真消费**服务端回的 TTL。只钉"面板里有 10 分钟字样"是反过来的：
+#    加载项哪天停发 bindCodeTtlS，面板会静默退回硬编兜底，而这条钉照过。
+check "面板 TTL 文案真消费服务端的 bindCodeTtlS（不是硬编「10 分钟」）" \
+  "grep -qF '\"bindCodeTtlS\"' '$PYHUB' && grep -qF 'ttlMinutes(info.bindCodeTtlS' '$JS'"
+check "面板 TTL 的落点元素 #hubCodeTtl 两侧都在（缺了 JS 就静默 no-op）" \
+  "grep -qF 'id=\"hubCodeTtl\"' '$HTML' && grep -qF \"getElementById('hubCodeTtl')\" '$JS'"
+check "面板成员码提示的落点元素 #hubMemberTip 两侧都在" \
+  "grep -qF 'id=\"hubMemberTip\"' '$HTML' && grep -qF \"getElementById('hubMemberTip')\" '$JS'"
+
+# ⑲ 云回执的关联字段：小程序的在途命令精确配对靠 hub /cmd 响应体里的 cmdsn
+#    （v1.4.29 才接上；hub 一直在回，是 router 层把它丢了）。
+check "云回执关联字段 cmdsn：hub 的 /cmd 响应体带它 且 小程序 router 真读" \
+  "grep -qF 'cmdsn: cmd.cmdsn' '$HUBSRV' && grep -qF 'res.cmdsn' '$GWR'"
+check "云回执关联字段 attribute：router 合成 control_ack 时带上（页面按它配对在途命令）" \
+  "grep -qF 'res.attribute' '$DEVPAGE' && grep -qE 'attribute,$' '$GWR'"
+
+# ⑳ _bindErrText 不许有死条目。它只有一个调用点（绑定结果 toast），所以判据是
+#    "小程序调的那四条路由（/bind /state /cmd /unbind）会不会回这个码"，而不是"hub 有没有
+#    这个码"。registry_full 只从 /agent/register 回（加载项的注册通道）⇒ 小程序永远收不到，
+#    v1.4.29 把它加进来时正是漏了这一步——而同一批刚因为同样的理由删掉了 not_owner。
+#    下面的可达清单是逐个返回点核出来的；hub 加新码时改这里＝强制过一次"这条真的可达吗"。
+MP_REACHABLE=" code_invalid already_bound members_full no_owner no_openid rate_limited"
+MP_REACHABLE="$MP_REACHABLE forbidden owner_cannot_leave unknown_member offline timeout send_failed superseded"
+MP_REACHABLE="$MP_REACHABLE bad_json internal not_found not_bound cloud_unavailable call_failed bad_response "
+bind_keys=$(sed -n '/_bindErrText(err) {/,/^  },/p' "$PAGE" | grep -oE "^      [a-z_]+:" | sed 's/^      //; s/:$//')
+n_keys=0
+for k in $bind_keys; do
+  n_keys=$((n_keys + 1))
+  check "_bindErrText 的 $k 不是死条目（小程序调的路由真能收到它）" \
+    "printf '%s' '$MP_REACHABLE' | grep -qF ' $k '"
+done
+check "_bindErrText 键抽取量 ≥10（防空扫假绿）" "[ $n_keys -ge 10 ]"
+# 反向：hub 会从 /bind 回的码，小程序必须都有文案（漏一个＝用户看到「绑定失败（原码）」兜底）
+for code in code_invalid already_bound members_full no_owner rate_limited; do
+  check "/bind 会回的 $code：hub 真会回 且 小程序有专门文案（不许只靠兜底）" \
+    "{ grep -qF \"err: '$code'\" '$HUBSRV' || grep -qF \"err: '$code'\" '$HUBSTORE'; } && grep -qF '$code:' '$PAGE'"
+done
+# no_openid 已由上面「身份错误码」那条两侧对账，这里不重复钉
+
+# ㉑ 运维指路必须与 hub 同口径。v0.2.6 把"必须配存储挂载"翻成了"**不要**配"（云开发桶上
+#    实测必失败：cosfs endpoint 缺 scheme ⇒ 挂载钩子 exit 1 ⇒ Pod 起不来），而加载项熔断时
+#    的 ERROR 话术还在叫运维去配 ⇒ 照着做会把 hub 直接搞成起不来，比原故障更糟。
+#    这类"两仓各写一份的运维结论"没有任何编译期/单测能发现漂移。判据刻意写死字面量：
+#    任一侧改措辞就该有人重新对一次账，而不是让它静默漂回去。
+check "运维口径：hub README 说不要配存储挂载时，加载项不得叫运维去配（旧话术会让 Pod 起不来）" \
+  "grep -qF '不要配「存储挂载」' '$HUBREADME' && grep -qF '改去配「存储挂载」' '$PYHUB' && ! grep -qF '确认云托管「存储挂载」已挂到' '$PYHUB'"
+check "运维口径：加载项熔断指路必须指向 hub 的注册表镜像（真正的跨重建存活条件）" \
+  "grep -qF 'mirror.enabled' '$PYHUB' && grep -qF 'mirror.enabled' '$HUBREADME'"
 
 echo
 echo "跨仓契约: $pass passed, $fail failed"

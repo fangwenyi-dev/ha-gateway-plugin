@@ -6,6 +6,7 @@ import inspect
 import json
 import logging
 import os
+import re
 import time
 
 from custom_components.window_controller_gateway import hub_client as hc
@@ -405,7 +406,7 @@ def test_refresh_bind_code_persists_and_degrades(tmp_path, monkeypatch):
     client._bind_code_at = time.time() - 9999                         # 手上是死码
     calls = []
 
-    async def ok_http(path, payload):
+    async def ok_http(path, payload, timeout_s=None):
         calls.append((path, payload))
         return {"ok": True, "bindCode": "222222", "expiresInSec": 600}
 
@@ -417,14 +418,14 @@ def test_refresh_bind_code_persists_and_degrades(tmp_path, monkeypatch):
     saved = hc.load_identity(str(tmp_path))
     assert saved["bindCode"] == "222222" and saved["bindCodeAt"] > 0   # 签发时刻落盘（重启后能判过期）
 
-    async def reject_http(path, payload):                              # hub 拒绝（bad_secret 等）
+    async def reject_http(path, payload, timeout_s=None):                              # hub 拒绝（bad_secret 等）
         return {"ok": False, "err": "bad_secret"}
 
     monkeypatch.setattr(client, "_http", reject_http)
     assert asyncio.run(client.refresh_bind_code()) is False
     assert client.bind_code == "222222"                                # 失败不动手上的码
 
-    async def boom_http(path, payload):                                # 旧 hub 没这条路由/网络断
+    async def boom_http(path, payload, timeout_s=None):                                # 旧 hub 没这条路由/网络断
         raise RuntimeError("net down")
 
     monkeypatch.setattr(client, "_http", boom_http)
@@ -437,7 +438,7 @@ def test_renew_bind_code_if_stale_only_when_needed(tmp_path, monkeypatch):
     client.bind_code, client._bind_code_at = "111111", time.time()
     calls = []
 
-    async def fake_http(path, payload):
+    async def fake_http(path, payload, timeout_s=None):
         calls.append(path)
         return {"ok": True, "bindCode": "333333"}
 
@@ -466,7 +467,7 @@ def test_bindcode_failure_logs_the_actual_reason(tmp_path, caplog):
     client.instance_id, client._secret = "abc", "def"
     client.bind_code, client._bind_code_at = "111111", 0
 
-    async def bad_gateway(path, payload):
+    async def bad_gateway(path, payload, timeout_s=None):
         raise RuntimeError("hub /agent/bindcode -> 502")
 
     client._http = bad_gateway
@@ -486,7 +487,7 @@ def test_bindcode_failure_never_echoes_credentials(tmp_path, caplog):
     client.instance_id, client._secret = "abc", "SUPERSECRETVALUE"
     client.bind_code, client._bind_code_at = "111111", 0
 
-    async def leaky(path, payload):
+    async def leaky(path, payload, timeout_s=None):
         raise RuntimeError("POST /agent/bindcode?secret=SUPERSECRETVALUE failed")
 
     client._http = leaky
@@ -504,7 +505,7 @@ def test_renew_throttles_after_failure(tmp_path):
     client.bind_code, client._bind_code_at = "111111", 0
     n = {"calls": 0}
 
-    async def failing(path, payload):
+    async def failing(path, payload, timeout_s=None):
         n["calls"] += 1
         raise RuntimeError("hub /agent/bindcode -> 502")
 
@@ -526,7 +527,7 @@ def test_panel_click_is_not_throttled(tmp_path):
     client._bind_renew_at = time.time()          # 刚刚"自动试过"
     calls = []
 
-    async def ok(path, payload):
+    async def ok(path, payload, timeout_s=None):
         calls.append(path)
         return {"ok": True, "bindCode": "654321"}
 
@@ -823,7 +824,14 @@ def test_reregister_fuse_stops_after_consecutive_rejections(tmp_path, caplog):
     errs = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
     assert any("停止自动重注册" in m for m in errs), "熔断没有可见的 ERROR（现场只会看到反复换码）"
     joined = " ".join(errs)
-    assert "存储挂载" in joined and "实例数" in joined, "熔断话术没给出两个真根因，运维还得自己猜"
+    # 指路必须与 hub v0.2.6 的 README 同口径：注册表跨重建存活靠**云开发数据库镜像**，
+    # 而「存储挂载 → 对象存储」在云开发桶上实测必失败（cosfs endpoint 缺 scheme ⇒ 挂载钩子
+    # exit 1 ⇒ Pod 起不来）。旧话术正是叫人去配挂载——照着做比原故障更糟。所以这里必须钉
+    # "提到挂载＝为了否定它"：只判 `"存储挂载" in joined` 对**旧的有害话术同样为真**＝假绿。
+    assert "mirror.enabled" in joined, "熔断话术没指向真正的存活条件（hub 的注册表镜像）"
+    assert "实例数" in joined, "熔断话术没给出多副本这个根因，运维还得自己猜"
+    assert re.search(r"不要[^。；]*存储挂载", joined), \
+        "熔断话术没有明确否定「存储挂载」（旧话术叫人去配它，会把 hub 搞成 Pod 起不来）"
 
 
 def test_fuse_counter_resets_after_a_successful_session(tmp_path):

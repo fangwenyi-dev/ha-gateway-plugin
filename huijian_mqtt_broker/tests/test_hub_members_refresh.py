@@ -27,7 +27,7 @@ def _client(tmp_path, connected=True, supported=True):
     c.members_supported = supported
     calls = []
 
-    async def fake_http(path, payload):
+    async def fake_http(path, payload, timeout_s=None):
         calls.append(path)
         return {"ok": True, "ownerMasked": "oFa…01", "membersMax": 8,
                 "members": [{"mid": "a" * 12, "openidMasked": "oFa…02", "at": 1}]}
@@ -60,7 +60,7 @@ def test_failed_refresh_also_counts_as_an_attempt(tmp_path):
     """失败也记一次尝试：云端不可达时不该每 30s 连击（与换码节流同一口径）。"""
     client, calls = _client(tmp_path)
 
-    async def boom(path, payload):
+    async def boom(path, payload, timeout_s=None):
         calls.append(path)
         raise RuntimeError("net down")
 
@@ -206,3 +206,74 @@ def test_background_throttle_semantics_unchanged():
 def test_silent_refresh_still_guards_reentry():
     body = _fn("silentRefresh")
     assert "_silentRefreshing" in body, "防重入标志没了＝慢网络下并发周期会交错写 DOM"
+
+
+# ── 顺带刷新不许把 HA 的 REST 请求吊住 ──────────────────────────────
+class _Resp:
+    status = 200
+
+    async def json(self):
+        return {"ok": True, "members": [], "membersMax": 8, "ownerMasked": None}
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+
+class _RecordingSession:
+    """记下 session.post 收到的 kwargs：超时这件事只能从这里看（桩 _http 看不到）。"""
+
+    closed = False
+
+    def __init__(self):
+        self.seen = []
+
+    def post(self, url, json=None, **kw):  # noqa: A002 - 对齐 aiohttp 的形参名
+        self.seen.append(kw)
+        return _Resp()
+
+
+def test_member_read_uses_the_short_panel_timeout(tmp_path):
+    """GET /hub 顺带刷成员走**更短**的超时。
+
+    加顺带刷新之前这条路由是纯读内存即回；之后最坏会被一次云端 HTTP 挂住
+    HUB_HTTP_TIMEOUT_S=15s（面板表现为刷新转圈）。而 /agent/members 在 hub 侧是
+    纯内存读（listMembers 不落盘、不推镜像），正常远快于 1s ⇒ 5s 已很宽松，
+    超了就如实显示"读取失败"并在下个节流窗重试。
+    """
+    assert hc.HUB_PANEL_HTTP_TIMEOUT_S < hc.HUB_HTTP_TIMEOUT_S, \
+        "面板超时必须短于会话超时，否则这条改动等于没改"
+    c = hc.HubClient([], config_dir=str(tmp_path), session=object())
+    c.instance_id, c._secret = "inst-1", "sec-1"
+    seen = []
+
+    async def fake(path, payload, timeout_s=None):
+        seen.append(timeout_s)
+        return {"ok": True, "members": [], "membersMax": 8, "ownerMasked": None}
+
+    c._http = fake
+    asyncio.run(c.list_members())
+    assert seen == [hc.HUB_PANEL_HTTP_TIMEOUT_S], "成员读取没走更短的面板超时: %r" % (seen,)
+
+
+def test_http_passes_no_timeout_kwarg_unless_one_is_given(tmp_path):
+    """aiohttp 里 `timeout=None` 的语义是**不限时**，不是"用会话默认"。
+
+    所以 `_http` 只在显式给了 timeout_s 时才传 `timeout=`。无脑透传 None 会把
+    HUB_HTTP_TIMEOUT_S 那道会话闸整个拆掉 ⇒ 注册/换码/踢人在云端挂起时永久不返回，
+    面板与长连一起卡死。这条钉的是那个 footgun 本身。
+    """
+    sess = _RecordingSession()
+    c = hc.HubClient([], config_dir=str(tmp_path), session=sess)
+    c.instance_id, c._secret = "inst-1", "sec-1"
+
+    asyncio.run(c._http("/agent/bindcode", {}))
+    assert "timeout" not in sess.seen[-1], \
+        "无显式超时时不得传 timeout=（None 在 aiohttp 里＝不限时）: %r" % (sess.seen[-1],)
+
+    asyncio.run(c._http("/agent/members", {}, timeout_s=hc.HUB_PANEL_HTTP_TIMEOUT_S))
+    kw = sess.seen[-1]
+    assert "timeout" in kw and kw["timeout"].total == hc.HUB_PANEL_HTTP_TIMEOUT_S, \
+        "显式给的超时没真的传下去: %r" % (kw,)

@@ -33,7 +33,7 @@ def _stub_http(client, replies):
     """把 _http 换成按路径回预置结果的假实现；记录每次调用的 (path, payload)。"""
     calls = []
 
-    async def fake(path, payload):
+    async def fake(path, payload, timeout_s=None):
         calls.append((path, payload))
         item = replies.get(path)
         if isinstance(item, Exception):

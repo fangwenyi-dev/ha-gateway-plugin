@@ -94,6 +94,11 @@ BIND_CODE_RENEW_MIN_INTERVAL_S = 120.0   # 两次换码尝试的最小间隔（�
 # 不刷就永远显示"只有你一人"；不节流就会把云端调用打成每 30s 一次（面板开着即刷）。
 MEMBERS_REFRESH_MIN_INTERVAL_S = 120.0
 HUB_HTTP_TIMEOUT_S = 15.0
+# 面板顺带刷成员列表用的更短超时：GET /hub 此前纯读内存即回，加了顺带刷新之后最坏会被
+# 一次云端 HTTP 挂住 15s（面板表现为刷新转圈）。/agent/members 在 hub 侧是**纯内存读**
+# （listMembers 不落盘不推镜像），正常远快于 1s ⇒ 5s 已很宽松，超了就如实显示"读取失败"
+# 并在下个节流窗重试，别把 HA 的 REST 请求吊在那里。
+HUB_PANEL_HTTP_TIMEOUT_S = 5.0
 HUB_IDENTITY_FILE = "huijian_hub_identity.json"
 # 长连凭据走请求头，不进 URL query：任何记 request line 的中间层（云托管访问日志、
 # 反代、错误上报）都会把明文 secret 留档。hub 侧先读头、缺失回落 query（发版必须 hub 先）。
@@ -459,9 +464,15 @@ class HubClient:
             self._own_session = True
         return self._session
 
-    async def _http(self, path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    async def _http(self, path: str, payload: Dict[str, Any],
+                    timeout_s: Optional[float] = None) -> Dict[str, Any]:
         session = await self._ensure_session()
-        async with session.post(self.base + path, json=payload) as resp:
+        # 只在显式给了更短超时时才覆盖：aiohttp 里 `timeout=None` 的语义是**不限时**而不是
+        # "用会话默认"，无脑透传会把 HUB_HTTP_TIMEOUT_S 那道闸整个拆掉。
+        kwargs: Dict[str, Any] = {}
+        if timeout_s:
+            kwargs["timeout"] = aiohttp.ClientTimeout(total=timeout_s)
+        async with session.post(self.base + path, json=payload, **kwargs) as resp:
             if resp.status != 200:
                 raise HubHttpError(path, resp.status, await self._err_of(resp))
             return await resp.json()
@@ -641,7 +652,7 @@ class HubClient:
             data = await self._http("/agent/members", {
                 "instanceId": self.instance_id,
                 "secret": self._secret,
-            })
+            }, timeout_s=HUB_PANEL_HTTP_TIMEOUT_S)
         except HubHttpError as e:
             if e.status == 404 and e.err in (None, "not_found"):
                 self.members_supported = False
@@ -773,12 +784,21 @@ class HubClient:
                 raise
             if self._rereg_streak >= HUB_REREGISTER_FUSE:
                 # 连续被拒不是"hub 忘了我"这一件事，而是每次 register 落到另一个容器：
-                # 云托管多副本且注册表不共享（没配存储挂载）时正是这个形态。继续重注册只会
+                # 云托管多副本、或注册表没跨重建活下来时正是这个形态。继续重注册只会
                 # 无限造孤儿实例 + 反复作废用户手上的绑定码 ⇒ 停在熔断上，把根因写给运维。
+                #
+                # 指路必须与 hub 侧口径一致：v0.2.6 起注册表跨重建存活靠**云开发数据库镜像**，
+                # 不靠「存储挂载」——「存储挂载 → 对象存储」在云开发云存储桶类型上实测必失败
+                # （平台生成的 cosfs endpoint 缺 http:// scheme ⇒ 挂载钩子 exit 1 ⇒ Pod 起不来）。
+                # 这里原先叫人去配存储挂载：照着做会把 hub 搞成根本起不来，比原故障更糟。
+                # 由 tests/e2e/cross_repo_contract.sh 与 hub README 对账，别再漂回去。
                 self.last_error = "identity_rejected_loop"
                 self._logger.error(
-                    "hub 连续 %d 次拒本机身份，已停止自动重注册。根因几乎总是云端注册表不共享："
-                    "①确认云托管「存储挂载」已挂到 /mnt（否则每次部署即抹）；"
+                    "hub 连续 %d 次拒本机身份，已停止自动重注册。根因几乎总是云端注册表没跨重建活下来："
+                    "①看 hub 的 /healthz：mirror.enabled 必须为 true 且 mirror.adopted.instances 非 0；"
+                    "reason=missing_cred ＝云托管「API Key 设置」没注入 TENCENTCLOUD_SECRETID /"
+                    " TENCENTCLOUD_SECRETKEY / TCB_ENV。**不要**改去配「存储挂载」——云开发桶上实测必失败"
+                    "且会让 Pod 起不来（详见 hub 仓 README 部署章节）；"
                     "②确认服务实例数固定为 1（/cmd 按容器内存里的长连表转发，多副本必然随机 offline）",
                     self._rereg_streak)
                 raise

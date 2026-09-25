@@ -34,8 +34,12 @@ def test_contract_holds_across_three_repos():
     out = _text(r)
     assert r.returncode == 0, "跨仓契约漂移：\n%s" % out
     assert "跨仓契约: " in out and " 0 failed" in out, out[-500:]
-    # 防空跑：至少要对账这么多条，少了说明脚本被改瘪了
-    assert out.count("PASS ") >= 15, "对账条数异常（%d），脚本可能被改瘪" % out.count("PASS ")
+    # 防空跑：至少要对账这么多条，少了说明脚本被改瘪了。
+    # 100 = v1.7.50 复审批的条数（原 55 + LAN 回执文案 14 + 抽取量元钉 2 + winact* 语法级
+    # 4 与 position 1 + TTL 落点 3 + 回执关联字段 2 + 控制/身份/加载项侧错误码两侧对账 8 +
+    # _bindErrText 死条目 11 + /bind 反向 5 + 运维口径 2 −被更强判据取代的重复 7）。
+    # 取精确下限：条数掉下来必须有人来解释，而不是静默变绿。
+    assert out.count("PASS ") >= 100, "对账条数异常（%d，应≥100），脚本可能被改瘪" % out.count("PASS ")
 
 
 def test_missing_repo_skips_loudly_with_rc3():

@@ -26,7 +26,7 @@ def _client(tmp_path, with_identity=True):
 
 
 def _stub(client, replies):
-    async def fake(path, payload):
+    async def fake(path, payload, timeout_s=None):
         item = replies[path]
         if isinstance(item, Exception):
             raise item

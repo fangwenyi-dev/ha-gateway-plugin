@@ -167,6 +167,24 @@ want(els.addMemberBtn.disabled === false, '瞬时网络失败不该禁用按钮'
 want(els.hubError.hidden === false && /读取失败/.test(els.hubError.textContent),
      '错误行要给出成员读取失败的原因: ' + els.hubError.textContent);
 
+// 场景 7b：读取失败**但手上还留着上次成功的列表**——不许同屏自相矛盾。
+// 此前占位行被强制显示"成员列表读取失败"，而下面照常渲染出成员行（还带可用的「移除」
+// 按钮），人数也被"读取失败"顶掉 ⇒ 用户既看到失败又看到名单，还不知道家里有几个人。
+reset();
+applyHubStatus({ enabled: true, connected: true, bindCode: '111111', bindCodeExpiresIn: 60,
+                 bindCodeExpired: false, gatewaySn: 'GW1', gateways: [], lastError: null,
+                 lastOpError: 'members_unavailable',
+                 members: [{ mid: 'a'.repeat(12), openidMasked: 'oFa…02', at: 1 },
+                           { mid: 'b'.repeat(12), openidMasked: 'oFa…03', at: 2 }],
+                 membersCount: 2, membersMax: 8, membersSupported: true }, false);
+want(els.hubMembersCount.textContent === '2 / 8 人（列表可能已过期）',
+     '有陈旧列表时人数不该被"读取失败"顶掉: ' + els.hubMembersCount.textContent);
+want(els.hubMembersEmpty.hidden === true,
+     '占位行必须隐藏：下面正渲染着 2 行成员，再叠一句"读取失败"就是同屏自相矛盾');
+want(els.hubMembers.children.length === 2,
+     '陈旧的成员行仍应照常渲染（比一片空白更有用）: ' + els.hubMembers.children.length);
+want(els.addMemberBtn.disabled === false, '瞬时网络失败不该禁用按钮');
+
 // 场景 8：操作类错误优先于连接类；hub 的真实 err（no_owner）必须有自己的话
 reset();
 applyHubStatus({ enabled: true, connected: true, bindCode: '111111', bindCodeExpiresIn: 60,

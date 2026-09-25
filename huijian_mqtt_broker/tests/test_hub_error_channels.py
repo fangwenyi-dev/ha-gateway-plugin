@@ -98,7 +98,7 @@ def test_callers_branch_on_status_not_on_message_text():
 def test_bindcode_rejection_keeps_the_hub_err(tmp_path):
     client, _ = _client(tmp_path)
 
-    async def reject(path, payload):
+    async def reject(path, payload, timeout_s=None):
         return {"ok": False, "err": "no_owner"}
 
     client._http = reject
@@ -110,7 +110,7 @@ def test_bindcode_rejection_keeps_the_hub_err(tmp_path):
 def test_bindcode_rejection_without_err_falls_back_to_local_value(tmp_path):
     client, _ = _client(tmp_path)
 
-    async def reject(path, payload):
+    async def reject(path, payload, timeout_s=None):
         return {"ok": False}
 
     client._http = reject
@@ -121,7 +121,7 @@ def test_bindcode_rejection_without_err_falls_back_to_local_value(tmp_path):
 def test_member_removal_keeps_the_hub_err(tmp_path):
     client, _ = _client(tmp_path)
 
-    async def reject(path, payload):
+    async def reject(path, payload, timeout_s=None):
         return {"ok": False, "err": "owner_cannot_leave"}
 
     client._http = reject
@@ -132,7 +132,7 @@ def test_member_removal_keeps_the_hub_err(tmp_path):
 def test_http_level_member_failure_keeps_status_err(tmp_path):
     client, _ = _client(tmp_path)
 
-    async def boom(path, payload):
+    async def boom(path, payload, timeout_s=None):
         raise hc.HubHttpError(path, 403, "bad_secret")
 
     client._http = boom
@@ -145,7 +145,7 @@ def test_http_level_member_failure_keeps_status_err(tmp_path):
 def test_successful_refresh_clears_only_the_bindcode_family(tmp_path):
     client, _ = _client(tmp_path)
 
-    async def reject(path, payload):
+    async def reject(path, payload, timeout_s=None):
         return {"ok": False, "err": "rate_limited"}
 
     client._http = reject
@@ -153,7 +153,7 @@ def test_successful_refresh_clears_only_the_bindcode_family(tmp_path):
     assert client.last_op_error == "rate_limited"
     client._set_op_error(hc.OP_MEMBERS, "members_unavailable")     # 另一族也失败过
 
-    async def ok(path, payload):
+    async def ok(path, payload, timeout_s=None):
         return {"ok": True, "bindCode": "222222", "expiresInSec": 600}
 
     client._http = ok
@@ -161,7 +161,7 @@ def test_successful_refresh_clears_only_the_bindcode_family(tmp_path):
     assert client.last_op_error == "members_unavailable", \
         "换码成功证明不了成员读取恢复了（跨族清零＝把还没恢复的故障藏起来）"
 
-    async def members_ok(path, payload):
+    async def members_ok(path, payload, timeout_s=None):
         return {"ok": True, "members": [], "membersMax": 8}
 
     client._http = members_ok
@@ -173,7 +173,7 @@ def test_successful_removal_clears_its_own_family(tmp_path):
     client, _ = _client(tmp_path)
     client._set_op_error(hc.OP_MEMBER_REMOVE, "member_remove_failed")
 
-    async def ok(path, payload):
+    async def ok(path, payload, timeout_s=None):
         if path == "/agent/unbind":
             return {"ok": True, "remaining": 0}
         return {"ok": True, "members": [], "membersMax": 8}
@@ -222,7 +222,7 @@ def test_unknown_op_error_value_is_never_a_credential(tmp_path):
     """hub 回什么就存什么，但绝不存本地凭据（错误槽会原样进面板 JSON）。"""
     client, _ = _client(tmp_path)
 
-    async def boom(path, payload):
+    async def boom(path, payload, timeout_s=None):
         raise RuntimeError("POST /agent/bindcode?secret=sec-1 failed")
 
     client._http = boom

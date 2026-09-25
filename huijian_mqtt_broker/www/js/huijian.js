@@ -201,14 +201,19 @@
         }
 
         /** 成员区口径文案（纯函数，便于 node 真跑）。
-         *  五种态必须分开：读不到（—）/ 老 hub 不支持（说清是云端版本旧）/ 读取失败
-         *  （说清是网络，稍后重试）/ 只有主人 / N 与上限。*/
+         *  六种态必须分开：读不到（—）/ 老 hub 不支持（说清是云端版本旧）/ 读取失败且手上
+         *  一条都没有（说清是网络，稍后重试）/ 读取失败但还留着上次成功的列表（照报人数 +
+         *  标注可能过期）/ 只有主人 / N 与上限。
+         *  最后那条是刻意分的：读取失败时 `self.members` 仍是上次成功的值，用"读取失败"把
+         *  人数顶掉＝把已知信息藏起来，而且下面照常渲染出的成员行会与这句话自相矛盾。*/
         function membersText(info) {
             if (!info || info.enabled === false) return '—';
             if (info.membersSupported === false) return '云端版本过旧，暂不支持';
-            if (membersReadFailed(info)) return '读取失败，稍后重试';
             const list = Array.isArray(info.members) ? info.members : [];
             const max = info.membersMax || 8;
+            if (membersReadFailed(info)) {
+                return list.length ? (list.length + ' / ' + max + ' 人（列表可能已过期）') : '读取失败，稍后重试';
+            }
             if (!list.length) return '只有你一人';
             return list.length + ' / ' + max + ' 人';
         }
@@ -249,7 +254,10 @@
                     : (!supported ? '云端 hub 版本过旧，暂不支持添加家人'
                         : (readFailed ? '成员列表读取失败（云端暂不可达），稍后自动重试'
                             : '只有你一人'));
-                empty.hidden = supported && !readFailed && list.length > 0;
+                // 占位行只在**真的一条都没有**时出现：读取失败但还留着上次成功的列表时，
+                // 下面照样会渲染出成员行，再叠一句"读取失败"就是同屏自相矛盾（陈旧这件事
+                // 已由 membersText 挂在人数上：「N / 8 人（列表可能已过期）」）。
+                empty.hidden = supported && list.length > 0;
             }
             // 满员 / 老 hub / 读不到状态都要禁用按钮：能点但必然失败，比不能点更让人困惑。
             // 读取失败（网络）不禁用——那是瞬时的，禁了用户反而以为功能没了。
