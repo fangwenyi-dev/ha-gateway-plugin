@@ -141,14 +141,28 @@ def test_ci_e2e_hardgate_and_gitee_retired():
         "E2E 已连绿转正，挂绳不得复活（如需复活先证明真栈回归全绿）"
     assert "needs: [prepare, init, build, e2e]" in _job_seg("manifest"), \
         "manifest 必须 gate 在 e2e 之后（硬门禁拓扑）"
-    # 2026-09-16 用户裁定反转：网关仓停推 Gitee（镜像与 Release 冻结
-    # v1.7.24/41a1506），gitee-release job 整段下线。原正向钉桩
-    # （Create Gitee Release/target_commitish/isascii）转为负向防复活；
-    # 幂等脚本历史见 git log。
-    assert "gitee-release:" not in ci, "Gitee Release job 已按裁定下线，不得复活"
-    assert "Create Gitee Release" not in ci
-    assert "GITEE_TOKEN" not in ci, "Gitee secret 残留引用=半截复活"
-    assert "只推 GitHub" in ci, "ci.yaml 缺停推裁定墓碑"
+    # 2026-09-16「只推 GitHub」裁定 2026-09-17 就被推翻（停推代价实证见 ci.yaml 注释），
+    # 但 v1.7.24 下线的 gitee-release job 一直只留这条**负向防复活钉**——期间 v1.7.63/64/65
+    # 三条 Gitee Release 全靠手工 POST，漏一条就是徽章偏旧且无人知。2026-10-06 D4 把该
+    # job 自动化后，钉的方向随之翻转：不判"这个名字不许出现"，判"它必须存在且必须带着
+    # 当年踩出来的那几件"。负向三句（Create Gitee Release / GITEE_TOKEN 不得出现）随裁定
+    # 一并作废——留着就是把守卫钉在已死的行为上。
+    seg = _job_seg("gitee-release")
+    assert "needs: [prepare, release]" in seg, \
+        "Gitee Release 必须 gate 在 GitHub Release 之后（否则两源正文会分叉）"
+    assert "continue-on-error" not in seg, \
+        "Gitee 侧不得挂绳：半截绿等于悄悄回到手工时代，比不建更难发现"
+    for needle, why in [
+        ("/releases/tags/", "必须先按 tag 直查再决定 POST/PATCH（别拿列表序赌）"),
+        ('method="PATCH"', "同 tag 已存在时要 PATCH 同步正文（PUT 必 405 实锤）"),
+        ('"tag_name": tag', "PATCH 必须同载 tag_name（只发 body 直接 400）"),
+        ('"name": tag', "PATCH 必须同载 name（同上）"),
+        ("target_commitish", "缺省行为不可靠，必须显式指提交"),
+        ("isascii", "token 带 BOM/不可见字符要当场鉴别（.gitee_token 曾带 BOM 致 401 假象）"),
+        ("commits/${COMMIT}", "必须先确认 Gitee 侧真有本次 sha，否则 target_commitish 会指到旧提交"),
+    ]:
+        assert needle in seg, "Gitee Release job 缺判据 %r：%s" % (needle, why)
+    assert "只推 GitHub" in ci, "历史裁定要留痕（现由 D4 反转，见 ci.yaml 三段注释）"
 
 
 def test_e2e_script_key_steps():
@@ -183,3 +197,49 @@ def test_e2e_script_key_steps():
     assert not re.search(r'p(?:kill|grep)\s+-f\s+"[^"]*homeassistant[^"]*"', r), (
         "pkill/pgrep 的 homeassistant 模式必须保留括号技巧（裸模式=自杀）"
     )
+
+
+def test_gitee_sha_wait_gate_fails_loudly_not_silently():
+    """D4 那道「先等 Gitee 镜像仓有本次 sha」的闸必须**有牙**（判行为，不判字样）。
+
+    对抗复核实发（2026-10-06）：把循环后的收尾 `exit 1` 改成 `exit 0`——探测失败也
+    放行、Release 静默指到镜像仓的旧提交——全量 1655 条照绿。原因是那条钉只判
+    `commits/${COMMIT}` 这串在不在场，字样在、行为已被阉。⇒ 本条判三件事：
+    ① 闸还在（按 step 名解析，改名即红）；② 放行分支必须**绑在 HTTP 200 上**；
+    ③ 循环走完之后的最后一句必须是 `exit 1`（不是 exit 0、不是 echo）。
+    """
+    import re
+    import yaml
+
+    ci = (HERE.parent.parent / ".github" / "workflows" / "ci.yaml").read_text(encoding="utf-8")
+    wf = yaml.safe_load(ci)
+    steps = wf["jobs"]["gitee-release"]["steps"]
+    wait = [s for s in steps if "Wait for this commit" in s.get("name", "")]
+    assert len(wait) == 1, "等待闸不见了或被改名：Release 会静默指到 Gitee 的旧提交"
+    body = wait[0]["run"]
+    assert re.search(r'\[\s*"\$code"\s*=\s*"200"\s*\][^\n]*exit 0', body), \
+        "放行分支没绑在 HTTP 200 上（任何返回都会被当成「Gitee 已有本次提交」）"
+    语句 = [l.strip() for l in body.splitlines()
+            if l.strip() and not l.strip().startswith("#")]
+    assert 语句[-1] == "exit 1", \
+        "等待超时后的收尾不是 exit 1 ⇒ 探测失败被静默放行（对抗复核实发的变异形态）"
+    assert 语句[-2].startswith('echo "::error'), \
+        "超时收尾必须先打 ::error:: 再 exit 1，否则红是哑的、没人知道要补推 gitee"
+    assert "GITEE_TOKEN" in body and "exit 1" in body.split("for i in")[0], \
+        "token 缺席必须在探测前就响亮失败（不能边空转边等）"
+
+
+def test_gitee_release_existence_judged_by_parsed_body():
+    """Gitee 对**不存在的 Release** 回 `HTTP 200 + body null`（2026-10-06 真探针实测），
+    而 `/commits/<sha>` 回真 404——两个端点行为不一样。所以「要不要创建」必须判解析
+    结果（`existing.get("id")`），不能判 HTTPError。谁把它「简化」成 try/except 404，
+    幂等分支就永远走创建（400/重复卡）。本条是字样级判据：行为级要真发 API，留给 CI。"""
+    import yaml
+
+    ci = (HERE.parent.parent / ".github" / "workflows" / "ci.yaml").read_text(encoding="utf-8")
+    wf = yaml.safe_load(ci)
+    steps = wf["jobs"]["gitee-release"]["steps"]
+    body = [s for s in steps if "Create or sync" in s.get("name", "")][0]["run"]
+    assert 'if existing and existing.get("id"):' in body, \
+        "存在性判据必须吃解析后的 id（Gitee 不存在时回 200+null，判 HTTPError 会误判）"
+    assert "e.code != 404" in body, "非 404 的 HTTP 错误必须抛出去，不许一并吞掉"
